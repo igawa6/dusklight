@@ -10,9 +10,22 @@
 
 # Overview
 
-Dusklight is a reverse-engineered reimplementation of Twilight Princess.
+This project is a fork of the original **Dusklight** project, specifically ported to Android and featuring a second-screen mod designed for dual-screen devices (such as the AYN Thor). 
 
-It aims to be as accurate as possible to the original while also providing new options, enhancements, and tools to customize your experience.
+*The original repository can be found here: [https://github.com/TwilitRealm/dusklight](https://github.com/TwilitRealm/dusklight)*
+
+Dusklight is a reverse-engineered reimplementation of Twilight Princess. It aims to be as accurate as possible to the original while also providing new options, enhancements, and tools to customize your experience.
+
+### Dual-Screen Features
+
+This fork heavily utilizes the bottom screen to provide a more immersive and streamlined experience. Key features include:
+
+* **Decluttered Main Screen:** Most HUD elements—including the controller layout, minimap, health (hearts), and rupees—have been moved to the bottom screen, leaving the top screen clean and cinematic.
+* **Interactive Maps:** Features a dedicated minimap and dungeon map with icon overlays. The map is fully touch-responsive, allowing you to drag to pan and pinch to zoom.
+* **Quick Inventory Management:** View item information and equip items entirely from the bottom screen.
+* **Comprehensive Collection Screen:** Instantly check your progress on heart containers, caught fish, golden bugs, hidden skills, and mail. You can also swap your sword, shield, and other gear directly without ever opening the pause menu.
+* **Quest & Achievement Tracking:** Easily monitor your active quests and Dusklight achievements from the second screen.
+* **Instant Form Toggle:** Transform between human and wolf forms instantly using a dedicated button on the bottom screen.
 
 # Setup
 
@@ -31,6 +44,13 @@ Currently, only the GameCube USA and EUR releases are supported. Support for oth
 ### 2. Install Dusklight
 
 Visit the [official installation guide](https://twilitrealm.dev/install/) for full instructions.
+
+> [!IMPORTANT]
+> **Android Installation Note:** Because this fork uses the exact same package name as the official Dusklight Android app, they cannot be installed side-by-side. If you already have the official version of Dusklight installed, please use the following workaround:
+> 1. **Export** your current save file from the official app.
+> 2. **Uninstall** the official Dusklight app.
+> 3. **Install** this dual-screen mod version.
+> 4. **Restore** your save data into the new installation.
 
 # Building
 
