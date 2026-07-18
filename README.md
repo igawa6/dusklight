@@ -18,6 +18,13 @@ Dusklight is a reverse-engineered reimplementation of Twilight Princess. It aims
 
 ### Dual-Screen Features
 
+<div align="center">
+  <img src="res/preview.png" alt="Logo" width="640">
+
+  <p align="center">
+  </p>
+</div>
+
 This fork heavily utilizes the bottom screen to provide a more immersive and streamlined experience. Key features include:
 
 * **Decluttered Main Screen:** Most HUD elements—including the controller layout, minimap, health (hearts), and rupees—have been moved to the bottom screen, leaving the top screen clean and cinematic.
