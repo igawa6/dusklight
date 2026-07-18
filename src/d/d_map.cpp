@@ -14,6 +14,9 @@
 #include "d/actor/d_a_player.h"
 #include "d/d_com_inf_game.h"
 #if TARGET_PC
+#include "dusk/companion.h"
+#endif
+#if TARGET_PC
 #include <dolphin/gx/GXExtra.h>
 #endif
 #include <cstring>
@@ -535,6 +538,24 @@ f32 renderingAmap_c::getPlayerCursorSize() {
 f32 renderingAmap_c::getRestartCursorSize() {
     return getPlayerCursorSize();
 }
+
+#if TARGET_PC
+// Dual-screen companion zoom-out: the cursors otherwise keep a constant
+// on-screen size (drawCursor scales by cm-per-texel), which dwarfs the
+// zoomed-out map — shrink them with the widened render window instead.
+f32 dMap_c::getPlayerCursorSize() {
+    f32 size = renderingAmap_c::getPlayerCursorSize();
+    f32 offX, offZ, texelScale;
+    if (dusk::companion::mapViewAdjust(&offX, &offZ, &texelScale) && texelScale > 1.0f) {
+        size /= texelScale;
+    }
+    return size;
+}
+
+f32 dMap_c::getRestartCursorSize() {
+    return getPlayerCursorSize();
+}
+#endif
 
 void renderingAmap_c::rendering(dDrawPath_c::poly_class const* i_poly) {
     if (isDrawType(i_poly->field_0x0) && (!isDrawOutSideTrim() || field_0x38 == 2)) {
@@ -1920,7 +1941,21 @@ void dMap_c::_move(f32 i_centerX, f32 i_centerZ, int i_roomNo, f32 param_3) {
 
 void dMap_c::_draw() {
     if (mStayRoomNo >= 0 && field_0x8d != 0) {
-        entry(mCenterX, mCenterZ, field_0x58, mStayRoomNo, dMapInfo_c::getNowStayFloorNo());
+        f32 centerX = mCenterX;
+        f32 centerZ = mCenterZ;
+        f32 cmPerTexel = field_0x58;
+#if TARGET_PC
+        // Dual-screen companion: while the MAP page is panned or zoomed
+        // out, shift/widen the live render window so the texture shows the
+        // dragged-to region.
+        f32 offX, offZ, texelScale;
+        if (dusk::companion::mapViewAdjust(&offX, &offZ, &texelScale)) {
+            centerX += offX;
+            centerZ += offZ;
+            cmPerTexel *= texelScale;
+        }
+#endif
+        entry(centerX, centerZ, cmPerTexel, mStayRoomNo, dMapInfo_c::getNowStayFloorNo());
 #if DEBUG
         field_0x91 = 0;
 #endif

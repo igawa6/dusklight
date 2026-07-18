@@ -1444,6 +1444,18 @@ set(DUSK_FILES
         src/dusk/http/http.hpp
         src/dusk/io.cpp
         src/dusk/layout.cpp
+        src/dusk/android_aux_display.cpp
+        include/dusk/companion.h
+        src/dusk/companion.cpp
+        src/dusk/companion_internal.h
+        src/dusk/companion_gfx.cpp
+        src/dusk/companion_icons.cpp
+        src/dusk/companion_touch.cpp
+        src/dusk/companion_pages.cpp
+        src/dusk/companion_collect.cpp
+        src/dusk/companion_dmap.cpp
+        include/dusk/dualscreen.h
+        src/dusk/dualscreen.cpp
         src/dusk/logging.cpp
         src/dusk/settings.cpp
         src/dusk/speedrun.cpp

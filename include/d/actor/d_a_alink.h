@@ -4555,6 +4555,13 @@ public:
 #if TARGET_PC
     void handleWolfHowl();
     void handleQuickTransform();
+    // Quick-transform availability, side-effect free (no sound, no pad
+    // writes) — shared by the hotkey path and the companion's transform
+    // button, which also polls it every frame for the dimmed state.
+    bool checkQuickTransformOK();
+    // Transform now if allowed, error beep otherwise. Game-thread frame
+    // context only (procCoMetamorphoseInit must never run in a draw pass).
+    void tryQuickTransform();
     bool checkAimContext();
     bool checkAimInputContext();
 

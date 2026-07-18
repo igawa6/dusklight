@@ -74,6 +74,9 @@ public:
     void setAButtonString(u32);
     void setBButtonString(u32);
     void setCButtonString(u32);
+#if TARGET_PC
+    const char* getButtonLabel(int i_which);  // 0 = A, 1 = B; empty if hidden
+#endif
     void setJButtonString(u32);
     void createExplain();
     void deleteExplain();
@@ -192,6 +195,9 @@ public:
 
 class dMenu_Dmap_c {
 public:
+#if TARGET_PC
+    dMenu_DmapBg_c* getDrawBg() { return mpDrawBg; }
+#endif
     dMenu_Dmap_c(JKRExpHeap*, STControl*, CSTControl*, u8, u8);
     void screenInit();
     void getPlayerIconPos(s8, f32);

@@ -178,6 +178,10 @@ public:
     virtual dTres_c::typeGroupData_c* getNextData(dTres_c::typeGroupData_c*);
     virtual void setAmapPaletteColor(int, u8, u8, u8, u8);
     virtual bool isSpecialOutline();
+#if TARGET_PC
+    virtual f32 getPlayerCursorSize();
+    virtual f32 getRestartCursorSize();
+#endif
 
 #if DEBUG
     virtual bool isSwitch(const dDrawPath_c::group_class*);
@@ -191,10 +195,12 @@ public:
     f32 getPackPlusZ() { return mPackPlusZ; }
     f32 getPackZ() const { return mPackZ; }
     f32 getTexelPerCm() const { return 1.0f / field_0x58; }
+    u16 getTexSizeX() const { return mTexSizeX; }
     u16 getTexSizeY() const { return mTexSizeY; }
     f32 getRightEdgePlus() { return mRightEdgePlus; }
     f32 getPackX() const { return mPackX; }
     int getStayRoomNo() const { return mStayRoomNo; }
+    f32 getCenterX() const { return mCenterX; }
     f32 getCenterZ() const { return mCenterZ; }
 
     static dMap_c* m_mySelfPointer;

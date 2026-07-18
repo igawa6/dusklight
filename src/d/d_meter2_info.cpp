@@ -511,6 +511,119 @@ void dMeter2Info_c::getStringKanji(u32 i_stringID, TEXT_SPAN o_string, JMSMesgEn
     }
 }
 
+#if TARGET_PC
+// Full-fidelity plain-text fetch for the companion reader: no 0x200 source
+// cap, resolves the player/horse-name tags, keeps ruby base text, and emits
+// inline icon markers (0x02 followed by outfont index + 1) for the
+// controller-button tags (MSGTAG_ABTN..STICK_HORIZONTAL = codes 10..29);
+// every other tag is skipped whole. Escape layout per JMessage
+// TProcessor::on_tag_: 0x1A, total size, then a 3-byte tag
+// (group << 16 | code).
+void dMeter2Info_c::getStringFull(u32 i_stringID, char* o_string, int i_cap, int i_xyButton) {
+    if (i_cap <= 0) {
+        return;
+    }
+    o_string[0] = '\0';
+
+    u8* msgRes;
+    if (mMsgResource == NULL) {
+        msgRes = (u8*)JKRGetTypeResource('ROOT', "zel_00.bmg", dComIfGp_getMsgDtArchive(0));
+        if (msgRes == NULL) {
+            return;
+        }
+    } else {
+        msgRes = (u8*)mMsgResource;
+    }
+
+    JMSMesgInfo_c* bmg_inf = (JMSMesgInfo_c*)(msgRes + sizeof(bmg_header_t));
+    u8* bmg_data = (u8*)bmg_inf + bmg_inf->header.size;
+    u8* string_data = bmg_data + sizeof(bmg_section_t);
+
+    for (u16 i = 0; i < bmg_inf->entry_num; i++) {
+        if (i_stringID != bmg_inf->entries[i].message_id) {
+            continue;
+        }
+        const u8* p = string_data + bmg_inf->entries[i].string_offset;
+        int n = 0;
+        int rubySkip = 0;
+        while (*p != '\0' && n < i_cap - 1) {
+            if (*p == 0x1A) {
+                const int size = p[1];
+                if (size < 5) {
+                    break;  // malformed — bail rather than loop forever
+                }
+                const u32 tag = ((u32)p[2] << 16) | ((u32)p[3] << 8) | p[4];
+                if (tag == 0xFF0002 || tag == 0xFFFF02) {
+                    // Ruby: copy the base characters from the payload, then
+                    // drop the kana that follow as plain text (same walk as
+                    // getStringKana).
+                    for (int k = 0; k < size - 6 && n < i_cap - 1; k++) {
+                        o_string[n++] = (char)p[6 + k];
+                    }
+                    rubySkip = p[5] * 2;
+                } else if (tag == 0) {
+                    const char* name = dComIfGs_getPlayerName();
+                    while (*name != '\0' && n < i_cap - 1) {
+                        o_string[n++] = *name++;
+                    }
+                } else if (tag == 34) {
+                    const char* name = dComIfGs_getHorseName();
+                    while (*name != '\0' && n < i_cap - 1) {
+                        o_string[n++] = *name++;
+                    }
+                } else if (tag >= 10 && tag <= 29 && n < i_cap - 2) {
+                    o_string[n++] = 0x02;
+                    o_string[n++] = (char)(tag - 10 + 1);
+                } else if ((tag == 46 || tag == 47) && n < i_cap - 2) {
+                    // X-or-Y button, picked by where the item is equipped
+                    // (MSGTAG_XYBTN / YXBTN); i_xyButton = 0 X, 1 Y.
+                    const int icon = (tag == 46) == (i_xyButton == 0) ? 5 : 6;
+                    o_string[n++] = 0x02;
+                    o_string[n++] = (char)(icon + 1);
+                } else if (tag == 55 || tag == 56) {
+                    // Live capacities (MSGTAG_BOMB_MAX / ARROW_MAX) — the
+                    // bomb tag's payload byte selects the bag type.
+                    int value;
+                    if (tag == 55) {
+                        u8 bombType = dItemNo_NORMAL_BOMB_e;
+                        if (size >= 6 && p[5] == 1) {
+                            bombType = dItemNo_WATER_BOMB_e;
+                        } else if (size >= 6 && p[5] == 2) {
+                            bombType = dItemNo_POKE_BOMB_e;
+                        }
+                        value = dComIfGs_getBombMax(bombType);
+                    } else {
+                        value = dComIfGs_getArrowMax();
+                    }
+                    char num[16];
+                    snprintf(num, sizeof(num), "%d", value);
+                    for (const char* c = num; *c != 0 && n < i_cap - 1; c++) {
+                        o_string[n++] = *c;
+                    }
+                }
+                p += size;
+                continue;
+            }
+            if (rubySkip > 0) {
+                rubySkip--;
+                p++;
+                continue;
+            }
+            o_string[n++] = (char)*p++;
+        }
+        o_string[n] = '\0';
+        if (mMsgResource == NULL) {
+            dComIfGp_getMsgDtArchive(0)->removeResourceAll();
+        }
+        return;
+    }
+
+    if (mMsgResource == NULL) {
+        dComIfGp_getMsgDtArchive(0)->removeResourceAll();
+    }
+}
+#endif
+
 static void dummyString() {
     OS_REPORT("レボ用ＩＤ＝＝＝＝＝＞%d, %d\n");
 }

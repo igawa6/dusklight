@@ -70,6 +70,7 @@ constexpr std::array kFpsOverlayCornerNames = {
     "Top Right",
     "Bottom Left",
     "Bottom Right",
+    "Companion",
 };
 
 constexpr std::array kInterpolationModes = {
@@ -789,7 +790,7 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
                         });
                 }
                 pane.add_rml(
-                    "<br/>Display the current framerate in a corner of the screen while playing.");
+                    "<br/>Display the current framerate in a corner of the screen while playing. Companion shows it on the second screen next to the battery.");
             });
         config_bool_select(leftPane, rightPane, getSettings().video.rememberWindowSize,
             {
@@ -1195,6 +1196,9 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
             "Scales the size of the gameplay HUD (hearts, buttons, mini-map, etc.). Does not affect dialog boxes or menus.",
             50, 200, 5,
             [] { return getSettings().game.minimalHUD.getValue(); });
+        addOption("Dual Screen HUD (Experimental)", getSettings().game.dualScreen,
+            "Redirects the HUD, mini-map, and pause menus into a separate view, shown in the "
+            "\"Dual Screen Preview\" window.<br/>Prototype for second-monitor output.");
         addOption("Restore Wii 1.0 Glitches", getSettings().game.restoreWiiGlitches,
             "Restores patched glitches from Wii USA 1.0, the first released version.");
         addOption("Enable Rotating Link Doll", getSettings().game.enableLinkDollRotation,

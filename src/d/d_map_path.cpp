@@ -16,6 +16,7 @@
 
 #ifdef TARGET_PC
 #include "dusk/settings.h"
+#include "dusk/dualscreen.h"
 #include "m_Do/m_Do_graphic.h"
 #include <dolphin/gx/GXAurora.h>
 #include <aurora/math.hpp>
@@ -54,9 +55,13 @@ aurora::Vec2<u16> map_render_size_for(u16 width, u16 height) {
     const f32 irScaleX = renderWidth > 0 ? static_cast<f32>(renderWidth) / logicalWidth : 1.0f;
     const f32 irScaleY = renderHeight > 0 ? static_cast<f32>(renderHeight) / logicalHeight : 1.0f;
     const f32 hudScale = std::clamp(dusk::getSettings().game.hudScale.getValue(), 0.5f, 2.0f);
+    // Dual-screen: the companion enlarges the map ~2.4x onto its native-res
+    // panel — render the map texture at 2x so it stays sharp there (the
+    // main-screen minimap downsamples, i.e. also gets sharper).
+    const f32 dualBoost = dusk::dualscreen::hudOnCompanion() ? 2.4f : 1.0f;
     return {
-        scaled_map_axis(width, irScaleX * hudScale),
-        scaled_map_axis(height, irScaleY * hudScale),
+        scaled_map_axis(width, irScaleX * hudScale * dualBoost),
+        scaled_map_axis(height, irScaleY * hudScale * dualBoost),
     };
 }
 

@@ -209,6 +209,7 @@ public:
         mCornerColor[2] = c2;
         mCornerColor[3] = c3;
     }
+    u32 getCornerColorRaw(int i_no) const { return mCornerColor[i_no]; }
     void setCornerColor(JUtility::TColor c0) {
         setCornerColor(c0, c0, c0, c0);
     }

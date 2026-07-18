@@ -384,6 +384,22 @@ void dMenu_DmapBg_c::buttonIconScreenInit() {
     field_0xcf4->paneTrans(321.0f, 0.0f);
 }
 
+#if TARGET_PC
+// Live A/B prompt for the companion cluster; the dungeon map empties the
+// string when hidden, so empty means no prompt.
+const char* dMenu_DmapBg_c::getButtonLabel(int i_which) {
+    if (mButtonScreen == NULL) {
+        return NULL;
+    }
+    J2DPane* pane = mButtonScreen->search(
+        i_which == 0 ? MULTI_CHAR('font_at') : MULTI_CHAR('font_bt'));
+    if (pane == NULL) {
+        return NULL;
+    }
+    return (const char*)((J2DTextBox*)pane)->getStringPtr();
+}
+#endif
+
 void dMenu_DmapBg_c::setAButtonString(u32 i_msgNo) {
     static u64 const cont_at[5] = {
         #if VERSION == VERSION_GCN_JPN

@@ -62,6 +62,10 @@ UserSettings g_userSettings = {
         .enableControllerToasts {"game.enableControllerToasts", true},
         .enableDiscordPresence {"game.enableDiscordPresence", true},
         .menuScalingMode {"game.menuScalingMode", MenuScaling::Wii},
+        .dualScreen {"game.dualScreen", true},
+        .dualScreenDisplay {"game.dualScreenDisplay", -1},
+        .dualScreenPosX {"game.dualScreenPosX", -1},
+        .dualScreenPosY {"game.dualScreenPosY", -1},
 
         // Graphics
         .bloomMode {"game.bloomMode", BloomMode::Dusk},
@@ -268,6 +272,10 @@ void registerSettings() {
     Register(g_userSettings.game.touchCameraYSensitivity);
     Register(g_userSettings.game.minimalHUD);
     Register(g_userSettings.game.hudScale);
+    Register(g_userSettings.game.dualScreen);
+    Register(g_userSettings.game.dualScreenDisplay);
+    Register(g_userSettings.game.dualScreenPosX);
+    Register(g_userSettings.game.dualScreenPosY);
     Register(g_userSettings.game.pauseOnFocusLost,
         [](const bool& value, const bool&) { aurora_set_pause_on_focus_lost(value); });
     Register(g_userSettings.game.enableDiscordPresence);

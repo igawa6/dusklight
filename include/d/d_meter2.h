@@ -97,6 +97,12 @@ public:
     s16 getNowLifeGauge() { return mNowLifeGauge; }
     u8 getSubContents() { return mSubContentType; }
     u16 getSubContentsStringType() { return mSubContentsStringType; }
+#if TARGET_PC
+    // Dual-screen: the contextual control panel drawables, rendered on the
+    // companion instead of the main view.
+    dMeterSub_c* getSubContentsDlst() { return mpSubContents; }
+    dMeterString_c* getSubSubContentsDlst() { return mpSubSubContents; }
+#endif
     bool isShowFlag(int i_no) { return field_0x1e6 & (1 << i_no); }
     void onShowFlag(int i_no) { field_0x1e6 |= (1 << i_no); }
 

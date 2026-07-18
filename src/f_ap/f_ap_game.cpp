@@ -15,6 +15,7 @@
 #include "d/d_model.h"
 #include "d/d_tresure.h"
 #include "dusk/achievements.h"
+#include "dusk/companion.h"
 #include "dusk/frame_interpolation.h"
 #include "dusk/livesplit.h"
 #include "dusk/logging.h"
@@ -768,6 +769,15 @@ static void duskExecute() {
     if ((mDoCPd_c::getHold(PAD_1) & (PAD_TRIGGER_R | PAD_TRIGGER_L)) == PAD_TRIGGER_R && mDoCPd_c::getTrigY(PAD_1)) {
         if (const auto link = g_dComIfG_gameInfo.play.getPlayer(0)) {
             dynamic_cast<daAlink_c*>(link)->handleQuickTransform();
+        }
+    }
+
+    // Companion-screen transform button: same quick-transform machinery, but
+    // without the enableQuickTransform cheat gate (the button has its own
+    // visibility rules and only appears once the ability is unlocked).
+    if (dusk::companion::consumeTransformRequest()) {
+        if (const auto link = g_dComIfG_gameInfo.play.getPlayer(0)) {
+            dynamic_cast<daAlink_c*>(link)->tryQuickTransform();
         }
     }
 

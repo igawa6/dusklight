@@ -50,6 +50,7 @@
 #include <SDL3/SDL_video.h>
 #include "aurora/lib/window.hpp"
 #include "d/actor/d_a_horse.h"
+#include "dusk/dualscreen.h"
 #include "dusk/dusk.h"
 #include "dusk/endian.h"
 #include "dusk/frame_interpolation.h"
@@ -2793,6 +2794,7 @@ int mDoGph_Painter() {
 
 #if TARGET_PC
     dusk::mods::gfx_run_stage(GFX_STAGE_FRAME_BEFORE_HUD);
+    dusk::dualscreen::beginHudCapture();
 #endif
 
     if (fapGmHIO_get2Ddraw()) {
@@ -2853,6 +2855,7 @@ int mDoGph_Painter() {
     }
 
 #if TARGET_PC
+    dusk::dualscreen::endHudCapture();
     dusk::mods::gfx_run_stage(GFX_STAGE_FRAME_AFTER_HUD);
 #endif
 

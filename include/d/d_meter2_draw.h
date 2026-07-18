@@ -152,6 +152,33 @@ public:
     constexpr f32 getButtonZAlpha() const {
         return mButtonZAlpha;
     }
+
+    // Dual-screen: live A/B action labels and cluster visibility, read by the
+    // companion dashboard which renders the button cluster on screen two.
+    const ResTIMG* getActionLabelTimg(int i_which);  // 0 = A, 1 = B
+    const char* getActionTextA();
+    J2DPicture* getButtonBasePicture(int i_which);   // 0 = A, 1 = B, 2 = X, 3 = Y
+    J2DPane* getButtonPane(int i_which);             // 0 = A, 1 = B, 2 = X, 3 = Y
+    J2DPane* getCounterPane(int i_which);            // 0 = rupees, 1 = keys
+    const char* getActionTextB();
+    const char* getActionTextXY(int i_no);
+    J2DPane* getMidnaButtonPane();
+    J2DPane* getMidnaButtonPaneRaw();
+    J2DPicture* getMidnaButtonPicture();
+    J2DPicture* getLightDropPicture();
+    J2DPane* getButtonCrossPane();
+    const char* getDpadLabel(int i_no);
+    void drawMidnaPikariAt(f32 i_posX, f32 i_posY);
+    J2DPane* getLightDropPane();
+    J2DPane* getVesselTearPane(int i_idx);
+    void drawVesselPikariForCompanion(const f32* i_tearX, const f32* i_tearY, f32 i_sizeScale);
+    void refreshVesselForCompanion();
+    dKantera_icon_c* getKanteraMeter(int i_no);
+    void forceCompanionAlpha();
+    bool isButtonClusterVisible();
+    int getHeartPictures(int i_no, J2DPicture** o_pics);
+    f32 getLightDropAlpha();
+    void dualScreenSyncPaneVisibility(bool i_dualScreenHud);
 #endif
 
 private:

@@ -18,6 +18,7 @@
 #include "d/d_meter_button.h"
 #include "d/d_meter_haihai.h"
 #include "d/d_meter_hakusha.h"
+#include "d/d_map.h"
 #include "d/d_meter_map.h"
 #include "d/d_meter_string.h"
 #include "f_op/f_op_msg_mng.h"
@@ -27,6 +28,8 @@
 #if TARGET_PC
 #include "dusk/memory.h"
 #include "dusk/settings.h"
+#include "dusk/dualscreen.h"
+#include "dusk/companion.h"
 
 namespace {
 
@@ -39,6 +42,11 @@ f32 dGetUserHudScale() {
 #endif
 
 int dMeter2_c::_create() {
+#if TARGET_PC
+    // Consumed via dMeter2Info_getMeterClass() before construction finishes
+    // (the global is set before _create runs); don't leave it uninitialized.
+    mpMeterDraw = NULL;
+#endif
     stage_stag_info_class* stag_info = dComIfGp_getStageStagInfo();
     if (dStage_stagInfo_GetUpButton(stag_info) == 1) {
         mpHeap = fopMsgM_createExpHeap(HEAP_SIZE(0x5A400, 0xA0000), NULL);
@@ -327,6 +335,10 @@ int dMeter2_c::_execute() {
 
 int dMeter2_c::_draw() {
     #if TARGET_PC
+    // Companion dungeon-map render pass (self-gated; same drawlist stage as
+    // the minimap render below). Runs before the HUD-suppression early-out
+    // so its lifecycle (create/release on stage change) never freezes.
+    dusk::companion::dmapUpdate();
     if (dusk::getSettings().game.recordingMode || dusk::getSettings().game.minimalHUD ||
         dusk::getSettings().game.debugFlyCam)
     {
@@ -335,9 +347,33 @@ int dMeter2_c::_draw() {
     #endif
 
     if (mpMap != NULL) {
+    #if TARGET_PC
+        if (dusk::dualscreen::hudOnCompanion()) {
+            // Dual-screen: the minimap lives on the second screen. Keep the
+            // map render-texture fresh but skip compositing it on the main
+            // view. Status panes are hidden in dMeter2Draw_c::draw so the
+            // contextual button prompts stay visible.
+            if (mpMap->getDMap() != NULL) {
+                mpMap->getDMap()->_draw();
+            }
+        } else
+    #endif
         mpMap->_draw();
     }
 
+#if TARGET_PC
+    // Dual-screen: the contextual control panel (grass/sumo/fishing controls)
+    // renders on the companion screen instead — except the horse spur/stamina
+    // meter (type 1), the crawling arrows (type 2) and the scope overlay
+    // (type 4, hawkeye/slingshot zoom mask), which are gameplay-critical and
+    // stay on the main view.
+    const bool subContentsOnMain =
+        !dusk::dualscreen::hudOnCompanion() || mSubContentType == 1 ||
+        mSubContentType == 2 || mSubContentType == 4;
+#else
+    const bool subContentsOnMain = true;
+#endif
+    if (subContentsOnMain) {
     if (mpSubContents != NULL) {
         dComIfGd_set2DOpaTop(mpSubContents);
     }
@@ -350,6 +386,7 @@ int dMeter2_c::_draw() {
         } else {
             dComIfGd_set2DOpaTop(mpSubSubContents);
         }
+    }
     }
 
     if (dMeter2Info_getWindowStatus() == 2) {
@@ -414,6 +451,14 @@ int dMeter2_c::_delete() {
     fopMsgM_destroyExpHeap(mpSubHeap);
     fopMsgM_destroyExpHeap(mpHeap);
     emphasisButtonDelete();
+#if TARGET_PC
+    // The companion dashboard reads these globals every frame — null them
+    // unconditionally when this meter is destroyed. The comparison-based
+    // guard was wrong for the map class: mpMap was already set to NULL by
+    // the earlier JKR_DELETE, so `global == mpMap` was always false.
+    dMeter2Info_setMeterMapClass(NULL);
+    dMeter2Info_setMeterClass(NULL);
+#endif
     return 1;
 }
 

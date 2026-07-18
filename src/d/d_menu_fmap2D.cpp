@@ -2908,6 +2908,25 @@ void dMenu_Fmap2DTop_c::setBButtonString(u32 param_0, u8 i_alpha) {
     }
 }
 
+#if TARGET_PC
+// Live A/B prompt for the companion cluster; NULL when the map screen has
+// the prompt hidden (mAlphaButton* at ALPHA_MIN).
+const char* dMenu_Fmap2DTop_c::getButtonLabel(int i_which) {
+    if (mpTitleScreen == NULL) {
+        return NULL;
+    }
+    if ((i_which == 0 ? mAlphaButtonA : mAlphaButtonB) == ALPHA_MIN) {
+        return NULL;
+    }
+    J2DPane* pane = mpTitleScreen->search(
+        i_which == 0 ? MULTI_CHAR('font_at1') : MULTI_CHAR('font_bt1'));
+    if (pane == NULL) {
+        return NULL;
+    }
+    return (const char*)((J2DTextBox*)pane)->getStringPtr();
+}
+#endif
+
 void dMenu_Fmap2DTop_c::setAButtonString(u32 param_0, u8 i_alpha) {
 #if VERSION == VERSION_GCN_JPN
     static const u64 cont_at[5] = {MULTI_CHAR('cont_at'), MULTI_CHAR('cont_at1'), MULTI_CHAR('cont_at2'), MULTI_CHAR('cont_at3'), MULTI_CHAR('cont_at4')};

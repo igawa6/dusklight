@@ -17798,6 +17798,23 @@ int daAlink_c::procGoronRideWait() {
 int daAlink_c::execute() {
     loadModelDVD();
 
+#if TARGET_PC
+    // The companion screen's gear equip can start a shield swap during live
+    // play; vanilla only pumps the reload inside the pause status window,
+    // where the world is frozen. Live gameplay must never run a frame with
+    // mShieldModel freed mid-reload, so drive the whole sequence to
+    // completion here (bounded — bails to next frame if the DVD thread
+    // stalls).
+    if (!dComIfGp_isPauseFlag() && mShieldChangeWaitTimer != 0) {
+        for (int guard = 0; guard < 100000; guard++) {
+            if (loadShieldModelDVD() != 0) {
+                break;
+            }
+            OSYieldThread();
+        }
+    }
+#endif
+
     if (checkEndResetFlg0(ERFLG0_BOSS_ROOM_WAIT) && getMidnaActor() != NULL) {
         getMidnaActor()->onNoServiceWait();
     }

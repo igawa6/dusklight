@@ -91,6 +91,7 @@ public:
 
     bool isDispPosInsideFlg() { return mMapIsInside != 0; }
     dMeterMap_c* getMapPointer() { return (dMeterMap_c*)mMap; }
+    dMap_c* getDMap() { return mMap; }
     void setSizeW(f32 w) { mSizeW = w; }
     void setSizeH(f32 h) { mSizeH = h; }
 

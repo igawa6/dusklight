@@ -25,6 +25,7 @@
 
 #if TARGET_PC
 #include "dusk/settings.h"
+#include "dusk/dualscreen.h"
 #include "dusk/ui/icon_provider.hpp"
 #include <algorithm>
 
@@ -56,6 +57,444 @@ void dAnchorHudScale(CPaneMgr* i_pane, HudCorner i_corner, f32* io_x, f32* io_y,
 }
 
 }  // namespace
+
+// The action labels are pre-rendered texture panes (the label texture is
+// swapped per context action). Expose the current texture rather than the
+// pane: pane-level draws inherit animated transforms and render skewed.
+const ResTIMG* dMeter2Draw_c::getActionLabelTimg(int i_which) {
+    CPaneMgr* mgr = i_which == 0 ? mpBTextA : mpBTextB;
+    if (mgr == NULL || mgr->getPanePtr() == NULL || !mgr->getPanePtr()->isVisible()) {
+        return NULL;
+    }
+    J2DPicture* pic = (J2DPicture*)mgr->getPanePtr();
+    if (pic->getTexture(0) == NULL) {
+        return NULL;
+    }
+    return pic->getTexture(0)->getTexInfo();
+}
+
+// First textured picture in a pane subtree. Prefers color textures over
+// intensity ones (formats 0-3): button subtrees start with greyscale drop
+// shadows that would otherwise win.
+static J2DPicture* findPictureWithTexture(J2DPane* i_pane, bool i_colorOnly) {
+    if (i_pane == NULL) {
+        return NULL;
+    }
+    if (i_pane->getKind() == MULTI_CHAR('PIC1') || i_pane->getKind() == MULTI_CHAR('PIC2')) {
+        J2DPicture* pic = (J2DPicture*)i_pane;
+        if (pic->getTexture(0) != NULL &&
+            (!i_colorOnly || pic->getTexture(0)->getFormat() > 3))
+        {
+            return pic;
+        }
+    }
+    for (J2DPane* child = i_pane->getFirstChildPane(); child != NULL;
+         child = child->getNextChildPane())
+    {
+        J2DPicture* pic = findPictureWithTexture(child, i_colorOnly);
+        if (pic != NULL) {
+            return pic;
+        }
+    }
+    return NULL;
+}
+
+static J2DPicture* findBestPicture(CPaneMgr* i_mgr) {
+    if (i_mgr == NULL || i_mgr->getPanePtr() == NULL) {
+        return NULL;
+    }
+    J2DPicture* pic = findPictureWithTexture(i_mgr->getPanePtr(), true);
+    if (pic == NULL) {
+        pic = findPictureWithTexture(i_mgr->getPanePtr(), false);
+    }
+    return pic;
+}
+
+// ---------------------------------------------------------------------------
+// Dual-screen companion accessors (dusk fork): pane/texture getters and draw
+// hooks consumed by src/dusk/companion*.cpp. Everything up to initLife().
+// ---------------------------------------------------------------------------
+
+// Whole button pane subtrees (0=A 1=B 2=X 3=Y), for layer-composited
+// rendering on the companion.
+J2DPane* dMeter2Draw_c::getButtonPane(int i_which) {
+    CPaneMgr* mgr = NULL;
+    switch (i_which) {
+    case 0:
+        mgr = mpButtonA;
+        break;
+    case 1:
+        mgr = mpButtonB;
+        break;
+    case 2:
+        mgr = mpButtonXY[0];
+        break;
+    case 3:
+        mgr = mpButtonXY[1];
+        break;
+    case 4:
+        mgr = mpButtonXY[2];
+        break;
+    }
+    return mgr != NULL ? mgr->getPanePtr() : NULL;
+}
+
+// Face button base pictures for the companion cluster (0=A 1=B 2=X 3=Y).
+// Returned as pictures so the caller can reuse their tint colors: the button
+// graphics are intensity textures colored by the pane's black/white TEV.
+J2DPicture* dMeter2Draw_c::getButtonBasePicture(int i_which) {
+    CPaneMgr* mgr = NULL;
+    switch (i_which) {
+    case 0:
+        mgr = mpButtonA;
+        break;
+    case 1:
+        mgr = mpButtonB;
+        break;
+    case 2:
+        mgr = mpButtonXY[0];
+        break;
+    case 3:
+        mgr = mpButtonXY[1];
+        break;
+    case 4:
+        mgr = mpButtonXY[2];
+        break;
+    }
+    return findBestPicture(mgr);
+}
+
+// Current A action word ("Speak", "Blow", ...); the mpAText panes are real
+// text boxes (unlike b_text_a, which is the "A" glyph picture). NULL/empty
+// when no contextual action.
+const char* dMeter2Draw_c::getActionTextA() {
+    if (mpAText[0] == NULL || mpAText[0]->getPanePtr() == NULL ||
+        !mpAText[0]->getPanePtr()->isVisible())
+    {
+        return NULL;
+    }
+    return (const char*)((J2DTextBox*)mpAText[0]->getPanePtr())->getStringPtr();
+}
+
+// B-button action word ("Attack", "Dig", ...); NULL when the game hides it.
+const char* dMeter2Draw_c::getActionTextB() {
+    if (mpTextB == NULL || mpTextB->getPanePtr() == NULL ||
+        !mpTextB->getPanePtr()->isVisible() || mpBText[0] == NULL ||
+        mpBText[0]->getPanePtr() == NULL)
+    {
+        return NULL;
+    }
+    return (const char*)((J2DTextBox*)mpBText[0]->getPanePtr())->getStringPtr();
+}
+
+// X/Y-button action words ("Sense", "Dig", ... — wolf form); NULL when the
+// game hides them. i_no: 0 = X, 1 = Y.
+const char* dMeter2Draw_c::getActionTextXY(int i_no) {
+    if (i_no < 0 || i_no > 1 || mpTextXY[i_no] == NULL ||
+        mpTextXY[i_no]->getPanePtr() == NULL || !mpTextXY[i_no]->getPanePtr()->isVisible() ||
+        mpXYText[0][i_no] == NULL || mpXYText[0][i_no]->getPanePtr() == NULL)
+    {
+        return NULL;
+    }
+    return (const char*)((J2DTextBox*)mpXYText[0][i_no]->getPanePtr())->getStringPtr();
+}
+
+// Midna (Z) button pane subtree regardless of the prompt's active state
+// (the companion dims it instead of hiding).
+J2DPane* dMeter2Draw_c::getMidnaButtonPaneRaw() {
+    if (mpButtonMidona == NULL || mpButtonMidona->getPanePtr() == NULL ||
+        !mpButtonMidona->getPanePtr()->isVisible())
+    {
+        return NULL;
+    }
+    return mpButtonMidona->getPanePtr();
+}
+
+// Midna (Z) button pane subtree for layer compositing; NULL when the prompt
+// is inactive (the game hides it via pane alpha, not visibility).
+J2DPane* dMeter2Draw_c::getMidnaButtonPane() {
+    if (mpButtonMidona == NULL || mpButtonMidona->getPanePtr() == NULL ||
+        !mpButtonMidona->getPanePtr()->isVisible() ||
+        mpButtonMidona->getPanePtr()->getAlpha() == 0)
+    {
+        return NULL;
+    }
+    return mpButtonMidona->getPanePtr();
+}
+
+// Midna (Z) button picture; NULL when the prompt is inactive (the game hides
+// it via pane alpha, not visibility).
+J2DPicture* dMeter2Draw_c::getMidnaButtonPicture() {
+    if (mpButtonMidona == NULL || mpButtonMidona->getPanePtr() == NULL ||
+        !mpButtonMidona->getPanePtr()->isVisible() ||
+        mpButtonMidona->getPanePtr()->getAlpha() == 0)
+    {
+        return NULL;
+    }
+    return findBestPicture(mpButtonMidona);
+}
+
+// A tear-of-light picture from the vessel layout.
+J2DPicture* dMeter2Draw_c::getLightDropPicture() {
+    return findBestPicture(mpLightDropParent);
+}
+
+// D-pad label strings from the cross HUD textboxes (localized by the game).
+const char* dMeter2Draw_c::getDpadLabel(int i_no) {
+    if (mpScreen == NULL) {
+        return NULL;
+    }
+    J2DPane* pane = mpScreen->search(i_no == 0 ? MULTI_CHAR('cont_ju0') : MULTI_CHAR('cont_ju5'));
+    if (pane == NULL) {
+        return NULL;
+    }
+    return (const char*)((J2DTextBox*)pane)->getStringPtr();
+}
+
+// Midna prompt pulse, drawn at companion coordinates (frame state shared
+// with the main HUD, which skips its own draw in dual-screen mode).
+void dMeter2Draw_c::drawMidnaPikariAt(f32 i_posX, f32 i_posY) {
+    if (field_0x738 <= 0.0f) {
+        return;
+    }
+    drawPikari(i_posX, i_posY, &field_0x738, g_drawHIO.mMidnaIconPikariScale,
+               g_drawHIO.mMidnaIconPikariFrontOuter, g_drawHIO.mMidnaIconPikariFrontInner,
+               g_drawHIO.mMidnaIconPikariBackOuter, g_drawHIO.mMidnaIconPikariBackInner,
+               g_drawHIO.mMidnaIconPikariAnimSpeed, 3);
+}
+
+// D-pad cross HUD pane subtree (up = item wheel, right = map).
+J2DPane* dMeter2Draw_c::getButtonCrossPane() {
+    return mpButtonCrossParent != NULL ? mpButtonCrossParent->getPanePtr() : NULL;
+}
+
+// Vessel of Light pane subtree for full companion compositing.
+J2DPane* dMeter2Draw_c::getLightDropPane() {
+    return mpLightDropParent != NULL ? mpLightDropParent->getPanePtr() : NULL;
+}
+
+J2DPane* dMeter2Draw_c::getVesselTearPane(int i_idx) {
+    if (i_idx < 0 || i_idx >= 16 || mpSIParts[i_idx][1] == NULL) {
+        return NULL;
+    }
+    return mpSIParts[i_idx][1]->getPanePtr();
+}
+
+// Companion twin of the main-screen vessel tear glow (skipped there in
+// dual-screen mode): same animation state machine, but each tear's pikari
+// draws at the caller-mapped companion position, sized by i_sizeScale.
+// Positions below -9000 mark tears the caller could not map.
+void dMeter2Draw_c::drawVesselPikariForCompanion(const f32* i_tearX, const f32* i_tearY,
+                                                 f32 i_sizeScale) {
+    if (mpLightDropParent == NULL || mpLightDropParent->getAlphaRate() == 0.0f) {
+        return;
+    }
+
+    f32 dropScale = g_drawHIO.mLightDrop.mPikariScaleNormal;
+    f32 dropSpeed = g_drawHIO.mLightDrop.mDropPikariAnimSpeed;
+
+    if (field_0x756 >= 0) {
+        dropSpeed = g_drawHIO.mLightDrop.mDropPikariAnimSpeed_Completed;
+        int completeEnd = g_drawHIO.mLightDrop.mPikariInterval * 15;
+        dropScale = g_drawHIO.mLightDrop.mPikariScaleComplete;
+        if (dusk::frame_interp::get_ui_tick_pending()) {
+            if (field_0x756 <= completeEnd) {
+                int phase = field_0x756 % g_drawHIO.mLightDrop.mPikariInterval;
+                int tearIdx = field_0x756 / g_drawHIO.mLightDrop.mPikariInterval;
+
+                if (phase == 0 && field_0x62c[tearIdx] == 0.0f) {
+                    field_0x62c[tearIdx] = 18.0f;
+                }
+                field_0x756++;
+            } else {
+                int holdStart = completeEnd + 1;
+
+                if (field_0x756 == holdStart) {
+                    if (field_0x62c[15] == 0.0f) {
+                        field_0x756++;
+                    }
+                } else if (field_0x756 >= g_drawHIO.mLightDrop.field_0x54 + holdStart) {
+                    for (int i = 0; i < 16; i++) {
+                        field_0x62c[i] = 18.0f - dropSpeed;
+                        field_0x66c[i] = 18.0f - g_drawHIO.mLightDrop.mPikariLoopAnimSpeed;
+                    }
+                    field_0x756 = -1;
+                } else {
+                    field_0x756++;
+                }
+            }
+        }
+    }
+
+    for (int i = 0; i < 16; i++) {
+        if (i_tearX[i] < -9000.0f) {
+            continue;
+        }
+        if (field_0x66c[i] > 0.0f) {
+            drawPikari(i_tearX[i], i_tearY[i], &g_drawHIO.mLightDrop.mPikariLoopBackStopFrame,
+                       g_drawHIO.mLightDrop.mPikariLoopBackScale * i_sizeScale,
+                       g_drawHIO.mLightDrop.mPikariLoopFrontOuter[1],
+                       g_drawHIO.mLightDrop.mPikariLoopFrontInner[1],
+                       g_drawHIO.mLightDrop.mPikariLoopBackOuter[1],
+                       g_drawHIO.mLightDrop.mPikariLoopBackInner[1], 0.0f, 3);
+            drawPikari(i_tearX[i], i_tearY[i], &field_0x66c[i],
+                       g_drawHIO.mLightDrop.mPikariLoopScale * i_sizeScale,
+                       g_drawHIO.mLightDrop.mPikariLoopFrontOuter[0],
+                       g_drawHIO.mLightDrop.mPikariLoopFrontInner[0],
+                       g_drawHIO.mLightDrop.mPikariLoopBackOuter[0],
+                       g_drawHIO.mLightDrop.mPikariLoopBackInner[0],
+                       g_drawHIO.mLightDrop.mPikariLoopAnimSpeed, 3);
+        }
+
+        if (g_drawHIO.mLightDrop.mAnimDebug &&
+            dComIfGp_getNeedLightDropNum() !=
+                dComIfGs_getLightDropNum(dComIfGp_getStartStageDarkArea()))
+        {
+            field_0x66c[i] = 0.0f;
+        }
+
+        if (field_0x62c[i] > 0.0f) {
+            drawPikari(i_tearX[i], i_tearY[i], &field_0x62c[i], dropScale * i_sizeScale,
+                       g_drawHIO.mLightDrop.mDropPikariFrontOuter,
+                       g_drawHIO.mLightDrop.mDropPikariFrontInner,
+                       g_drawHIO.mLightDrop.mDropPikariBackOuter,
+                       g_drawHIO.mLightDrop.mDropPikariBackInner, dropSpeed, field_0x75f);
+        }
+    }
+}
+
+// Re-apply the vessel's per-drop fill tints/alphas from the live tear count
+// at full opacity — the game's own fade leaves it invisible between pickups,
+// but the companion shows it for the whole quest.
+void dMeter2Draw_c::refreshVesselForCompanion() {
+    if (mpLightDropParent == NULL) {
+        return;
+    }
+    mpLightDropParent->setAlphaRate(g_drawHIO.mParentAlpha);
+    for (int i = 0; i < 2; i++) {
+        if (mpSIParent[i] != NULL) {
+            mpSIParent[i]->setAlphaRate(1.0f);
+        }
+    }
+    drawLightDrop(dComIfGs_getLightDropNum(dComIfGp_getStartStageDarkArea()),
+                  dComIfGp_getNeedLightDropNum(), g_drawHIO.mLightDrop.mVesselPosX,
+                  g_drawHIO.mLightDrop.mVesselPosY, g_drawHIO.mLightDrop.mVesselScale,
+                  g_drawHIO.mLightDrop.mVesselAlpha[0], 0);
+}
+
+// The live kantera (lantern oil) meters, repositionable via setPos.
+dKantera_icon_c* dMeter2Draw_c::getKanteraMeter(int i_no) {
+    if (i_no < 0 || i_no >= 2) {
+        return NULL;
+    }
+    return mpKanteraMeter[i_no];
+}
+
+// Dual-screen: the status panes are hidden on the main screen and composited
+// on the companion, which should never inherit the main HUD's idle fade —
+// pin them fully opaque every frame (runs after the game's own fade logic).
+void dMeter2Draw_c::forceCompanionAlpha() {
+    const f32 full = g_drawHIO.mParentAlpha;
+    const f32 btn = g_drawHIO.mParentAlpha * g_drawHIO.mMainHUDButtonsAlpha;
+    if (mpLifeParent != NULL && mpLifeParent->getAlphaRate() != full) {
+        mpLifeParent->setAlphaRate(full);
+        setAlphaLifeChange(true);
+    }
+    if (mpRupeeParent[0] != NULL) {
+        mpRupeeParent[0]->setAlphaRate(full);
+    }
+    if (mpKeyParent != NULL) {
+        mpKeyParent->setAlphaRate(full);
+    }
+    if (mpButtonParent != NULL && mpButtonParent->getAlphaRate() != btn) {
+        // Pinning the parent propagates init alphas to ALL children — but the
+        // Midna prompt is alpha-gated by game state; preserve its own alpha.
+        u8 midnaAlpha = 0;
+        const bool hasMidna = mpButtonMidona != NULL && mpButtonMidona->getPanePtr() != NULL;
+        if (hasMidna) {
+            midnaAlpha = mpButtonMidona->getPanePtr()->getAlpha();
+        }
+        mpButtonParent->setAlphaRate(btn);
+        if (hasMidna) {
+            mpButtonMidona->setAlpha(midnaAlpha);
+        }
+    }
+    if (mpButtonCrossParent != NULL) {
+        mpButtonCrossParent->setAlphaRate(btn);
+    }
+    if (mpButtonXY[0] != NULL) {
+        mpButtonXY[0]->setAlphaRate(btn);
+    }
+    if (mpButtonXY[1] != NULL) {
+        mpButtonXY[1]->setAlphaRate(btn);
+    }
+    if (mpButtonXY[2] != NULL) {
+        mpButtonXY[2]->setAlphaRate(btn);
+    }
+}
+
+bool dMeter2Draw_c::isButtonClusterVisible() {
+    // The companion cluster is always shown (user preference): cutscenes,
+    // grass blowing, dialogue, the item wheel and pause screens all hide or
+    // fade the main HUD buttons, but the second screen keeps them.
+    return mpButtonParent != NULL;
+}
+
+// Counter pane subtrees (icon + live digits): 0 = rupees, 1 = small keys.
+J2DPane* dMeter2Draw_c::getCounterPane(int i_which) {
+    CPaneMgr* mgr = i_which == 0 ? mpRupeeParent[0] : mpKeyParent;
+    return mgr != NULL ? mgr->getPanePtr() : NULL;
+}
+
+// Collects the pictures composing heart i_no as currently displayed (empty
+// base + full fill, or base + quarter texture for the partial heart), letting
+// the companion dashboard draw the original assets at any size. Returns the
+// number of pictures written to o_pics (up to 2); 0 when the heart is hidden.
+int dMeter2Draw_c::getHeartPictures(int i_no, J2DPicture** o_pics) {
+    if (i_no < 0 || i_no >= 20 || mpLifeParts[i_no] == NULL ||
+        mpLifeParts[i_no]->getPanePtr() == NULL ||
+        !mpLifeParts[i_no]->getPanePtr()->isVisible())
+    {
+        return 0;
+    }
+    int count = 0;
+    if (mpHeartBase[i_no] != NULL && mpHeartBase[i_no]->getPanePtr() != NULL) {
+        o_pics[count++] = (J2DPicture*)mpHeartBase[i_no]->getPanePtr();
+    }
+    if (mpLifeTexture[i_no][1] != NULL && mpLifeTexture[i_no][1]->getPanePtr() != NULL &&
+        mpLifeTexture[i_no][1]->getPanePtr()->isVisible())
+    {
+        // Full heart.
+        o_pics[count++] = (J2DPicture*)mpLifeTexture[i_no][1]->getPanePtr();
+    } else if (mpBigHeart != NULL && mpBigHeart->getPanePtr() != NULL &&
+               mpBigHeart->getPanePtr()->isVisible() && mpScreen != NULL)
+    {
+        // The heart drawLife parks the shared quarter pane on (also used for
+        // the last full heart, showing bigh_00): pick whichever quarter
+        // texture the game left visible.
+        const s16 life = dComIfGs_getLife();
+        s16 partialHeart = life / 4;
+        if (life % 4 == 0) {
+            partialHeart--;
+        }
+        if (i_no == partialHeart) {
+            static u64 const tag_bigh[] = {MULTI_CHAR('bigh_00'), MULTI_CHAR('bigh_01'),
+                MULTI_CHAR('bigh_02'), MULTI_CHAR('bigh_03')};
+            for (u64 tag : tag_bigh) {
+                J2DPane* quarterPane = mpScreen->search(tag);
+                if (quarterPane != NULL && quarterPane->isVisible()) {
+                    o_pics[count++] = (J2DPicture*)quarterPane;
+                    break;
+                }
+            }
+        }
+    }
+    return count;
+}
+
+f32 dMeter2Draw_c::getLightDropAlpha() {
+    return mpLightDropParent != NULL ? mpLightDropParent->getAlphaRate() : 0.0f;
+}
 #endif
 
 dMeter2Draw_c::dMeter2Draw_c(JKRExpHeap* mp_heap) {
@@ -651,6 +1090,30 @@ void dMeter2Draw_c::exec(u32 i_status) {
 #endif
 }
 
+#if TARGET_PC
+// Dual-screen: status readouts and the controller button cluster live on
+// the second screen; contextual bottom prompts (spur/dismount meters, sub
+// contents) keep drawing on the main view. Panes are re-shown for one frame
+// after the setting turns off.
+void dMeter2Draw_c::dualScreenSyncPaneVisibility(bool i_dualScreenHud) {
+    static bool sDualScreenHudPrev = false;
+    if (i_dualScreenHud || sDualScreenHudPrev) {
+        CPaneMgr* statusPanes[] = {mpLifeParent, mpMagicParent, mpLightDropParent,
+            mpRupeeKeyParent, mpButtonParent, mpButtonCrossParent, mpButtonXY[0], mpButtonXY[1]};
+        for (CPaneMgr* pane : statusPanes) {
+            if (pane != NULL) {
+                if (i_dualScreenHud) {
+                    pane->hide();
+                } else {
+                    pane->show();
+                }
+            }
+        }
+    }
+    sDualScreenHudPrev = i_dualScreenHud;
+}
+#endif
+
 void dMeter2Draw_c::draw() {
     J2DGrafContext* graf_ctx = dComIfGp_getCurrentGrafPort();
     graf_ctx->setup2D();
@@ -662,16 +1125,31 @@ void dMeter2Draw_c::draw() {
     } else {
         mpButtonParent->show();
     }
+
+    const bool dualScreenHud = dusk::dualscreen::hudOnCompanion();
+    dualScreenSyncPaneVisibility(dualScreenHud);
 #endif
 
     mpScreen->draw(0.0f, 0.0f, graf_ctx);
+#if TARGET_PC
+    // Dual-screen: the lantern oil meter lives on the second screen.
+    if (!dualScreenHud) {
+#endif
     drawKanteraScreen(1);
     drawKanteraScreen(2);
+#if TARGET_PC
+    }
+#endif
 
 #if TARGET_PC
     if (!touchControlsEnabled) {
 #endif
     for (int i = 0; i < 2; i++) {
+#if TARGET_PC
+        if (dualScreenHud) {
+            break;
+        }
+#endif
         if (mpItemXY[i] != NULL) {
             for (int j = 0; j < 3; j++) {
                 f32 temp_f30 = mItemParams[i].num_scale * 16.0f;
@@ -692,10 +1170,19 @@ void dMeter2Draw_c::draw() {
     }
 
     for (int i = 0; i < 2; i++) {
+#if TARGET_PC
+        if (dualScreenHud) {
+            break;
+        }
+#endif
         mpKanteraMeter[i]->drawSelf();
     }
 
-    if (!dComIfGp_isPauseFlag() && mpButtonParent->getAlphaRate() != 0.0f) {
+    if (!dComIfGp_isPauseFlag() && mpButtonParent->getAlphaRate() != 0.0f
+#if TARGET_PC
+        && !dualScreenHud
+#endif
+    ) {
         if (field_0x608 > 0.0f) {
             drawPikari(mpBTextA, &field_0x608, g_drawHIO.mButtonAPikariScale,
                        g_drawHIO.mButtonAPikariFrontOuter, g_drawHIO.mButtonAPikariFrontInner,
@@ -711,6 +1198,11 @@ void dMeter2Draw_c::draw() {
         }
 
         for (int i = 0; i < 2; i++) {
+#if TARGET_PC
+            if (dualScreenHud) {
+                break;
+            }
+#endif
             if (field_0x620[i] > 0.0f) {
                 drawPikari(mpBTextXY[i], &field_0x620[i], g_drawHIO.mButtonXYPikariScale,
                            g_drawHIO.mButtonXYPikariFrontOuter, g_drawHIO.mButtonXYPikariFrontInner,
@@ -723,7 +1215,14 @@ void dMeter2Draw_c::draw() {
     }
 #endif
 
-    if (mpLightDropParent->getAlphaRate() != 0.0f) {
+    if (mpLightDropParent->getAlphaRate() != 0.0f
+#if TARGET_PC
+        // Dual screen: the vessel lives on the companion; its tear glow
+        // sparkles are direct draws at the panes' main-screen positions,
+        // so they must be skipped here too.
+        && !dualScreenHud
+#endif
+    ) {
         f32 var_f28 = g_drawHIO.mLightDrop.mPikariScaleNormal;
         f32 var_f29 = g_drawHIO.mLightDrop.mDropPikariAnimSpeed;
 
@@ -805,7 +1304,8 @@ void dMeter2Draw_c::draw() {
     }
 
 #if TARGET_PC
-    if (!touchControlsEnabled && field_0x738 > 0.0f) {
+    if (!touchControlsEnabled && !dusk::dualscreen::hudOnCompanion() &&
+        field_0x738 > 0.0f) {
 #else
     if (field_0x738 > 0.0f) {
 #endif

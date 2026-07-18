@@ -191,6 +191,11 @@ public:
     void onShowFlag() { mShowFlag |= 1; }
     void offShowFlag() { mShowFlag &= ~1; }
     bool isShowFlag() { return (mShowFlag & 1) != 0; }
+#if TARGET_PC
+    dMenu_Fmap_c* getMenuFmap() { return mpMenuFmap; }
+    dMenu_Dmap_c* getMenuDmap() { return mpMenuDmap; }
+    dMenu_Collect_c* getMenuCollect() { return mpMenuCollect; }
+#endif
     bool isFadeNowCheck() { return mDoGph_gInf_c::getFader()->getStatus() == 1; }
 
 private:

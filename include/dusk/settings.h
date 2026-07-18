@@ -194,6 +194,10 @@ struct UserSettings {
         ConfigVar<bool> enableControllerToasts;
         ConfigVar<bool> enableDiscordPresence;
         ConfigVar<MenuScaling> menuScalingMode;
+        ConfigVar<bool> dualScreen;
+        ConfigVar<int> dualScreenDisplay;
+        ConfigVar<int> dualScreenPosX;
+        ConfigVar<int> dualScreenPosY;
 
         // Graphics
         ConfigVar<BloomMode> bloomMode;

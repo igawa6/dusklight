@@ -6,6 +6,7 @@
 #include "dusk/action_bindings.h"
 #include "dusk/livesplit.h"
 #include "dusk/settings.h"
+#include "dusk/dualscreen.h"
 #include "dusk/speedrun.h"
 #include "fmt/format.h"
 #include "magic_enum.hpp"
@@ -249,8 +250,12 @@ void Overlay::update() {
     }
 
     if (mFpsCounter != nullptr) {
-        if (getSettings().video.enableFpsOverlay.getValue()) {
-            const int idx = getSettings().video.fpsOverlayCorner.getValue();
+        const int cornerIdx = getSettings().video.fpsOverlayCorner.getValue();
+        // Index 4 = Companion: the second screen draws the counter instead.
+        if (getSettings().video.enableFpsOverlay.getValue() &&
+            cornerIdx < static_cast<int>(kFpsCorners.size()) &&
+            !dusk::dualscreen::hudOnCompanion()) {
+            const int idx = cornerIdx;
             mFpsCounter->SetAttribute("open", "");
             mFpsCounter->SetAttribute("corner", kFpsCorners[idx]);
 

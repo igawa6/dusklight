@@ -74,6 +74,9 @@ public:
     void regionMapMove(STControl*);
     void stageMapMove(STControl*, u8, bool);
     void setAllAlphaRate(f32, bool);
+#if TARGET_PC
+    const char* getButtonLabel(int i_which);  // 0 = A, 1 = B; NULL if hidden
+#endif
     void drawDebugStageArea();
     void drawDebugRegionArea();
     void setArrowPos3D(u8, char const*, f32, f32);
@@ -318,6 +321,9 @@ public:
     dMenu_Fmap2DTop_c(JKRExpHeap*, STControl*);
     void _execute();
     void setAllAlphaRate(f32, bool);
+#if TARGET_PC
+    const char* getButtonLabel(int i_which);  // 0 = A, 1 = B; NULL if hidden
+#endif
     void btkAnimeLoop(J2DAnmTextureSRTKey*, f32);
     void setMoyaAlpha(u8);
     void setTitleNameString(u32);

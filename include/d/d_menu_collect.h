@@ -70,6 +70,25 @@ public:
 
 class dMenu_Collect2D_c : public dDlst_base_c {
 public:
+#if TARGET_PC
+    // Category icon panes for the companion: 0 = fish journal, 1 = hidden
+    // skills scroll, 2 = letters, 3-7 = scent icons (medicine, children,
+    // fish, youth's/Ilia, poe).
+    J2DPane* getIconPane(int i_which) {
+        if (mpScreen == NULL) {
+            return NULL;
+        }
+        static const u64 tags[8] = {
+            MULTI_CHAR('fish_3_n'), MULTI_CHAR('maki_5_n'), MULTI_CHAR('lett_4_n'),
+            MULTI_CHAR('wolf_med'), MULTI_CHAR('wolf_chi'), MULTI_CHAR('wolf_fis'),
+            MULTI_CHAR('wolf_iri'), MULTI_CHAR('wolf_pou'),
+        };
+        if (i_which < 0 || i_which >= 8) {
+            return NULL;
+        }
+        return mpScreen->search(tags[i_which]);
+    }
+#endif
     dMenu_Collect2D_c(JKRExpHeap*, STControl*, CSTControl*);
 
     #if TARGET_PC
@@ -291,6 +310,9 @@ private:
 
 class dMenu_Collect_c {
 public:
+#if TARGET_PC
+    dMenu_Collect2D_c* getCollect2D() { return mpCollect2D; }
+#endif
     dMenu_Collect_c(JKRExpHeap*, STControl*, CSTControl*);
     void _create();
     void _delete();

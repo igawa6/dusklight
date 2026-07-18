@@ -70,6 +70,11 @@ public:
     void getString(u32 i_stringID, TEXT_SPAN o_string, JMSMesgEntry_c* i_msgEntry);
     void getStringKana(u32 i_stringID, TEXT_SPAN o_string, JMSMesgEntry_c* i_msgEntry);
     void getStringKanji(u32 i_stringID, TEXT_SPAN o_string, JMSMesgEntry_c* i_msgEntry);
+#ifdef TARGET_PC
+    // Companion reader fetch: uncapped, resolves name tags, emits 0x02+idx
+    // markers for controller-button tags (see d_meter2_info.cpp).
+    void getStringFull(u32 i_stringID, char* o_string, int i_cap, int i_xyButton = 0);
+#endif
     f32 getStringLength(J2DTextBox* i_textbox, char* i_string);
     f32 getStringLength(JUTFont* i_font, f32 param_2, f32 param_3, char* i_string);
     void onDirectUseItem(int);
@@ -359,6 +364,13 @@ inline void dMeter2Info_getStringKanji(u32 i_stringID, TEXT_SPAN o_string, JMSMe
 inline void dMeter2Info_getStringKana(u32 i_stringID, TEXT_SPAN o_string, JMSMesgEntry_c* i_msgEntry) {
     g_meter2_info.getStringKana(i_stringID, o_string, i_msgEntry);
 }
+
+#ifdef TARGET_PC
+inline void dMeter2Info_getStringFull(u32 i_stringID, char* o_string, int i_cap,
+    int i_xyButton = 0) {
+    g_meter2_info.getStringFull(i_stringID, o_string, i_cap, i_xyButton);
+}
+#endif
 
 inline f32 dMeter2Info_getStringLength(JUTFont* i_font, f32 param_2, f32 param_3, char* i_string) {
     return g_meter2_info.getStringLength(i_font, param_2, param_3, i_string);

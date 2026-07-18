@@ -136,7 +136,13 @@ int daAlink_c::loadShieldModelDVD() {
 
         if (mShieldChangeWaitTimer == 2) {
             mShieldModel = NULL;
-            dComIfG_resDelete(&mShieldPhaseReq, mShieldArcName);
+            if (!dComIfG_resDelete(&mShieldPhaseReq, mShieldArcName)) {
+#if TARGET_PC
+                // resDelete no-ops if load was in-progress; force-unregister
+                // before freeAll (same patch as loadModelDVD above).
+                dComIfG_deleteObjectResMain(mShieldArcName);
+#endif
+            }
             cPhs_Reset(&mShieldPhaseReq);
             mpShieldArcHeap->freeAll();
             setShieldArcName();

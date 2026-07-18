@@ -2,6 +2,13 @@ package dev.twilitrealm.dusk;
 
 import android.app.ActionBar;
 import android.app.Activity;
+import android.app.Presentation;
+import android.content.BroadcastReceiver;
+import android.content.IntentFilter;
+import android.hardware.display.DisplayManager;
+import android.os.BatteryManager;
+import android.view.MotionEvent;
+import android.view.SurfaceView;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.Context;
@@ -42,6 +49,16 @@ public class DuskActivity extends SDLActivity {
     private boolean awaitingManageStoragePermission = false;
 
     private static native void nativeFolderDialogResult(long userdata, String path, String error);
+    private static native void nativeAuxSurfaceChanged(Surface surface, int width, int height);
+    private static native void nativeCompanionTouchEvent(int action, float u, float v);
+    private static native void nativeCompanionPinch(float factor);
+    private static native void nativeDualScreenAvailable(boolean available);
+    private static native void nativeBatteryStatus(int percent, boolean charging);
+
+    private DisplayManager auxDisplayManager;
+    private DisplayManager.DisplayListener auxDisplayListener;
+    private BroadcastReceiver auxBatteryReceiver;
+    private AuxPresentation auxPresentation;
 
     private static String[] splitArgs(String raw) {
         List<String> out = new ArrayList<>();
@@ -91,7 +108,211 @@ public class DuskActivity extends SDLActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // Never let the device sleep mid-game: an idle screen-off pauses the
+        // app and tears down both surfaces, which is our main crash source.
+        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         hideSystemBars();
+        initAuxDisplay();
+        initBatteryMonitor();
+    }
+
+    @Override
+    protected void onPause() {
+        // A Presentation must not outlive a paused activity (window leak
+        // crash); dismissing here also detaches the aux surface in a
+        // controlled order before Android kills it.
+        dismissAux();
+        super.onPause();
+    }
+
+    @Override
+    protected void onStop() {
+        // System overlays (OLED burn-in protection, screen savers) may
+        // trigger onStop without onPause — dismiss defensively. The
+        // Presentation is re-shown in onResume via showAuxPresentation.
+        dismissAux();
+        super.onStop();
+    }
+
+    private void dismissAux() {
+        if (auxPresentation != null) {
+            auxPresentation.dismiss();
+            auxPresentation = null;
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (auxBatteryReceiver != null) {
+            unregisterReceiver(auxBatteryReceiver);
+            auxBatteryReceiver = null;
+        }
+        if (auxDisplayManager != null && auxDisplayListener != null) {
+            auxDisplayManager.unregisterDisplayListener(auxDisplayListener);
+            auxDisplayListener = null;
+        }
+        dismissAux();
+        super.onDestroy();
+    }
+
+    // Dual-screen devices (e.g. AYN Thor) expose the second panel as a
+    // presentation display. Mirror the dual-screen HUD/companion output there.
+    // Battery level for the companion dashboard. ACTION_BATTERY_CHANGED is a
+    // sticky broadcast, so registering delivers the current state immediately.
+    private void initBatteryMonitor() {
+        auxBatteryReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                int level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+                int scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
+                int status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
+                boolean charging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                    status == BatteryManager.BATTERY_STATUS_FULL;
+                if (level >= 0 && scale > 0) {
+                    nativeBatteryStatus(level * 100 / scale, charging);
+                }
+            }
+        };
+        registerReceiver(auxBatteryReceiver,
+            new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+    }
+
+    private void initAuxDisplay() {
+        auxDisplayManager = (DisplayManager)getSystemService(Context.DISPLAY_SERVICE);
+        if (auxDisplayManager == null) {
+            return;
+        }
+        auxDisplayListener = new DisplayManager.DisplayListener() {
+            @Override
+            public void onDisplayAdded(int displayId) {
+                reportDualScreenAvailable();
+                showAuxPresentation();
+            }
+
+            @Override
+            public void onDisplayRemoved(int displayId) {
+                if (auxPresentation != null &&
+                    auxPresentation.getDisplay().getDisplayId() == displayId)
+                {
+                    auxPresentation.dismiss();
+                    auxPresentation = null;
+                }
+                reportDualScreenAvailable();
+            }
+
+            @Override
+            public void onDisplayChanged(int displayId) {}
+        };
+        auxDisplayManager.registerDisplayListener(auxDisplayListener, null);
+        reportDualScreenAvailable();
+        showAuxPresentation();
+    }
+
+    // Dual-screen only activates when a physical secondary display exists;
+    // single-screen devices keep their HUD on the main screen.
+    private void reportDualScreenAvailable() {
+        boolean available = false;
+        if (auxDisplayManager != null) {
+            available = auxDisplayManager
+                .getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION).length > 0;
+        }
+        try {
+            nativeDualScreenAvailable(available);
+        } catch (UnsatisfiedLinkError e) {
+            Log.w(TAG, "nativeDualScreenAvailable missing", e);
+        }
+    }
+
+    private void showAuxPresentation() {
+        if (auxPresentation != null || auxDisplayManager == null) {
+            return;
+        }
+        Display[] displays =
+            auxDisplayManager.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION);
+        if (displays.length == 0) {
+            return;
+        }
+        try {
+            auxPresentation = new AuxPresentation(this, displays[0]);
+            auxPresentation.show();
+            Log.i(TAG, "Aux presentation shown on display " + displays[0].getDisplayId());
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to show aux presentation", e);
+            auxPresentation = null;
+        }
+    }
+
+    private static final class AuxPresentation extends Presentation {
+        AuxPresentation(Context context, Display display) {
+            super(context, display);
+        }
+
+        @Override
+        protected void onCreate(Bundle savedInstanceState) {
+            super.onCreate(savedInstanceState);
+            // The second screen gets no wake-resetting input during normal
+            // play; keep it from sleeping (and tearing down our surface).
+            getWindow().addFlags(
+                android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            // Never take input focus: with the Thor's bottom-screen/auto
+            // focus modes (especially after touching the companion), a
+            // focusable Presentation captures the controller and the game
+            // stops receiving it. Touches still arrive without focus.
+            getWindow().addFlags(
+                android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
+            SurfaceView surfaceView = new SurfaceView(getContext());
+            // Render the bottom screen at 8:7 in 1080p (native landscape).
+            surfaceView.getHolder().setFixedSize(1240, 1080);
+            surfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
+                @Override
+                public void surfaceCreated(SurfaceHolder holder) {}
+
+                @Override
+                public void surfaceChanged(SurfaceHolder holder, int format, int width,
+                    int height)
+                {
+                    nativeAuxSurfaceChanged(holder.getSurface(), width, height);
+                }
+
+                @Override
+                public void surfaceDestroyed(SurfaceHolder holder) {
+                    nativeAuxSurfaceChanged(null, 0, 0);
+                }
+            });
+            // Pinch (two fingers) zooms the companion map; while a pinch is
+            // active, the single-finger stream is cancelled so it can't
+            // register taps or drags.
+            final android.view.ScaleGestureDetector scaleDetector =
+                new android.view.ScaleGestureDetector(getContext(),
+                    new android.view.ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                        @Override
+                        public boolean onScale(android.view.ScaleGestureDetector d) {
+                            nativeCompanionPinch(d.getScaleFactor());
+                            return true;
+                        }
+                    });
+            surfaceView.setOnTouchListener((view, event) -> {
+                scaleDetector.onTouchEvent(event);
+                if (event.getPointerCount() > 1 || scaleDetector.isInProgress()) {
+                    nativeCompanionTouchEvent(3, 0.0f, 0.0f);
+                    return true;
+                }
+                final int action = event.getActionMasked();
+                if (view.getWidth() > 0 && view.getHeight() > 0 &&
+                    (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE ||
+                     action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL))
+                {
+                    // 0 = down, 1 = move, 2 = up (cancel maps to up).
+                    final int phase = action == MotionEvent.ACTION_DOWN ? 0
+                        : action == MotionEvent.ACTION_MOVE ? 1 : 2;
+                    nativeCompanionTouchEvent(phase, event.getX() / view.getWidth(),
+                        event.getY() / view.getHeight());
+                    return true;
+                }
+                return false;
+            });
+            setContentView(surfaceView);
+        }
     }
 
     @Override
@@ -103,6 +324,7 @@ public class DuskActivity extends SDLActivity {
     protected void onResume() {
         super.onResume();
         hideSystemBars();
+        showAuxPresentation();
         if (awaitingManageStoragePermission) {
             resumeFolderDialogAfterPermissionGrant();
         }
@@ -113,6 +335,9 @@ public class DuskActivity extends SDLActivity {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) {
             hideSystemBars();
+            // Reshow the aux presentation after a focus-loss overlay
+            // (e.g. OLED burn-in protection) disappears.
+            showAuxPresentation();
         }
     }
 
