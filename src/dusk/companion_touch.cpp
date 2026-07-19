@@ -7,6 +7,7 @@
 #include "dusk/companion.h"
 #include "dusk/companion_internal.h"
 
+#include "Z2AudioLib/Z2SeMgr.h"
 #include "d/d_com_inf_game.h"
 #include "d/d_item_data.h"
 #include "d/d_meter2_info.h"
@@ -59,24 +60,30 @@ bool tryBowCombo(int btn, int slot, u8 itemNo) {
         dComIfGs_setSelectItemIndex(btn, (u8)slot);
         setEquipMsg(120, "%s",
             itemNo == dItemNo_HAWK_EYE_e ? "Hawkeye + Bow combo!" : "Bomb Arrow combo!");
+        // Marked apart from a plain equip's ITEM_SET_X/_Y: arming a combo is
+        // the special outcome, so it gets the confirm cue.
+        queueSound(Z2SE_SY_CURSOR_OK, HAPTIC_CONFIRM);
         return true;
     }
     if (itemNo == dItemNo_BOW_e && dComIfGs_getMixItemIndex(btn) == SLOT_4) {
         dComIfGs_setMixItemIndex(btn, dItemNo_NONE_e);
         dComIfGs_setSelectItemIndex(btn, SLOT_4);
         setEquipMsg(120, "Combo off");
+        queueSound(Z2SE_SY_CURSOR_CANCEL, HAPTIC_LIGHT);
         return true;
     }
     return false;
 }
 
 void equipFromCompanion(int btn, int slot) {
-    if (dComIfGp_isPauseFlag() || dMeter2Info_getWindowStatus() != 0) {
+    if (anyMenuOpen()) {
         setEquipMsg(150, "Can't equip while a menu is open");
+        queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
         return;
     }
     if (daPy_getPlayerActorClass() != NULL && daPy_getPlayerActorClass()->checkWolf()) {
         setEquipMsg(150, "Can't equip items as a wolf");
+        queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
         return;
     }
     if (slot < 0 || slot >= MAX_ITEM_SLOTS ||
@@ -100,14 +107,17 @@ void equipFromCompanion(int btn, int slot) {
         dComIfGs_setSelectItemIndex(other, dComIfGs_getSelectItemIndex(btn));
     }
     dComIfGs_setSelectItemIndex(btn, (u8)slot);
+    // Distinct per-button cues, exactly as the vanilla menus equip.
+    queueSound(btn == 0 ? Z2SE_SY_ITEM_SET_X : Z2SE_SY_ITEM_SET_Y, HAPTIC_CONFIRM);
     s_equipMsgFrames = 0;
 }
 
 // Gear changes are blocked in menus, as a wolf, and while a previous model
 // swap is still reloading. Posts the reason when it is user-visible.
 bool gearChangeBlocked(daPy_py_c* player) {
-    if (dComIfGp_isPauseFlag() || dMeter2Info_getWindowStatus() != 0) {
+    if (anyMenuOpen()) {
         setEquipMsg(150, "Can't change gear while a menu is open");
+        queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
         return true;
     }
     if (player == NULL) {
@@ -115,6 +125,7 @@ bool gearChangeBlocked(daPy_py_c* player) {
     }
     if (player->checkWolf()) {
         setEquipMsg(150, "Can't change gear as a wolf");
+        queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
         return true;
     }
     return player->getSwordChangeWaitTimer() != 0 || player->getShieldChangeWaitTimer() != 0 ||
@@ -155,6 +166,8 @@ void equipGear(int idx) {
     s_gearName[0] = 0;
     dMeter2Info_getString(0x165 + itemNo, s_gearName, NULL);
     setEquipMsg(120, "Equipped %s", s_gearName[0] != 0 ? s_gearName : "gear");
+    // Same cue the vanilla collection screen uses for its own gear equips.
+    queueSound(Z2SE_SY_ITEM_SET_X, HAPTIC_CONFIRM);
 }
 
 // ITEMS grid cell index under (tx, ty), -1 when none.
@@ -349,6 +362,27 @@ void handleTouch(f32 w, f32 h, f32 x0, f32 x1) {
             }
             // Any other tap closes the pop-up.
             s_dmapFloorPickOpen = false;
+            // Warp button, bottom-left of the map window. Re-check the
+            // permission at press time rather than trusting the dim state the
+            // draw published, the same way tryQuickTransform re-checks.
+            if (s_warpBtnRect[2] > s_warpBtnRect[0] && tx >= s_warpBtnRect[0] &&
+                tx <= s_warpBtnRect[2] && ty >= s_warpBtnRect[1] && ty <= s_warpBtnRect[3])
+            {
+                if (isFieldMapScreen()) {
+                    // Map screen is up: act as its Z key. The menu owns the
+                    // outcome — including its own toggle sounds and the
+                    // "can't warp here" explanations — so don't pre-judge it.
+                    requestWarpToggle();
+                    queueSound(Z2SE_SY_CURSOR_OK, HAPTIC_LIGHT);
+                } else if (warpAllowed()) {
+                    s_warpReq.store(true);
+                    queueSound(Z2SE_WARP_MAP_ON, HAPTIC_CONFIRM);
+                } else {
+                    setEquipMsg(150, "Can't warp from here");
+                    queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
+                }
+                return;
+            }
             // Reset-view button (mode-specific view state).
             if (s_mapResetRect[2] > s_mapResetRect[0] && tx >= s_mapResetRect[0] &&
                 tx <= s_mapResetRect[2] && ty >= s_mapResetRect[1] && ty <= s_mapResetRect[3])
@@ -373,7 +407,10 @@ void handleTouch(f32 w, f32 h, f32 x0, f32 x1) {
     for (int i = 0; i < PAGE_COUNT; i++) {
         const f32 x = x0 + i * (tabW + GAP);
         if (tx >= x && tx <= x + tabW) {
-            s_page.store(i);
+            // Silent when the tap lands on the page already showing.
+            if (s_page.exchange(i) != i) {
+                queueSound(Z2SE_SY_MENU_CHANGE_WINDOW, HAPTIC_LIGHT);
+            }
             return;
         }
     }
@@ -489,7 +526,9 @@ void processDragTouch(f32 w, f32 h) {
         if (cell >= 0) {
             const int slot = s_invCells[cell].slot;
             if (dComIfGs_getItem(slot, false) != dItemNo_NONE_e) {
-                s_selSlot = slot == s_selSlot ? -1 : slot;
+                const bool deselect = slot == s_selSlot;
+                s_selSlot = deselect ? -1 : slot;
+                queueSound(deselect ? Z2SE_SY_CURSOR_CANCEL : Z2SE_SY_CURSOR_ITEM, HAPTIC_LIGHT);
             }
             s_dragSlot = -1;
             return;

@@ -59,6 +59,7 @@ public class DuskActivity extends SDLActivity {
     private DisplayManager.DisplayListener auxDisplayListener;
     private BroadcastReceiver auxBatteryReceiver;
     private AuxPresentation auxPresentation;
+    private String lastDisplayScan;
 
     private static String[] splitArgs(String raw) {
         List<String> out = new ArrayList<>();
@@ -138,6 +139,10 @@ public class DuskActivity extends SDLActivity {
         if (auxPresentation != null) {
             auxPresentation.dismiss();
             auxPresentation = null;
+            // Keep native in sync immediately — the game thread may render a
+            // few more frames before the pause fully lands, and it must not
+            // spend them hiding the main HUD for a companion that is gone.
+            reportDualScreenAvailable();
         }
     }
 
@@ -185,7 +190,6 @@ public class DuskActivity extends SDLActivity {
         auxDisplayListener = new DisplayManager.DisplayListener() {
             @Override
             public void onDisplayAdded(int displayId) {
-                reportDualScreenAvailable();
                 showAuxPresentation();
             }
 
@@ -194,52 +198,107 @@ public class DuskActivity extends SDLActivity {
                 if (auxPresentation != null &&
                     auxPresentation.getDisplay().getDisplayId() == displayId)
                 {
-                    auxPresentation.dismiss();
-                    auxPresentation = null;
+                    dismissAux();
                 }
-                reportDualScreenAvailable();
             }
 
             @Override
             public void onDisplayChanged(int displayId) {}
         };
         auxDisplayManager.registerDisplayListener(auxDisplayListener, null);
-        reportDualScreenAvailable();
         showAuxPresentation();
+    }
+
+    // The display this activity is actually being shown on. NOT necessarily
+    // display 0: on some dual-screen handhelds (AYANEO Pocket DS) the game can
+    // be launched onto either panel, and the one it lands on may or may not be
+    // the system default.
+    @SuppressWarnings("deprecation")  // getDefaultDisplay(), API 26-29 fallback
+    private int getActivityDisplayId() {
+        Display display = null;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            display = getDisplay();
+        }
+        if (display == null && getWindowManager() != null) {
+            display = getWindowManager().getDefaultDisplay();
+        }
+        return display != null ? display.getDisplayId() : Display.DEFAULT_DISPLAY;
+    }
+
+    // Pick a panel for the companion, never the one the game itself occupies.
+    // DISPLAY_CATEGORY_PRESENTATION can include the activity's own display
+    // when the game was launched onto a non-default panel; presenting there
+    // covers the game window and leaves the game screen black.
+    private Display pickAuxDisplay() {
+        if (auxDisplayManager == null) {
+            return null;
+        }
+        final int selfId = getActivityDisplayId();
+        Display[] displays =
+            auxDisplayManager.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION);
+        Display chosen = null;
+        for (Display d : displays) {
+            if (d.getDisplayId() != selfId) {
+                chosen = d;
+                break;
+            }
+        }
+        // One line listing every candidate — dual-screen handhelds differ
+        // wildly in how they enumerate their panels, so a bug report needs it.
+        StringBuilder sb = new StringBuilder();
+        sb.append("Display scan: activity on id=").append(selfId)
+          .append(", presentation candidates=[");
+        for (int i = 0; i < displays.length; i++) {
+            if (i > 0) {
+                sb.append(", ");
+            }
+            sb.append("id=").append(displays[i].getDisplayId())
+              .append(" name=").append(displays[i].getName())
+              .append(" flags=0x").append(Integer.toHexString(displays[i].getFlags()));
+        }
+        sb.append("] -> chose ")
+          .append(chosen != null ? Integer.toString(chosen.getDisplayId()) : "none");
+        final String scan = sb.toString();
+        if (!scan.equals(lastDisplayScan)) {
+            lastDisplayScan = scan;
+            Log.i(TAG, scan);
+        }
+        return chosen;
     }
 
     // Dual-screen only activates when a physical secondary display exists;
     // single-screen devices keep their HUD on the main screen.
+    // Report what actually exists, never a second scan. Native hides the
+    // main-screen HUD panes when this is true, so claiming a companion that
+    // failed to appear leaves the HUD drawn nowhere at all.
     private void reportDualScreenAvailable() {
-        boolean available = false;
-        if (auxDisplayManager != null) {
-            available = auxDisplayManager
-                .getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION).length > 0;
-        }
         try {
-            nativeDualScreenAvailable(available);
+            nativeDualScreenAvailable(auxPresentation != null);
         } catch (UnsatisfiedLinkError e) {
             Log.w(TAG, "nativeDualScreenAvailable missing", e);
         }
     }
 
+    // Always ends with reportDualScreenAvailable(): every exit path leaves
+    // native agreeing with whether a Presentation is actually showing. An
+    // early return that skipped the report could leave a stale "available"
+    // from before a pause/dismiss — native then keeps the main-screen HUD
+    // hidden for a companion that no longer exists.
     private void showAuxPresentation() {
-        if (auxPresentation != null || auxDisplayManager == null) {
-            return;
+        if (auxDisplayManager != null && auxPresentation == null) {
+            Display target = pickAuxDisplay();
+            if (target != null) {
+                try {
+                    auxPresentation = new AuxPresentation(this, target);
+                    auxPresentation.show();
+                    Log.i(TAG, "Aux presentation shown on display " + target.getDisplayId());
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to show aux presentation", e);
+                    auxPresentation = null;
+                }
+            }
         }
-        Display[] displays =
-            auxDisplayManager.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION);
-        if (displays.length == 0) {
-            return;
-        }
-        try {
-            auxPresentation = new AuxPresentation(this, displays[0]);
-            auxPresentation.show();
-            Log.i(TAG, "Aux presentation shown on display " + displays[0].getDisplayId());
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to show aux presentation", e);
-            auxPresentation = null;
-        }
+        reportDualScreenAvailable();
     }
 
     private static final class AuxPresentation extends Presentation {

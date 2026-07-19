@@ -20,6 +20,15 @@ namespace dusk {
      * This gets used for file paths and such, and cannot be changed!
      */
     constexpr auto OrgName = "TwilitRealm";
+
+    /**
+     * \brief GitHub owner/repo the startup update check queries.
+     *
+     * Deliberately separate from OrgName: that one is a file-path identity
+     * and must not change, while this tracks whichever fork ships the build.
+     */
+    constexpr auto UpdateRepoOwner = "igawa6";
+    constexpr auto UpdateRepoName = "dusklight";
 }
 
 #endif  // DUSK_APPNAME_HPP

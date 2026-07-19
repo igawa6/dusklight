@@ -23,6 +23,8 @@
 #include "d/actor/d_a_alink.h"
 #include "d/d_meter_string.h"
 #include "dolphin/gx/GXAurora.h"
+#include "m_Do/m_Do_audio.h"
+#include "aurora/lib/device.hpp"
 
 #include <atomic>
 #include <cstdio>
@@ -64,6 +66,24 @@ f32 s_dropRect[2][4];
 
 f32 s_transformBtnRect[4];
 std::atomic<bool> s_transformReq{false};
+
+f32 s_warpBtnRect[4];
+std::atomic<bool> s_warpReq{false};
+std::atomic<bool> s_warpToggleReq{false};
+bool s_warpToggleLive = false;
+
+// Queued interaction cues. Plain (non-atomic) storage on purpose: the
+// producer is the touch pass at the end of drawDashboard and the consumer is
+// duskExecute, both on the game thread — the queue defers by phase, not
+// across threads. A handful of cues per frame is already generous; a tap
+// resolves to one.
+struct SoundCue {
+    unsigned sfx;
+    int haptic;
+};
+constexpr int SOUND_QUEUE_MAX = 8;
+SoundCue s_soundQueue[SOUND_QUEUE_MAX];
+int s_soundQueueCount = 0;
 
 int s_readerSel = -1;
 int s_readerTapCand = -1;
@@ -719,14 +739,17 @@ void drawContentWindow(f32 w, f32 cy0, f32 cy1) {
 // loose hearts/corners), so draw a clean glyph plus the game's own
 // localized labels (up = items, right = map). Hidden, like the buttons,
 // while any menu window is up.
-void drawDpadGlyph(dMeter2Draw_c* md, f32 x1, f32 h) {
-    const bool menuOpen = dComIfGp_isPauseFlag() || dMeter2Info_getWindowStatus() != 0;
+// Returns the height consumed (0 when hidden) so the band can stack.
+f32 drawDpadGlyph(dMeter2Draw_c* md, f32 x1, f32 bottomY) {
+    const bool menuOpen = anyMenuOpen();
     if (menuOpen || md == NULL || md->getButtonCrossPane() == NULL) {
-        return;
+        return 0.0f;
     }
     const f32 dbox = 23.0f;
+    // The up-label sits above the glyph and is part of the slot.
+    const f32 labelH = 14.0f;
     const f32 dx = x1 - 130.0f;
-    const f32 dy = h - TABS_H - dbox - 8.0f;
+    const f32 dy = bottomY - dbox;
     constexpr GXColor COL_DPAD = {126, 116, 96, 255};
     constexpr GXColor COL_DPAD_HI = {198, 184, 152, 255};
     const f32 arm = dbox / 3.0f;
@@ -744,6 +767,7 @@ void drawDpadGlyph(dMeter2Draw_c* md, f32 x1, f32 h) {
         drawText(dx + dbox + 5.0f, dy + dbox * 0.5f + 4.0f, 10.0f, TEXT_MAIN, "%s",
             rightLabel);
     }
+    return dbox + labelH;
 }
 
 // Wolf/human quick-transform button above the d-pad: a menu tab plate
@@ -752,17 +776,17 @@ void drawDpadGlyph(dMeter2Draw_c* md, f32 x1, f32 h) {
 // window is up, like the d-pad; dimmed when the transform is currently
 // blocked (airborne, cutscene, NPCs nearby...). A tap while dimmed still
 // sends the request — the game answers with its error beep.
-void drawTransformButton(f32 x1, f32 h) {
-    const bool menuOpen = dComIfGp_isPauseFlag() || dMeter2Info_getWindowStatus() != 0;
+f32 drawTransformButton(f32 x1, f32 bottomY) {
+    const bool menuOpen = anyMenuOpen();
     daAlink_c* alink = daAlink_getAlinkActorClass();
     if (menuOpen || alink == NULL || !dComIfGs_isEventBit(dSv_event_flag_c::M_077)) {
-        return;
+        return 0.0f;
     }
     const bool wolf = daPy_py_c::checkNowWolf();
     const ResTIMG* faceCur = dmapFloorFaceTimg(wolf);
     const ResTIMG* faceTgt = dmapFloorFaceTimg(!wolf);
     if (faceCur == NULL || faceTgt == NULL) {
-        return;
+        return 0.0f;
     }
     // Portraits keep the source 40x41 aspect.
     const f32 icon = 24.0f;
@@ -772,9 +796,8 @@ void drawTransformButton(f32 x1, f32 h) {
     const f32 gap = 3.0f;
     const f32 bw = pad * 2.0f + icon * 2.0f + gap * 2.0f + arrowW;
     const f32 bh = 34.0f;
-    // Bottom edge clears the d-pad glyph plus its up-label.
     const f32 bx = x1 - 142.0f;
-    const f32 by = h - TABS_H - 87.0f;
+    const f32 by = bottomY - bh;
     drawTabPlate(bx, by, bw, bh, true);
     const f32 iy = by + (bh - iconH) * 0.5f;
     drawTimg(faceCur, bx + pad, iy, icon, iconH, 0xFF);
@@ -789,17 +812,29 @@ void drawTransformButton(f32 x1, f32 h) {
     s_transformBtnRect[1] = by;
     s_transformBtnRect[2] = bx + bw;
     s_transformBtnRect[3] = by + bh;
+    return bh;
 }
 
 // Bottom-right row: [FPS] [battery glyph] [pct] — FPS only when the video
-// setting "Show FPS Counter" is set (dual-screen auto-selects Companion).
-void drawStatusCorner(f32 x1, f32 h) {
-    // Vertically centered on the tab bar's label line (baseline h - 18):
-    // the battery glyph is 12 tall, its pct text baseline sits at y + 11.
-    const f32 batY = h - 29.0f;
+// setting "Show FPS Counter" is set (dual-screen auto-selects Companion),
+// battery only on devices that report one.
+//
+// Returns the height the *d-pad column* has to clear, which is not the same
+// as "was anything drawn". The battery lives in the far corner (x1-66 and
+// right) while the d-pad column sits at x1-130; only the FPS text shares
+// that column. So a battery alone reserves nothing and the d-pad drops
+// alongside it rather than floating above an apparently empty row.
+f32 drawStatusCorner(f32 x1, f32 bottomY) {
+    // The battery glyph is 12 tall; its pct text baseline sits at y + 11.
+    constexpr f32 rowH = 12.0f;
+    const f32 batY = bottomY - rowH;
     const f32 batX = x1 - 66.0f;
+    // Self-gates on a reported percentage; always anchored to the corner.
     drawBattery(batX, batY);
-    if (getSettings().video.enableFpsOverlay.getValue()) {
+    // Only when the corner setting actually points here — otherwise the main
+    // screen keeps it, so all five options mean something.
+    if (getSettings().video.enableFpsOverlay.getValue() &&
+        getSettings().video.fpsOverlayCorner.getValue() == kFpsCornerCompanion) {
         const int fps = (int)(aurora_get_fps() + 0.5f);
         GXColor fpsCol = {150, 214, 120, 255};
         if (fps < 30) fpsCol = {224, 80, 64, 255};
@@ -807,7 +842,9 @@ void drawStatusCorner(f32 x1, f32 h) {
         const u32 fpsRgba =
             (fpsCol.r << 24) | (fpsCol.g << 16) | (fpsCol.b << 8) | fpsCol.a;
         drawText(batX - 64.0f, batY + 11.0f, 13.0f, fpsRgba, "%d FPS", fps);
+        return rowH;
     }
+    return 0.0f;
 }
 
 // Drag ghost: the item follows the finger with a thick orange border.
@@ -915,6 +952,114 @@ bool consumeTransformRequest() {
     return s_transformReq.exchange(false);
 }
 
+bool consumeWarpRequest() {
+    return s_warpReq.exchange(false);
+}
+
+void requestWarpToggle() {
+    s_warpToggleReq.store(true);
+}
+
+void beginFrameCompanionInput() {
+    s_warpToggleLive = s_warpToggleReq.exchange(false);
+}
+
+bool warpTogglePressed() {
+    return s_warpToggleLive;
+}
+
+// True while the game's field map is already showing the portals (its Z
+// toggle is "on"). Drives the companion button's active-vs-idle styling.
+bool warpPortalsShown() {
+    if (!isFieldMapScreen()) {
+        return false;
+    }
+    dMw_c* mw = dMeter2Info_getMenuWindowClass();
+    if (mw == NULL || mw->getMenuFmap() == NULL) {
+        return false;
+    }
+    return mw->getMenuFmap()->isWarpMapMode();
+}
+
+// M_021 = "first portal warp": the game uses this same bit to decide whether
+// its own warp button exists at all (dMenu_Fmap2DTop_c::isWarpAccept).
+bool warpUnlocked() {
+    return dComIfGs_isEventBit(dSv_event_flag_c::M_021) != 0;
+}
+
+bool warpAllowed() {
+    if (!warpUnlocked() || dComIfGp_event_runCheck()) {
+        return false;
+    }
+    // Resolve the stage ourselves before going near checkAcceptWarp. That
+    // predicate reaches checkField()/checkCastleTown(), which dereference
+    // getStagInfo() with no NULL check — and the pointer is NULL during loads
+    // and room transitions. The game only ever calls it from the map screen,
+    // where that cannot happen; we call it every frame from the paint pass,
+    // including the frame dMw_c::key_wait_init clears the window status and
+    // pause flag but has not yet finished tearing the menu down.
+    // Exiting here also makes dungeons free — they can never warp anyway.
+    stage_stag_info_class* stagInfo = dComIfGp_getStage()->getStagInfo();
+    if (stagInfo == NULL) {
+        return false;
+    }
+    const u32 stageType = dStage_stagInfo_GetSTType(stagInfo);
+    if (stageType != ST_FIELD && stageType != ST_CASTLE_TOWN) {
+        return false;
+    }
+    daAlink_c* alink = daAlink_getAlinkActorClass();
+    // checkAcceptWarp dereferences the Midna actor unconditionally. The game
+    // only ever reaches it from the map screen, where Midna is guaranteed
+    // loaded; a per-frame companion caller has no such guarantee.
+    if (alink == NULL || daPy_py_c::getMidnaActor() == NULL) {
+        return false;
+    }
+    return alink->checkAcceptWarp();
+}
+
+void queueSound(unsigned sfxId, int haptic) {
+    if (s_soundQueueCount < SOUND_QUEUE_MAX) {
+        s_soundQueue[s_soundQueueCount].sfx = sfxId;
+        s_soundQueue[s_soundQueueCount].haptic = haptic;
+        s_soundQueueCount++;
+    }
+}
+
+void flushQueuedSounds() {
+    // seStartMenu self-gates on the audio system being up and on the
+    // audio.menuSounds setting, so no extra guard is needed here.
+    int haptic = HAPTIC_NONE;
+    for (int i = 0; i < s_soundQueueCount; i++) {
+        mDoAud_seStartMenu(s_soundQueue[i].sfx);
+        if (s_soundQueue[i].haptic > haptic) {
+            haptic = s_soundQueue[i].haptic;
+        }
+    }
+    s_soundQueueCount = 0;
+
+    // At most one pulse per frame, the heaviest cue winning: PlayHapticRumble
+    // restarts the effect on every call, so firing several back to back would
+    // leave only the last one felt regardless.
+    if (haptic == HAPTIC_NONE || !getSettings().game.dualScreenHaptics.getValue()) {
+        return;
+    }
+    switch (haptic) {
+    case HAPTIC_LIGHT:
+        aurora::device::rumble(0x2000, 0x3800, 12);
+        break;
+    case HAPTIC_CONFIRM:
+        aurora::device::rumble(0x5800, 0x8000, 28);
+        break;
+    case HAPTIC_DENY:
+        // Heavier and longer, low-frequency biased — reads as a thud rather
+        // than a tick, so a rejection is distinguishable without looking.
+        aurora::device::rumble(0xB000, 0x5000, 70);
+        break;
+    default:
+        break;
+    }
+}
+
 bool mapViewAdjust(float* o_x, float* o_z, float* o_texelScale) {
     if (!dualscreen::hudOnCompanion() ||
         (s_mapViewOffX == 0.0f && s_mapViewOffZ == 0.0f && s_mapRenderScale == 1.0f)) {
@@ -990,6 +1135,13 @@ void drawDashboard(float w, float h) {
     // Controller cluster, top-right (also publishes the equip drop rects —
     // drawEquipTargets and the touch pass read them later this frame).
     s_dropRectValid = false;
+    // Cleared before the page draws, since the MAP page republishes it. The
+    // map drawers have early-outs ("Loading map...", no dungeon renderer) that
+    // never reach drawMapWarpButton, and those fire exactly while the stage is
+    // mid-transition — a rect surviving from the previous frame would route a
+    // tap into the warp path at the worst possible moment.
+    s_warpBtnRect[0] = 0.0f;
+    s_warpBtnRect[2] = 0.0f;
     drawItemCluster(x1, HEARTS_H + 42.0f);
     drawSpecialPanel(w, h);
 
@@ -1010,11 +1162,26 @@ void drawDashboard(float w, float h) {
     // Equip drop targets on top of everything in the cluster margin.
     drawEquipTargets();
 
-    drawDpadGlyph(md, x1, h);
+    // Right band, stacked bottom-up: status row, d-pad, transform button.
+    // Each reports the height it used, so anything hidden (FPS off, no
+    // battery, transform still locked) collapses and the rest settles
+    // downward instead of leaving a hole. With everything present the
+    // positions match the previous fixed layout.
+    constexpr f32 BAND_GAP = 8.0f;
+    // Wider gap above the status row: it reads as part of the tab strip.
+    constexpr f32 BAND_GAP_STATUS = 23.0f;
     s_transformBtnRect[0] = 0.0f;
     s_transformBtnRect[2] = 0.0f;
-    drawTransformButton(x1, h);
-    drawStatusCorner(x1, h);
+    f32 bandY = h - 17.0f;
+    const f32 statusH = drawStatusCorner(x1, bandY);
+    if (statusH > 0.0f) {
+        bandY -= statusH + BAND_GAP_STATUS;
+    }
+    const f32 dpadH = drawDpadGlyph(md, x1, bandY);
+    if (dpadH > 0.0f) {
+        bandY -= dpadH + BAND_GAP;
+    }
+    drawTransformButton(x1, bandY);
 
     // Touch runs LAST so it hit-tests against the geometry this frame's
     // draw just published.

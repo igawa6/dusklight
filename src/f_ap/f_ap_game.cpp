@@ -12,6 +12,7 @@
 #include "d/actor/d_a_alink.h"
 #include "d/actor/d_a_grass.h"
 #include "d/actor/d_a_midna.h"
+#include "d/d_meter2_info.h"
 #include "d/d_model.h"
 #include "d/d_tresure.h"
 #include "dusk/achievements.h"
@@ -746,6 +747,9 @@ static void fapGm_AfterRecord() {
 BOOL isRecording = false;
 
 static void duskExecute() {
+    // Latch companion taps that the game's own menus read later this
+    // frame (fpcM_Management runs after us).
+    dusk::companion::beginFrameCompanionInput();
     dusk::menu_pointer::begin_game_frame();
     dusk::input::handleGamepadColor();
     updateAutoSave();
@@ -780,6 +784,21 @@ static void duskExecute() {
             dynamic_cast<daAlink_c*>(link)->tryQuickTransform();
         }
     }
+
+    // Companion-screen warp button: open the field map already armed in
+    // portal-warp mode. dMw_c's key_wait_proc runs later this frame (inside
+    // fpcM_Management) and picks the status up immediately; it also rejects
+    // the request harmlessly during fades, events and heap locks.
+    if (dusk::companion::consumeWarpRequest()) {
+        // dMeter2Info map status 3 = open the field map already armed in
+        // portal-warp mode (dMenu_Fmap_c's ctor reads it, d_menu_fmap.cpp:220).
+        constexpr u8 MAP_STATUS_FIELD_MAP_WARP = 3;
+        dMeter2Info_setMapStatus(MAP_STATUS_FIELD_MAP_WARP);
+    }
+
+    // Sounds requested by last frame's companion touch pass — started here
+    // rather than in the painter pass that queued them.
+    dusk::companion::flushQueuedSounds();
 
     if (dusk::getSettings().game.moonJump && (mDoCPd_c::getHoldR(PAD_1) && mDoCPd_c::getHoldA(PAD_1))) {
         if (const auto link = g_dComIfG_gameInfo.play.getPlayer(0)) {

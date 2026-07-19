@@ -18,7 +18,13 @@ LATEST_TAG=$(git describe --tags --abbrev=0 upstream/main 2>/dev/null || echo "?
 echo "Behind upstream/main: ${BEHIND} commit(s) (latest tag: ${LATEST_TAG})"
 
 if [[ "$BEHIND" -eq 0 ]]; then
-  echo "Already up to date."
+  echo "Already up to date (nothing to merge)."
+  if [[ "${1:-}" != "--merge" ]]; then
+    exit 0
+  fi
+  echo "== Building (desktop) =="
+  cmake --build --preset linux-default-relwithdebinfo -j "$(nproc)"
+  echo "Build OK."
   exit 0
 fi
 
@@ -36,7 +42,17 @@ if ! git diff --quiet HEAD upstream/main -- extern/aurora; then
   echo ""
 fi
 
-echo "== Merging upstream/main =="
+if [[ "${1:-}" != "--merge" ]]; then
+  echo ""
+  echo "Fetch only — this script does not merge (merging writes a commit)."
+  echo "To merge yourself:"
+  echo "  git merge upstream/main"
+  echo "Conflicts: the touchpoint table in docs/dualscreen-fork.md lists every"
+  echo "file the fork modifies and why. Then re-run with --merge to build."
+  exit 0
+fi
+
+echo "== Merging upstream/main (--merge) =="
 if ! git merge upstream/main --no-edit; then
   echo ""
   echo "Merge conflicts — the touchpoint table in docs/dualscreen-fork.md"
@@ -52,5 +68,5 @@ echo ""
 echo "Merge + build OK."
 echo "Next steps:"
 echo "  1. Smoke test (docs/dualscreen-fork.md, Verification section)"
-echo "  2. git push origin dual-screen"
+echo "  2. git push origin dual-screen-v2   # manual — this script never pushes"
 echo "  3. <your APK build script>          # gradle assembleRelease + sign"

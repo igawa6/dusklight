@@ -41,7 +41,9 @@ public:
     COutFont_c(u8);
     void initialize();
     void setBlendAnime(J2DPicture*, s16);
-    const char* getBtiName(int);
+    // Static: reads no members, so the companion reader can share the same
+    // index -> texture table instead of keeping a copy that drifts.
+    static const char* getBtiName(int);
 
     virtual ~COutFont_c();
     virtual void setPane(J2DPicture*);

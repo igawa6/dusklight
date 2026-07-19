@@ -10,6 +10,7 @@
 #include "d/d_meter2_info.h"
 #include "d/d_meter_map.h"
 #include "d/d_msg_class.h"
+#include "d/d_msg_unit.h"
 #include "d/d_msg_object.h"
 #include "d/d_meter_HIO.h"
 
@@ -512,6 +513,30 @@ void dMeter2Info_c::getStringKanji(u32 i_stringID, TEXT_SPAN o_string, JMSMesgEn
 }
 
 #if TARGET_PC
+// Message tag -> COutFont_c icon index, mirroring the do_outfont() calls in
+// dMsgString_c's draw processor (d_msg_class.cpp). -1 when the tag draws no
+// icon. Group 0 codes 10..29 are the contiguous controller-button block; the
+// rest are scattered, and the bullets live in tag group 6.
+static int msgTagOutfontIndex(u32 i_tag) {
+    switch (i_tag) {
+    case MSGTAG_RED_TARGET: return 20;     // lock-on reticle
+    case MSGTAG_YELLOW_TARGET: return 21;
+    case MSGTAG_WHITE_TARGET: return 24;
+    case MSGTAG_ABTN_STAR: return 23;
+    case MSGTAG_WARP_ICON: return 25;
+    case MSGTAG_BOMB_BAG_ICON: return 41;
+    case MSGTAG_HEART: return 27;
+    case MSGTAG_QUAVER: return 28;
+    case MSGTAG_GROUP(6) | MSGTAG_BULLET: return 42;
+    case MSGTAG_GROUP(6) | MSGTAG_BULLET_SPACE: return 43;
+    default: break;
+    }
+    if (i_tag >= 10 && i_tag <= 29) {
+        return (int)i_tag - 10;
+    }
+    return -1;
+}
+
 // Full-fidelity plain-text fetch for the companion reader: no 0x200 source
 // cap, resolves the player/horse-name tags, keeps ruby base text, and emits
 // inline icon markers (0x02 followed by outfont index + 1) for the
@@ -571,9 +596,9 @@ void dMeter2Info_c::getStringFull(u32 i_stringID, char* o_string, int i_cap, int
                     while (*name != '\0' && n < i_cap - 1) {
                         o_string[n++] = *name++;
                     }
-                } else if (tag >= 10 && tag <= 29 && n < i_cap - 2) {
+                } else if (msgTagOutfontIndex(tag) >= 0 && n < i_cap - 2) {
                     o_string[n++] = 0x02;
-                    o_string[n++] = (char)(tag - 10 + 1);
+                    o_string[n++] = (char)(msgTagOutfontIndex(tag) + 1);
                 } else if ((tag == 46 || tag == 47) && n < i_cap - 2) {
                     // X-or-Y button, picked by where the item is equipped
                     // (MSGTAG_XYBTN / YXBTN); i_xyButton = 0 X, 1 Y.
@@ -581,9 +606,17 @@ void dMeter2Info_c::getStringFull(u32 i_stringID, char* o_string, int i_cap, int
                     o_string[n++] = 0x02;
                     o_string[n++] = (char)(icon + 1);
                 } else if (tag == 55 || tag == 56) {
-                    // Live capacities (MSGTAG_BOMB_MAX / ARROW_MAX) — the
-                    // bomb tag's payload byte selects the bag type.
+                    // MSGTAG_BOMB_MAX / ARROW_MAX. The game emits these via
+                    // push_word() over a word slot this flat walk cannot
+                    // resolve, which dropped the unit and left a bare "100".
+                    // dMsgUnit_c::setTag is the same formatter the message
+                    // system uses, and it returns the value *with* its unit
+                    // ("100 arrows"), localized — unit 7 bombs, 0 arrows.
+                    // dMsgUnit_c unit codes, per d_msg_class.cpp:1357/1363.
+                    constexpr int UNIT_ARROWS = 0;
+                    constexpr int UNIT_BOMBS = 7;
                     int value;
+                    int unit;
                     if (tag == 55) {
                         u8 bombType = dItemNo_NORMAL_BOMB_e;
                         if (size >= 6 && p[5] == 1) {
@@ -592,11 +625,13 @@ void dMeter2Info_c::getStringFull(u32 i_stringID, char* o_string, int i_cap, int
                             bombType = dItemNo_POKE_BOMB_e;
                         }
                         value = dComIfGs_getBombMax(bombType);
+                        unit = UNIT_BOMBS;
                     } else {
                         value = dComIfGs_getArrowMax();
+                        unit = UNIT_ARROWS;
                     }
-                    char num[16];
-                    snprintf(num, sizeof(num), "%d", value);
+                    char num[40];
+                    dMsgUnit_setTag(unit, value, num);
                     for (const char* c = num; *c != 0 && n < i_cap - 1; c++) {
                         o_string[n++] = *c;
                     }

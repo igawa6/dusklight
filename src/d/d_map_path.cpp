@@ -11,6 +11,7 @@
 #include "JSystem/JUtility/JUTTexture.h"
 #include "d/d_com_inf_game.h"
 #include "d/d_map_path.h"
+#include "d/d_meter2_info.h"
 #include "m_Do/m_Do_lib.h"
 #include <cstring>
 
@@ -56,9 +57,19 @@ aurora::Vec2<u16> map_render_size_for(u16 width, u16 height) {
     const f32 irScaleY = renderHeight > 0 ? static_cast<f32>(renderHeight) / logicalHeight : 1.0f;
     const f32 hudScale = std::clamp(dusk::getSettings().game.hudScale.getValue(), 0.5f, 2.0f);
     // Dual-screen: the companion enlarges the map ~2.4x onto its native-res
-    // panel — render the map texture at 2x so it stays sharp there (the
+    // panel — render the map texture at 2.4x so it stays sharp there (the
     // main-screen minimap downsamples, i.e. also gets sharper).
-    const f32 dualBoost = dusk::dualscreen::hudOnCompanion() ? 2.4f : 1.0f;
+    //
+    // NOT while one of the game's own map screens is up. Those render several
+    // targets at once and are displayed at normal size on the main screen, so
+    // the boost buys nothing while costing 5.76x the pixels — enough to fail
+    // vkAllocateMemory outright on a handheld GPU ("Device lost" on opening
+    // the dungeon map). The companion skips its own render for that duration
+    // anyway, so nothing that is actually enlarged loses sharpness.
+    const int windowStatus = dMeter2Info_getWindowStatus();
+    const bool gameMapScreenOpen = windowStatus == 4 || windowStatus == 5;
+    const f32 dualBoost =
+        dusk::dualscreen::hudOnCompanion() && !gameMapScreenOpen ? 2.4f : 1.0f;
     return {
         scaled_map_axis(width, irScaleX * hudScale * dualBoost),
         scaled_map_axis(height, irScaleY * hudScale * dualBoost),

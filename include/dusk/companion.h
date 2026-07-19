@@ -30,6 +30,31 @@ void pinchZoom(float factor);
 // a player proc from the draw pass is unsafe).
 bool consumeTransformRequest();
 
+// True once per tap on the MAP page's warp button; the game frame loop
+// consumes it and opens the field map in portal-warp mode there (menu
+// status writes belong on the game thread, not the painter pass).
+bool consumeWarpRequest();
+
+// Whether Midna's portal warp can be started right now — mirrors the game's
+// own dimming of the warp button on its map screen. Also gates the
+// companion button's visibility via warpUnlocked().
+
+
+// While the game's own map screen is up, the companion's warp button acts as
+// its Z button (portal-warp mode on/off). The tap is latched for exactly one
+// game frame: beginFrameCompanionInput() promotes it at the top of the frame
+// loop, and dMenu_Fmap_c reads it alongside dMw_Z_TRIGGER() later that same
+// frame. Non-consuming, so both of the menu's Z call sites see one press.
+void beginFrameCompanionInput();
+bool warpTogglePressed();
+
+// Sound + haptic feedback for companion-screen interactions. The touch
+// handlers run inside the painter pass, where nothing else in the codebase
+// starts a sound, so they only queue Z2SE_* ids here; the game frame loop
+// drains the queue (f_ap_game) and fires them from the same phase as every
+// other seStart. Both ends run on the game thread. Overflow drops extra cues.
+void flushQueuedSounds();
+
 // View adjustment for the live minimap render while the MAP page is
 // panned or zoomed out: world-space center offset (cm) plus a cm-per-texel
 // multiplier (> 1 widens the render window = zoom out). Returns true only

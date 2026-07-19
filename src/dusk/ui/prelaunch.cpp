@@ -1,5 +1,6 @@
 #include "prelaunch.hpp"
 
+#include "dusk/app_info.hpp"
 #include "dusk/config.hpp"
 #include "dusk/data.hpp"
 #include "dusk/file_select.hpp"
@@ -129,7 +130,8 @@ struct UpdateCheckTask {
     UpdateCheckTask() {
         worker = std::thread([this] {
             try {
-                result = update_check::check_latest_github_release("TwilitRealm", "dusklight");
+                result = update_check::check_latest_github_release(
+                    dusk::UpdateRepoOwner, dusk::UpdateRepoName);
             } catch (const std::exception& e) {
                 result = {
                     .status = update_check::Status::Failed,

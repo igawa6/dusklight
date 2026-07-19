@@ -19,6 +19,8 @@
 
 #include "dolphin/types.h"
 #include "dolphin/gx/GXStruct.h"
+#include "d/d_com_inf_game.h"
+#include "d/d_meter2_info.h"
 #include "d/d_save.h"
 
 class J2DPicture;
@@ -101,6 +103,88 @@ constexpr u32 TEXT_DIM = 0xA69C82FF;
 constexpr u32 TEXT_ACCENT = 0xE9CE8EFF;  // gold
 constexpr u32 TEXT_TAB_ACTIVE = 0x2E2415FF;
 
+// ---------------------------------------------------------------------------
+// Companion-internal API (the cross-module hooks live in dusk/companion.h).
+
+// Haptic weight paired with an interaction sound. Effective on Android only:
+// aurora's device rumble is a no-op stub off-device, and the companion has no
+// touch input there anyway.
+enum Haptic {
+    HAPTIC_NONE = 0,
+    HAPTIC_LIGHT,    // selection ticks, tab switches
+    HAPTIC_CONFIRM,  // equips, combos armed
+    HAPTIC_DENY,     // rejected actions
+};
+
+void queueSound(unsigned sfxId, int haptic = HAPTIC_NONE);
+
+// Whether Midna's portal warp can be started right now — mirrors the game's
+// own dimming of the warp button on its map screen.
+bool warpUnlocked();
+bool warpAllowed();
+
+// Set by the touch pass; promoted by beginFrameCompanionInput().
+void requestWarpToggle();
+// True while the field map is already showing its portals.
+bool warpPortalsShown();
+
+// A map render texture whose descriptor has been freed or reused reads back
+// with garbage dimensions rather than zero, and drawing it makes the GX layer
+// size its read from those dimensions — which faulted in the wild asking for
+// 1.45 GB. The live map textures are legitimately large (internal-res scale
+// times the dual-screen boost), so the bound only has to be tight enough to
+// reject nonsense: 8192 is the usual GPU maximum and well above anything the
+// map renderer produces.
+inline bool isSaneTimg(const ResTIMG* timg) {
+    if (timg == NULL) {
+        return false;
+    }
+    const u16 w = (u16)timg->width;
+    const u16 h = (u16)timg->height;
+    if (w == 0 || h == 0 || w > 8192 || h > 8192) {
+        return false;
+    }
+    // Freed memory can still read back with plausible dimensions, so check the
+    // format as well — a stale descriptor showed up as format 255, which the
+    // GX layer treats as fatal.
+    switch (timg->format) {
+    case GX_TF_I4:
+    case GX_TF_I8:
+    case GX_TF_IA4:
+    case GX_TF_IA8:
+    case GX_TF_RGB565:
+    case GX_TF_RGB5A3:
+    case GX_TF_RGBA8:
+    case GX_TF_C4:
+    case GX_TF_C8:
+    case GX_TF_C14X2:
+    case GX_TF_CMPR:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared predicates. The window-status values are the game's own
+// dMeter2Info window status (see d_meter2_info.h).
+
+constexpr int WINDOW_STATUS_NORMAL = 0;
+constexpr int WINDOW_STATUS_FIELD_MAP = 4;
+constexpr int WINDOW_STATUS_DUNGEON_MAP = 5;
+
+// Any game menu owns the screen — pause, item wheel, either map, submenus.
+inline bool anyMenuOpen() {
+    return dComIfGp_isPauseFlag() || dMeter2Info_getWindowStatus() != WINDOW_STATUS_NORMAL;
+}
+
+// The FIELD map specifically. Only it has portals, and only it owns
+// dMw_c::mpMenuFmap — reaching for that object under any other status finds a
+// pointer belonging to a different screen.
+inline bool isFieldMapScreen() {
+    return dMeter2Info_getWindowStatus() == WINDOW_STATUS_FIELD_MAP;
+}
+
 constexpr f32 HEARTS_H = 26.0f;
 constexpr f32 TABS_H = 44.0f;
 // COLLECT page sub-tabs (All/Bugs/Fish/Skills/Mail).
@@ -154,6 +238,14 @@ extern f32 s_dropRect[2][4];  // x0, y0, x1, y1
 // the game frame loop (f_ap_game) where starting the transform is safe.
 extern f32 s_transformBtnRect[4];
 extern std::atomic<bool> s_transformReq;
+
+// Warp button, bottom-left inside the MAP page's content window. Opens the
+// game's field map already armed in portal-warp mode. Rect published by the
+// map draw (w == 0 when hidden); the tap sets the request, consumed on the
+// game frame loop (f_ap_game) where the menu status write is picked up the
+// same frame.
+extern f32 s_warpBtnRect[4];
+extern std::atomic<bool> s_warpReq;
 
 // COLLECT Skills/Mail reader: selected entry (-1 = list view) plus the tap
 // rects the draw publishes for the touch pass (ids: >= 0 open that entry —
@@ -289,6 +381,8 @@ extern u32 s_nativeH;
 // companion_gfx.cpp — drawing primitives.
 
 J2DPicture* createPicture(const ResTIMG* timg);
+// Drop the dungeon-map blit picture (its ResTIMG is about to die).
+void invalidateDmapPicture();
 void fillRect(f32 x, f32 y, f32 x2, f32 y2, GXColor color);
 // Chamfered rectangle: 45-degree corner cuts of size ch on the corners
 // selected by cornerMask (1 = TL, 2 = TR, 4 = BR, 8 = BL; 0xF = all).

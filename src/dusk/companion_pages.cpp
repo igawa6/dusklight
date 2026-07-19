@@ -32,6 +32,9 @@
 namespace dusk::companion {
 namespace {
 
+// Defined below; both map modes (dungeon and world) draw it.
+void drawMapWarpButton(f32 x0, f32 y1);
+
 // The map page's own texture cache (independent of the gfx icon cache):
 // the live map render texture is re-uploaded only when the game swaps it,
 // and invalidated across stage transitions where the pointer is reused.
@@ -40,7 +43,11 @@ const ResTIMG* s_lastMapTimg;
 f32 s_lastMapW = 448.0f;
 f32 s_lastMapH = 448.0f;
 char s_mapStage[12];
-bool s_mapStale = false;
+// Frames the stage has been fully up with no minimap texture. Past the
+// grace period the stage is treated as having no map at all (boss arenas)
+// rather than one still loading. ~1.5-3s depending on frame rate.
+constexpr int NO_MAP_GRACE_FRAMES = 90;
+int s_mapAbsentFrames;
 
 // Dungeon-map blit cache (separate: the dmap target outlives page switches
 // but is destroyed on stage change / dungeon exit). s_dmapSeenGen tracks
@@ -90,14 +97,45 @@ const char* dmapFloorName(int floorNo) {
     return s_floorName[idx];
 }
 
+// Copy a BTI out of a boot-resident archive into companion-owned storage.
+// NEVER cache a raw pointer into these archives' loaded-resource memory:
+// the game evicts it wholesale — ~dMenu_DmapBg_c runs
+// dComIfGp_getDmapResArchive()->removeResourceAll() every time the dungeon
+// map screen closes (d_menu_dmap.cpp:674), and game-over/file-select do the
+// same to Main2D — so a pointer cached across frames dangles and the next
+// companion draw uploads freed memory. That was the Android open/close-
+// dungeon-map crash (XXH64/memcpy SIGSEGVs, "unknown texture format 255",
+// vkAllocateMemory device-lost: one stale descriptor, four symptoms).
+// Returns NULL and never retries if the file is missing or over the cap
+// (the icon is simply not drawn); retries while the archive isn't mounted.
+constexpr u32 DMAP_ICON_BUF_BYTES = 0x1800;
+static const ResTIMG* copyTimgOwned(JKRArchive* arc, const char* name, u8* buf, u8* io_state) {
+    constexpr u8 STATE_FAILED = 2;
+    if (*io_state == STATE_FAILED || arc == NULL) {
+        return NULL;
+    }
+    const void* res = arc->getResource('TIMG', name);
+    if (res == NULL) {
+        *io_state = STATE_FAILED;
+        return NULL;
+    }
+    const u32 size = arc->getExpandedResSize(res);
+    if (size == 0 || size > DMAP_ICON_BUF_BYTES) {
+        *io_state = STATE_FAILED;
+        return NULL;
+    }
+    memcpy(buf, res, size);
+    return (const ResTIMG*)buf;
+}
+
 // The pause map's link-arrow icon from the boot-resident dmap layout archive.
 const ResTIMG* dmapLinkIconTimg() {
     static const ResTIMG* timg;
+    static u8 state;
     if (timg == NULL) {
-        JKRArchive* arc = dComIfGp_getDmapResArchive();
-        if (arc != NULL) {
-            timg = (const ResTIMG*)arc->getResource('TIMG', "tt_map_icon_link_ci8_32_00.bti");
-        }
+        alignas(32) static u8 buf[DMAP_ICON_BUF_BYTES];
+        timg = copyTimgOwned(dComIfGp_getDmapResArchive(),
+            "tt_map_icon_link_ci8_32_00.bti", buf, &state);
     }
     return timg;
 }
@@ -105,7 +143,7 @@ const ResTIMG* dmapLinkIconTimg() {
 namespace {
 
 // Overlay icon textures (the menu's full-size variants), same resident
-// archive, cached per icon id.
+// archive, each copied into owned storage (see copyTimgOwned).
 const ResTIMG* dmapIconTimg(u8 icon) {
     struct Entry {
         u8 icon;
@@ -127,18 +165,18 @@ const ResTIMG* dmapIconTimg(u8 icon) {
         {ICON_LIGHT_DROP_e, "im_hikari_no_shizuku_try_10_00_24x24.bti"},
         {ICON_DESTINATION_e, "im_nijumaru_40x40_ind_01.bti"},
     };
+    constexpr int TEX_COUNT = (int)(sizeof(l_tex) / sizeof(l_tex[0]));
     static const ResTIMG* cache[ICON_MAX_e];
+    static u8 state[ICON_MAX_e];
+    alignas(32) static u8 bufs[TEX_COUNT][DMAP_ICON_BUF_BYTES];
     if (icon >= ICON_MAX_e) {
         return NULL;
     }
     if (cache[icon] == NULL) {
         JKRArchive* arc = dComIfGp_getDmapResArchive();
-        if (arc == NULL) {
-            return NULL;
-        }
-        for (const Entry& e : l_tex) {
-            if (e.icon == icon) {
-                cache[icon] = (const ResTIMG*)arc->getResource('TIMG', e.name);
+        for (int i = 0; i < TEX_COUNT; i++) {
+            if (l_tex[i].icon == icon) {
+                cache[icon] = copyTimgOwned(arc, l_tex[i].name, bufs[i], &state[icon]);
                 break;
             }
         }
@@ -232,7 +270,7 @@ bool drawDungeonMapContent(f32 x0, f32 y0, f32 x1, f32 y1) {
         s_lastDmapTimg = NULL;
     }
     const ResTIMG* timg = dmapTimg();
-    if (!s_dmapReady || timg == NULL || timg->width == 0 || timg->height == 0) {
+    if (!s_dmapReady || !isSaneTimg(timg)) {
         s_lastDmapTimg = NULL;
         return false;
     }
@@ -340,7 +378,64 @@ bool drawDungeonMapContent(f32 x0, f32 y0, f32 x1, f32 y1) {
     s_mapResetRect[1] = y1 - 30.0f;
     s_mapResetRect[2] = x1 - 4.0f;
     s_mapResetRect[3] = y1 - 4.0f;
+    drawMapWarpButton(x0, y1);
     return true;
+}
+
+// Warp button, bottom-left inside the map window — mirrors the Reset button
+// opposite it. Hidden until portal warping is unlocked; dimmed (but still
+// tappable) when the player state forbids it, exactly like the game's own
+// warp button on its map screen. A tap while dimmed is refused by the press
+// handler, which answers with the error cue.
+// The message system's portal glyph (MSGTAG_WARP_ICON), copied out of the
+// Main2D archive (game-over/file-select evict its loaded resources — same
+// dangling-pointer hazard as the dmap icons, see copyTimgOwned). Falls back
+// to the dungeon map's warp marker.
+const ResTIMG* warpIconTimg() {
+    static const ResTIMG* timg;
+    static u8 state;
+    if (timg == NULL) {
+        alignas(32) static u8 buf[DMAP_ICON_BUF_BYTES];
+        timg = copyTimgOwned(dComIfGp_getMain2DArchive(),
+            "im_map_icon_portal_4ia_40_05.bti", buf, &state);
+        if (timg == NULL) {
+            timg = dmapIconTimg(ICON_LV8_WARP_e);
+        }
+    }
+    return timg;
+}
+
+void drawMapWarpButton(f32 x0, f32 y1) {
+    s_warpBtnRect[0] = 0.0f;
+    s_warpBtnRect[2] = 0.0f;
+    if (!warpUnlocked()) {
+        return;
+    }
+    // While the game's own map screen is up the button becomes its Z key
+    // (portal mode on/off) and is tinted to say so. Every other menu — start,
+    // items, submenus — hides it; with no menu at all it opens the warp map,
+    // and then only when the warp could actually start.
+    // Only the FIELD map has portals; the dungeon map has no warp at all.
+    const bool onMapScreen = isFieldMapScreen();
+    if (!onMapScreen && (anyMenuOpen() || !warpAllowed())) {
+        return;
+    }
+    constexpr f32 SIDE = 38.0f;
+    const f32 bx = x0 + 4.0f;
+    const f32 by = y1 - 4.0f - SIDE;
+    // On the map screen the styling is inverted: brown while the portals are
+    // already shown, bright while they are not. Off it, always bright.
+    const bool bright = !onMapScreen || !warpPortalsShown();
+    drawTabPlate(bx, by, SIDE, SIDE, bright);
+    constexpr f32 ICON = 21.0f;
+    drawTimg(warpIconTimg(), bx + (SIDE - ICON) * 0.5f, by + 3.0f, ICON, ICON,
+        bright ? 0xFF : 130);
+    drawTextCentered(bx + SIDE * 0.5f, by + SIDE - 4.0f, 9.0f,
+        bright ? TEXT_TAB_ACTIVE : TEXT_DIM, "Warp");
+    s_warpBtnRect[0] = bx;
+    s_warpBtnRect[1] = by;
+    s_warpBtnRect[2] = bx + SIDE;
+    s_warpBtnRect[3] = by + SIDE;
 }
 
 // ITEMS grid: two-column box grouping —
@@ -541,6 +636,18 @@ void drawWrappedDescription(const char* text, f32 x, f32 ry, f32 wrapW) {
 
 namespace {
 
+// Logo placeholder for the map window when there is nothing to draw —
+// shared by the minimap and floor-map paths so the two states look alike.
+void drawMapPlaceholder(f32 x0, f32 y0, f32 x1, f32 y1, const char* caption) {
+    const f32 mcx = (x0 + x1) * 0.5f;
+    const f32 mcy = (y0 + y1) * 0.5f;
+    if (const ResTIMG* logo = dusklightLogoTimg()) {
+        const f32 s = 96.0f;
+        drawTimg(logo, mcx - s * 0.5f, mcy - s * 0.5f, s, s, 0xFF);
+    }
+    drawTextCentered(mcx, mcy - 60.0f, 17.0f, TEXT_DIM, caption);
+}
+
 // Player-centered minimap view (non-dungeon stages; dungeons always use
 // the floor map instead).
 void drawMiniMapContent(f32 x0, f32 y0, f32 x1, f32 y1) {
@@ -555,7 +662,7 @@ void drawMiniMapContent(f32 x0, f32 y0, f32 x1, f32 y1) {
         strncpy(s_mapStage, stage, sizeof(s_mapStage) - 1);
         s_mapStage[sizeof(s_mapStage) - 1] = '\0';
         s_lastMapTimg = NULL;
-        s_mapStale = true;
+        s_mapAbsentFrames = 0;
         // The world offset is in the old stage's coordinates.
         s_mapViewOffX = 0.0f;
         s_mapViewOffZ = 0.0f;
@@ -563,25 +670,32 @@ void drawMiniMapContent(f32 x0, f32 y0, f32 x1, f32 y1) {
     // A live, valid map texture is required every frame: the render-texture
     // is freed on stage/room transitions and a cached pointer would show
     // garbage from the reused heap.
-    if (timg == NULL || timg->width == 0 || timg->height == 0) {
+    if (!isSaneTimg(timg)) {
         s_lastMapTimg = NULL;  // force re-upload when it comes back
         // Nothing consumes the gestures this frame — drop them so they
         // don't burst into the view once the map appears.
         s_mapPanX = 0.0f;
         s_mapPanY = 0.0f;
         s_mapPinchDeltaMilli.exchange(0);
-        // Hero icon centered in the map area with the status line above it.
-        const f32 mcx = (x0 + x1) * 0.5f;
-        const f32 mcy = (y0 + y1) * 0.5f;
-        if (const ResTIMG* logo = dusklightLogoTimg()) {
-            const f32 s = 96.0f;
-            drawTimg(logo, mcx - s * 0.5f, mcy - s * 0.5f, s, s, 0xFF);
+        // Some stages simply have no minimap — boss arenas most visibly —
+        // and the game reports that by never drawing one. Once the stage is
+        // fully loaded and the meter is up, a map that still has not appeared
+        // after a grace period is not coming: say so instead of pretending to
+        // load forever. During real loads stagInfo is NULL, which also resets
+        // the grace counter for the next stage.
+        const bool stageUp =
+            meterMap != NULL && dComIfGp_getStage()->getStagInfo() != NULL;
+        if (!stageUp) {
+            s_mapAbsentFrames = 0;
+        } else if (s_mapAbsentFrames <= NO_MAP_GRACE_FRAMES) {
+            s_mapAbsentFrames++;
         }
-        drawTextCentered(mcx, mcy - 60.0f, 17.0f, TEXT_DIM,
-            s_mapStale ? "Loading map..." : "Map not available here.");
+        drawMapPlaceholder(x0, y0, x1, y1,
+            s_mapAbsentFrames > NO_MAP_GRACE_FRAMES ? "No map for this area"
+                                                    : "Loading map...");
         return;
     }
-    s_mapStale = false;
+    s_mapAbsentFrames = 0;
     s_lastMapW = (f32)(u16)timg->width;
     s_lastMapH = (f32)(u16)timg->height;
     if (s_mapPic == NULL) {
@@ -686,6 +800,7 @@ void drawMiniMapContent(f32 x0, f32 y0, f32 x1, f32 y1) {
     s_mapResetRect[1] = y1 - 30.0f;
     s_mapResetRect[2] = x1 - 4.0f;
     s_mapResetRect[3] = y1 - 4.0f;
+    drawMapWarpButton(x0, y1);
 }
 
 }  // namespace
@@ -821,9 +936,13 @@ void drawMapContent(f32 x0, f32 y0, f32 x1, f32 y1) {
             drawDmapFloorTabs(x1, y0);
             drawMapNamePlate(x0, y0);
         } else {
-            // First render (palette mount / renderer create) still pending.
-            drawTextCentered((x0 + x1) * 0.5f, (y0 + y1) * 0.5f, 15.0f, TEXT_DIM,
-                "Loading floor map...");
+            // Either the companion yielded because the game's own dungeon
+            // map screen is up (point the player there), or the first render
+            // (palette mount / renderer create) is still pending.
+            const bool mapOnMain =
+                dMeter2Info_getWindowStatus() == WINDOW_STATUS_DUNGEON_MAP;
+            drawMapPlaceholder(x0, y0, x1, y1,
+                mapOnMain ? "View Map on Main Screen" : "Loading floor map...");
             s_dmapFloorRectCount = 0;
             s_dmapFloorBtnRect[2] = s_dmapFloorBtnRect[0];  // hidden
             s_mapResetRect[2] = s_mapResetRect[0];          // hidden
@@ -871,16 +990,24 @@ void drawItemInfo(f32 x0, f32 y0, f32 x1, f32 y1) {
         // X-or-Y tags in the text follow where the item is equipped.
         const int xyBtn = dComIfGp_getSelectItem(1) == itemNo ? 1 : 0;
         dMeter2Info_getStringFull(0x265 + itemNo, body, sizeof(body), xyBtn);
-        readerWrapBody(body, x1 - x0 - 100.0f, 14.0f);
+        // Full column: the icon sits in the header row, not beside the text,
+        // so nothing narrows the wrap. Reserving icon width here squeezed the
+        // description into a sliver on narrow companion canvases.
+        readerWrapBody(body, x1 - x0 - 24.0f, 14.0f);
         fetchedGen = readerBodyGen();
         readerInvalidate();
         s_scrollItemInfo = 0.0f;
     }
-    drawText(x0 + 4.0f, y0 + 16.0f, 16.0f, TEXT_ACCENT, "%s", name);
-    const f32 by0 = y0 + 26.0f;
+    // Header band: the icon keeps its old size but sits above the text
+    // instead of inside it, so the description still gets the full column.
+    constexpr f32 HDR_ICON = 48.0f;
+    constexpr f32 HDR_H = HDR_ICON + 8.0f;
+    drawItemIcon(s_itemInfoSlot, itemNo, x1 - HDR_ICON - 4.0f, y0 + 2.0f, HDR_ICON);
+    // Name vertically centred against the icon, clipped short of it.
+    drawText(x0 + 4.0f, y0 + HDR_H * 0.5f + 6.0f, 16.0f, TEXT_ACCENT, "%s", name);
+    const f32 by0 = y0 + HDR_H;
     const f32 by1 = y1 - 2.0f;
     drawMenuBox(x0, by0, x1, by1, 0x22201DFFu);
-    drawItemIcon(s_itemInfoSlot, itemNo, x1 - 68.0f, by0 + 12.0f, 52.0f);
     const f32 textBottom = by1 - 44.0f;
     const f32 lineH = 21.0f;
     const f32 viewH = textBottom - by0 - 12.0f;
@@ -1001,6 +1128,18 @@ void drawQuestContent(f32 x0, f32 y0, f32 x1, f32 y1) {
         GXSetScissorRender(0, 0, s_nativeW, s_nativeH);
     }
     drawListScrollHint(x1, tableTop, listBottom, s_scrollQuest, maxScroll, viewH, contentH);
+}
+
+// Destroy the dungeon-map picture outright. Called when the renderer that
+// owns its ResTIMG is torn down: re-pointing it later is not enough, because
+// the J2DPicture keeps the old descriptor (and the buffer behind it) until
+// then, and anything that draws it in the meantime uploads from freed memory.
+void invalidateDmapPicture() {
+    if (s_dmapPic != NULL) {
+        JKR_DELETE(s_dmapPic);
+        s_dmapPic = NULL;
+    }
+    s_lastDmapTimg = NULL;
 }
 
 }  // namespace dusk::companion

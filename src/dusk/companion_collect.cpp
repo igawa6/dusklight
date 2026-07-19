@@ -11,6 +11,7 @@
 #include "d/d_item_data.h"
 #include "d/d_menu_collect.h"
 #include "d/d_meter2_info.h"
+#include "d/d_msg_out_font.h"
 
 #include <cstdio>
 #include <cstring>
@@ -402,40 +403,56 @@ void pushReaderRect(f32 x0, f32 y0, f32 x1, f32 y1, int id) {
 // controller-button tags. The textures are the message system's own
 // font_XX.bti icons from the resident Main2D archive, tinted like
 // COutFont_c::createPane.
-struct MsgIcon {
-    const char* bti;
+struct MsgTint {
     u32 black;
     u32 white;
 };
-constexpr MsgIcon l_msgIcons[20] = {
-    {"font_00.bti", 0xFFFFFF00u, 0x62A32EFFu},     // A
-    {"font_01.bti", 0xFFFFFF00u, 0xC82727FFu},     // B
-    {"font_09.bti", 0x00000000u, 0xFFC832FFu},     // C-stick
-    {"font_04.bti", 0x00000000u, 0xC8C8C8FFu},     // L
-    {"font_05.bti", 0x00000000u, 0xC8C8C8FFu},     // R
-    {"font_02.bti", 0x00000000u, 0xC8C8C8FFu},     // X
-    {"font_03.bti", 0x00000000u, 0xC8C8C8FFu},     // Y
-    {"font_06.bti", 0xFFFFFF00u, 0x5046A5FFu},     // Z
-    {"font_08.bti", 0x00000000u, 0xC8C8C8FFu},     // D-pad
-    {"font_07_01.bti", 0x00000000u, 0xFFFFFFFFu},  // control stick
-    {"font_10.bti", 0x00000000u, 0xFFFFFFFFu},     // arrows
-    {"font_10.bti", 0x00000000u, 0xFFFFFFFFu},
-    {"font_10.bti", 0x00000000u, 0xFFFFFFFFu},
-    {"font_10.bti", 0x00000000u, 0xFFFFFFFFu},
-    {"font_07_01.bti", 0x00000000u, 0xFFFFFFFFu},  // stick directions
-    {"font_07_01.bti", 0x00000000u, 0xFFFFFFFFu},
-    {"font_07_01.bti", 0x00000000u, 0xFFFFFFFFu},
-    {"font_07_01.bti", 0x00000000u, 0xFFFFFFFFu},
-    {"font_07_01.bti", 0x00000000u, 0xFFFFFFFFu},
-    {"font_07_01.bti", 0x00000000u, 0xFFFFFFFFu},
+
+// Tints for the controller-button block, matching COutFont_c::createPane.
+// Everything past it (targets, heart, quaver, bullets, ...) draws untinted,
+// which is what createPane does for those indices too.
+constexpr MsgTint l_msgTints[10] = {
+    {0xFFFFFF00u, 0x62A32EFFu},  // A
+    {0xFFFFFF00u, 0xC82727FFu},  // B
+    {0x00000000u, 0xFFC832FFu},  // C-stick
+    {0x00000000u, 0xC8C8C8FFu},  // L
+    {0x00000000u, 0xC8C8C8FFu},  // R
+    {0x00000000u, 0xC8C8C8FFu},  // X
+    {0x00000000u, 0xC8C8C8FFu},  // Y
+    {0xFFFFFF00u, 0x5046A5FFu},  // Z
+    {0x00000000u, 0xC8C8C8FFu},  // D-pad
+    {0x00000000u, 0xFFFFFFFFu},  // control stick
 };
+constexpr int MSG_ICON_MAX = 70;  // COutFont_c::getBtiName table size
+constexpr int OUTFONT_IDX_BOMB_BAG = 41;  // lives in the item-icon archive
 constexpr f32 MSG_ICON_W = 20.0f;
 
+MsgTint msgIconTint(int idx) {
+    if (idx >= 0 && idx < 10) {
+        return l_msgTints[idx];
+    }
+    return {0x00000000u, 0xFFFFFFFFu};
+}
+
+// Names come straight from the game's own table so this can't drift: the
+// hand-copied 20-entry version silently dropped every icon past the button
+// block (lock-on reticles, hearts, bullets).
 const ResTIMG* msgIconTimg(int idx) {
-    if (idx < 0 || idx >= 20 || dComIfGp_getMain2DArchive() == NULL) {
+    if (idx < 0 || idx >= MSG_ICON_MAX) {
         return NULL;
     }
-    return (const ResTIMG*)dComIfGp_getMain2DArchive()->getResource('TIMG', l_msgIcons[idx].bti);
+    const char* bti = COutFont_c::getBtiName(idx);
+    if (bti == NULL || bti[0] == 0) {
+        return NULL;
+    }
+    // createPane pulls index 41 (the bomb-bag icon) from the item-icon
+    // archive; everything else, index 30 included, comes from Main2D.
+    JKRArchive* arc = idx == OUTFONT_IDX_BOMB_BAG ? dComIfGp_getItemIconArchive()
+                                                  : dComIfGp_getMain2DArchive();
+    if (arc == NULL) {
+        return NULL;
+    }
+    return (const ResTIMG*)arc->getResource('TIMG', bti);
 }
 
 // Width of a body segment: text runs measured, icon markers at fixed width.
@@ -481,9 +498,10 @@ void drawBodyText(f32 x, f32 y, f32 ts, u32 rgba, const char* s) {
                 rl = 0;
             }
             const int idx = (u8)p[1] - 1;
+            const MsgTint tint = msgIconTint(idx);
             if (const ResTIMG* icon = msgIconTimg(idx)) {
                 drawTimgTinted(icon, x + 1.0f, y - ts - 1.0f, MSG_ICON_W - 2.0f,
-                    MSG_ICON_W - 2.0f, 0xFF, l_msgIcons[idx].black, l_msgIcons[idx].white);
+                    MSG_ICON_W - 2.0f, 0xFF, tint.black, tint.white);
             }
             x += MSG_ICON_W;
             p++;
@@ -506,16 +524,30 @@ void drawBodyText(f32 x, f32 y, f32 ts, u32 rgba, const char* s) {
 // selection changes (message walks are too heavy for per-frame).
 char s_readerTitle[96];
 char s_readerCorner[96];
-char s_bodyLines[64][128];
+// One bound for the whole wrap pipeline: the join buffer, the line being
+// built, and the stored line. They must match or a long paragraph truncates
+// silently instead of wrapping.
+constexpr int BODY_LINE_MAX = 228;
+char s_bodyLines[64][BODY_LINE_MAX];
+// Left offset per line, so a bullet item's wrapped continuations hang under
+// its text instead of under the bullet itself.
+f32 s_bodyIndent[64];
 int s_bodyLineCount = 0;
 int s_fetchedTab = -1;
 int s_fetchedSel = -2;
 
-void pushBodyLine(const char* line) {
+void pushBodyLine(const char* line, f32 indent) {
     if (s_bodyLineCount < 64) {
         snprintf(s_bodyLines[s_bodyLineCount], sizeof(s_bodyLines[0]), "%s", line);
+        s_bodyIndent[s_bodyLineCount] = indent;
         s_bodyLineCount++;
     }
+}
+
+// Inline marker for MSGTAG_BULLET / BULLET_SPACE — outfont 42/43, stored as
+// index + 1 by getStringFull.
+bool isBulletMarker(const char* p) {
+    return *p == 0x02 && ((u8)p[1] == 43 || (u8)p[1] == 44);
 }
 
 u32 s_bodyGen = 0;
@@ -523,19 +555,75 @@ u32 s_bodyGen = 0;
 void wrapBody(const char* body, f32 width, f32 ts) {
     s_bodyGen++;
     s_bodyLineCount = 0;
-    char cur[128];
+    char cur[BODY_LINE_MAX];
     cur[0] = 0;
     const char* p = body;
     bool lastBlank = false;
+    // A bullet item's continuations hang under its text. curIndent applies to
+    // the line being built; hangIndent is what the next wrapped line inherits.
+    f32 curIndent = 0.0f;
+    f32 hangIndent = 0.0f;
+    bool newPara = true;
     while (*p != 0 && s_bodyLineCount < 64) {
         if (*p == '\n') {
-            // Collapse runs of blank lines into a single one.
-            const bool blank = cur[0] == 0;
-            if (!blank || !lastBlank) {
-                pushBodyLine(cur);
+            // A blank line is a deliberate paragraph break, and it has to be
+            // read off the SOURCE. Inferring it from `cur` only worked while
+            // every newline flushed the line; now that they are swallowed
+            // `cur` is still populated, and the break was being eaten.
+            const char* scan = p + 1;
+            while (*scan == ' ') {
+                scan++;
             }
-            lastBlank = blank;
-            cur[0] = 0;
+            if (*scan == '\n') {
+                // Finish the paragraph, then emit one separator (runs collapse).
+                if (cur[0] != 0) {
+                    pushBodyLine(cur, curIndent);
+                    cur[0] = 0;
+                    lastBlank = false;
+                }
+                if (!lastBlank) {
+                    pushBodyLine("", 0.0f);
+                    lastBlank = true;
+                }
+                curIndent = 0.0f;
+                hangIndent = 0.0f;
+                newPara = true;
+                p++;
+                continue;
+            }
+            // The source strings are hard-wrapped for the game's dialog box,
+            // which is far narrower than this column, so obeying every break
+            // leaves ragged half-lines mid-sentence. Only break where the
+            // line actually ends a sentence; otherwise swallow the newline
+            // and let the wrapper decide, which is what the space-joining
+            // path below does for the next word.
+            const char* tail = cur;
+            char last = 0;
+            while (*tail != 0) {
+                if (*tail != ' ') {
+                    last = *tail;
+                }
+                tail++;
+            }
+            const char* peek = p + 1;
+            while (*peek == ' ') {
+                peek++;
+            }
+            const bool sentenceEnd = last == '.' || last == '!' || last == '?';
+            // Only a following bullet forces the break. Breaking on every
+            // newline while inside an item was wrong: a bullet anywhere in a
+            // description made the rest of it break at each source line, so
+            // running text split mid-sentence ("almost" / "anything"). The
+            // hanging indent already carries the item's shape; the text
+            // itself should reflow.
+            if (isBulletMarker(peek) || sentenceEnd) {
+                pushBodyLine(cur, curIndent);
+                cur[0] = 0;
+                curIndent = 0.0f;
+                hangIndent = 0.0f;
+                newPara = true;
+                lastBlank = false;
+            }
             p++;
             continue;
         }
@@ -556,21 +644,36 @@ void wrapBody(const char* body, f32 width, f32 ts) {
         while (*p == ' ') {
             p++;
         }
-        char cand[228];
+        if (wl == 0) {
+            // Nothing scanned, so the cursor was sitting on whitespace: the
+            // source indents lines for the game's centred dialog box, and
+            // since a swallowed newline leaves that indentation in place,
+            // every one of those spaces would otherwise append an empty word
+            // — i.e. a stray space each — to the line being built.
+            continue;
+        }
+        if (newPara) {
+            // First word of an item decides whether it hangs.
+            hangIndent = isBulletMarker(word) ? MSG_ICON_W : 0.0f;
+            curIndent = 0.0f;
+            newPara = false;
+        }
+        char cand[BODY_LINE_MAX];
         if (cur[0] != 0) {
             snprintf(cand, sizeof(cand), "%s %s", cur, word);
         } else {
             snprintf(cand, sizeof(cand), "%s", word);
         }
-        if (cur[0] != 0 && bodyTextWidth(cand, ts) > width) {
-            pushBodyLine(cur);
+        if (cur[0] != 0 && bodyTextWidth(cand, ts) > width - curIndent) {
+            pushBodyLine(cur, curIndent);
+            curIndent = hangIndent;
             snprintf(cur, sizeof(cur), "%s", word);
         } else {
             snprintf(cur, sizeof(cur), "%s", cand);
         }
     }
     if (cur[0] != 0) {
-        pushBodyLine(cur);
+        pushBodyLine(cur, curIndent);
     }
 }
 
@@ -646,7 +749,7 @@ void drawReaderDetail(int tab, f32 x0, f32 y0, f32 x1, f32 y1) {
         if (ly < by0 - lineH || ly > textBottom + lineH) {
             continue;
         }
-        drawBodyText(x0 + 16.0f, ly, 14.0f, TEXT_MAIN, s_bodyLines[i]);
+        drawBodyText(x0 + 16.0f + s_bodyIndent[i], ly, 14.0f, TEXT_MAIN, s_bodyLines[i]);
     }
     if (s_nativeW != 0) {
         GXSetScissorRender(0, 0, s_nativeW, s_nativeH);
@@ -833,7 +936,7 @@ int readerBodyLineCount() {
 
 void readerDrawBodyLine(int idx, f32 x, f32 y, f32 ts, u32 rgba) {
     if (idx >= 0 && idx < s_bodyLineCount) {
-        drawBodyText(x, y, ts, rgba, s_bodyLines[idx]);
+        drawBodyText(x + s_bodyIndent[idx], y, ts, rgba, s_bodyLines[idx]);
     }
 }
 

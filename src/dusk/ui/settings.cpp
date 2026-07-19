@@ -8,6 +8,7 @@
 #include "dusk/audio/DuskDsp.hpp"
 #include "dusk/android_frame_rate.hpp"
 #include "dusk/config.hpp"
+#include "dusk/dualscreen.h"
 #include "dusk/hotkeys.h"
 #include "dusk/data.hpp"
 #include "dusk/file_select.hpp"
@@ -72,6 +73,7 @@ constexpr std::array kFpsOverlayCornerNames = {
     "Bottom Right",
     "Companion",
 };
+
 
 constexpr std::array kInterpolationModes = {
     "Off",
@@ -1196,9 +1198,39 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
             "Scales the size of the gameplay HUD (hearts, buttons, mini-map, etc.). Does not affect dialog boxes or menus.",
             50, 200, 5,
             [] { return getSettings().game.minimalHUD.getValue(); });
-        addOption("Dual Screen HUD (Experimental)", getSettings().game.dualScreen,
-            "Redirects the HUD, mini-map, and pause menus into a separate view, shown in the "
-            "\"Dual Screen Preview\" window.<br/>Prototype for second-monitor output.");
+        config_bool_select(leftPane, rightPane, getSettings().game.dualScreen,
+            {
+                .key = "Dual Screen HUD (Experimental)",
+                .helpText =
+                    "Redirects the HUD, mini-map, and pause menus into a separate view, shown in "
+                    "the \"Dual Screen Preview\" window.<br/>Prototype for second-monitor output."
+                    "<br/>Moves the FPS counter to the companion screen and turns off Minimal HUD "
+                    "when enabled.",
+                .onChange =
+                    [](bool value) {
+                        auto& corner = getSettings().video.fpsOverlayCorner;
+                        auto& minimal = getSettings().game.minimalHUD;
+                        bool changed = false;
+                        // Only when a second display actually exists — on a
+                        // single-screen device the setting is inert, and
+                        // pointing the counter at a companion that never draws
+                        // would simply hide it.
+                        if (value && dusk::dualscreen::hudOnCompanion()) {
+                            corner.setValue(dusk::kFpsCornerCompanion);
+                            changed = true;
+                            if (minimal.getValue()) {
+                                minimal.setValue(false);
+                            }
+                        } else if (!value && corner.getValue() == dusk::kFpsCornerCompanion) {
+                            corner.setValue(corner.getDefaultValue());
+                            changed = true;
+                        }
+                        if (changed) {
+                            // config::save() already ran before this callback.
+                            config::save();
+                        }
+                    },
+            });
         addOption("Restore Wii 1.0 Glitches", getSettings().game.restoreWiiGlitches,
             "Restores patched glitches from Wii USA 1.0, the first released version.");
         addOption("Enable Rotating Link Doll", getSettings().game.enableLinkDollRotation,

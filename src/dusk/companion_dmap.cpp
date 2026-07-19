@@ -84,6 +84,10 @@ bool ensurePalette() {
 
 void releaseRenderer() {
     if (s_inst != NULL) {
+        // Drop the page's picture BEFORE the descriptor it points at dies:
+        // the generation counter only makes the page re-point later, which
+        // leaves a window where the picture still holds freed memory.
+        invalidateDmapPicture();
         s_inst->_delete();
         JKR_DELETE(s_inst);
         s_inst = NULL;
@@ -269,6 +273,18 @@ void dmapUpdate() {
     if (s_page.load() != PAGE_MAP) {
         // Keep the instance (and its last texture) but skip the render pass
         // while the map page isn't showing.
+        return;
+    }
+    // While the game's own dungeon map screen is up, yield: the copy-2D
+    // drawlist holds four entries and the minimap plus the menu's renderers
+    // sit at that bound already (dDlst_list_c::set drops overflow SILENTLY —
+    // a dropped renderer never produces its copy texture and whoever samples
+    // it reads a 32-byte stub as a full-size image). There is also no point
+    // re-rendering the same dungeon map behind the menu's full-screen one.
+    if (dMeter2Info_getWindowStatus() == WINDOW_STATUS_DUNGEON_MAP) {
+        // No render entry this frame means no copy texture, so the page must
+        // not draw the picture either.
+        s_dmapReady = false;
         return;
     }
 

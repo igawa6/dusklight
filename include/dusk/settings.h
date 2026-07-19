@@ -7,6 +7,11 @@
 
 namespace dusk {
 
+// video.fpsOverlayCorner: 0-3 are screen corners, 4 means the companion
+// screen draws the counter instead. Shared by the settings UI, the RmlUi
+// overlay and the companion dashboard.
+constexpr int kFpsCornerCompanion = 4;
+
 using config::ConfigVar;
 using config::ActionBindConfigVar;
 
@@ -198,6 +203,7 @@ struct UserSettings {
         ConfigVar<int> dualScreenDisplay;
         ConfigVar<int> dualScreenPosX;
         ConfigVar<int> dualScreenPosY;
+        ConfigVar<bool> dualScreenHaptics;
 
         // Graphics
         ConfigVar<BloomMode> bloomMode;
