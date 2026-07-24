@@ -26,6 +26,11 @@
 #if TARGET_PC
 #include "dusk/settings.h"
 #include "dusk/dualscreen.h"
+
+// Item-button usability (X, Y, slots I/II), snapshot per frame in
+// setButtonIconAlpha and read by the companion via isItemUsable (the live
+// bits reset before its draw pass).
+static bool sItemUsable[4] = {true, true, true, true};
 #include "dusk/ui/icon_provider.hpp"
 #include <algorithm>
 
@@ -191,47 +196,40 @@ const char* dMeter2Draw_c::getActionTextB() {
 // game hides them. i_no: 0 = X, 1 = Y.
 const char* dMeter2Draw_c::getActionTextXY(int i_no) {
     if (i_no < 0 || i_no > 1 || mpTextXY[i_no] == NULL ||
-        mpTextXY[i_no]->getPanePtr() == NULL || !mpTextXY[i_no]->getPanePtr()->isVisible() ||
-        mpXYText[0][i_no] == NULL || mpXYText[0][i_no]->getPanePtr() == NULL)
+        mpTextXY[i_no]->getPanePtr() == NULL || mpXYText[0][i_no] == NULL ||
+        mpXYText[0][i_no]->getPanePtr() == NULL)
     {
         return NULL;
     }
+#if TARGET_PC
+    // ONLY Functional hides these panes by hand (its cluster stays visible,
+    // so the words would otherwise draw on the main screen). There the flag
+    // is ours, not the game's, so it cannot gate — the caller checks wolf
+    // form instead. Every other mode keeps the game's own flag authoritative.
+    if (!dusk::dualscreen::mainHudRestored() && !mpTextXY[i_no]->getPanePtr()->isVisible()) {
+        return NULL;
+    }
+#else
+    if (!mpTextXY[i_no]->getPanePtr()->isVisible()) {
+        return NULL;
+    }
+#endif
     return (const char*)((J2DTextBox*)mpXYText[0][i_no]->getPanePtr())->getStringPtr();
 }
 
 // Midna (Z) button pane subtree regardless of the prompt's active state
 // (the companion dims it instead of hiding).
 J2DPane* dMeter2Draw_c::getMidnaButtonPaneRaw() {
-    if (mpButtonMidona == NULL || mpButtonMidona->getPanePtr() == NULL ||
-        !mpButtonMidona->getPanePtr()->isVisible())
-    {
+    if (mpButtonMidona == NULL || mpButtonMidona->getPanePtr() == NULL) {
+        return NULL;
+    }
+    // Functional hides the MAIN-screen copy of this pane (the partition owns
+    // its visibility there, and the companion Z corner is the caller) — that
+    // deliberate hide must not read as "prompt gone".
+    if (!dusk::dualscreen::mainHudRestored() && !mpButtonMidona->getPanePtr()->isVisible()) {
         return NULL;
     }
     return mpButtonMidona->getPanePtr();
-}
-
-// Midna (Z) button pane subtree for layer compositing; NULL when the prompt
-// is inactive (the game hides it via pane alpha, not visibility).
-J2DPane* dMeter2Draw_c::getMidnaButtonPane() {
-    if (mpButtonMidona == NULL || mpButtonMidona->getPanePtr() == NULL ||
-        !mpButtonMidona->getPanePtr()->isVisible() ||
-        mpButtonMidona->getPanePtr()->getAlpha() == 0)
-    {
-        return NULL;
-    }
-    return mpButtonMidona->getPanePtr();
-}
-
-// Midna (Z) button picture; NULL when the prompt is inactive (the game hides
-// it via pane alpha, not visibility).
-J2DPicture* dMeter2Draw_c::getMidnaButtonPicture() {
-    if (mpButtonMidona == NULL || mpButtonMidona->getPanePtr() == NULL ||
-        !mpButtonMidona->getPanePtr()->isVisible() ||
-        mpButtonMidona->getPanePtr()->getAlpha() == 0)
-    {
-        return NULL;
-    }
-    return findBestPicture(mpButtonMidona);
 }
 
 // A tear-of-light picture from the vessel layout.
@@ -271,6 +269,23 @@ J2DPane* dMeter2Draw_c::getButtonCrossPane() {
 // Vessel of Light pane subtree for full companion compositing.
 J2DPane* dMeter2Draw_c::getLightDropPane() {
     return mpLightDropParent != NULL ? mpLightDropParent->getPanePtr() : NULL;
+}
+
+// Whether the X (0) / Y (1) item can currently be used. Reads the per-frame
+// snapshot taken in setButtonIconAlpha — the live dMeter2Info bits are reset
+// before the companion's draw pass runs, so they can't be read directly.
+bool dMeter2Draw_c::isItemUsable(int i_xy) {
+    if (i_xy < 0 || i_xy > 3) {
+        return false;
+    }
+    return sItemUsable[i_xy];
+}
+
+bool dMeter2Draw_c::isOxygenActive() {
+    // The game fades the bar in and out through mMeterAlphaRate; riding that
+    // keeps the companion in step with the main screen's own timing instead
+    // of popping the moment Link enters water.
+    return mMeterAlphaRate[2] > 0.0f && dComIfGp_getMaxOxygen() > 0;
 }
 
 J2DPane* dMeter2Draw_c::getVesselTearPane(int i_idx) {
@@ -382,6 +397,59 @@ void dMeter2Draw_c::refreshVesselForCompanion() {
                   g_drawHIO.mLightDrop.mVesselAlpha[0], 0);
 }
 
+void dMeter2Draw_c::pushVesselStateForCompanion(f32* o_alpha, f32* o_x, f32* o_y,
+    f32* o_scale) {
+    CPaneMgr* panes[VESSEL_ALPHA_SAVE_COUNT];
+    panes[0] = mpLightDropParent;
+    for (int i = 0; i < 2; i++) {
+        panes[1 + i] = mpSIParent[i];
+    }
+    for (int i = 0; i < 16; i++) {
+        for (int j = 0; j < 2; j++) {
+            panes[3 + i * 2 + j] = mpSIParts[i][j + 1];
+        }
+    }
+    for (int k = 0; k < VESSEL_ALPHA_SAVE_COUNT; k++) {
+        if (panes[k] != NULL) {
+            o_alpha[k] = panes[k]->getAlphaRate();
+            o_x[k] = panes[k]->getPosX();
+            o_y[k] = panes[k]->getPosY();
+        } else {
+            o_alpha[k] = 0.0f;
+            o_x[k] = 0.0f;
+            o_y[k] = 0.0f;
+        }
+    }
+    o_scale[0] = panes[0] != NULL ? panes[0]->getScaleX() : 1.0f;
+    o_scale[1] = panes[0] != NULL ? panes[0]->getScaleY() : 1.0f;
+    // Canonical corner layout (positions, scale, textures, alphas).
+    refreshVesselForCompanion();
+}
+
+void dMeter2Draw_c::popVesselStateForCompanion(const f32* i_alpha, const f32* i_x,
+    const f32* i_y, const f32* i_scale) {
+    CPaneMgr* panes[VESSEL_ALPHA_SAVE_COUNT];
+    panes[0] = mpLightDropParent;
+    for (int i = 0; i < 2; i++) {
+        panes[1 + i] = mpSIParent[i];
+    }
+    for (int i = 0; i < 16; i++) {
+        for (int j = 0; j < 2; j++) {
+            panes[3 + i * 2 + j] = mpSIParts[i][j + 1];
+        }
+    }
+    for (int k = 0; k < VESSEL_ALPHA_SAVE_COUNT; k++) {
+        if (panes[k] != NULL) {
+            panes[k]->setAlphaRate(i_alpha[k]);
+            panes[k]->getPanePtr()->move(i_x[k], i_y[k]);
+        }
+    }
+    if (panes[0] != NULL) {
+        panes[0]->scale(i_scale[0], i_scale[1]);
+    }
+}
+
+
 // The live kantera (lantern oil) meters, repositionable via setPos.
 dKantera_icon_c* dMeter2Draw_c::getKanteraMeter(int i_no) {
     if (i_no < 0 || i_no >= 2) {
@@ -396,7 +464,16 @@ dKantera_icon_c* dMeter2Draw_c::getKanteraMeter(int i_no) {
 void dMeter2Draw_c::forceCompanionAlpha() {
     const f32 full = g_drawHIO.mParentAlpha;
     const f32 btn = g_drawHIO.mParentAlpha * g_drawHIO.mMainHUDButtonsAlpha;
-    if (mpLifeParent != NULL && mpLifeParent->getAlphaRate() != full) {
+    // Pin only what the companion actually composites. In Cinematic that is
+    // everything below, and pinning is invisible because those panes are
+    // hidden on the main screen. Functional moves hearts, the A/B/Z cluster
+    // and the d-pad back to the main screen, where the game's own fades have
+    // to play out — pinning them there would freeze the HUD fully opaque
+    // through cutscenes. The panes that stay on the companion (rupee/key
+    // readouts, X/Y) are hidden on main in both modes, so they are always
+    // safe to pin.
+    const bool restored = dusk::dualscreen::mainHudRestored();
+    if (!restored && mpLifeParent != NULL && mpLifeParent->getAlphaRate() != full) {
         mpLifeParent->setAlphaRate(full);
         setAlphaLifeChange(true);
     }
@@ -406,7 +483,7 @@ void dMeter2Draw_c::forceCompanionAlpha() {
     if (mpKeyParent != NULL) {
         mpKeyParent->setAlphaRate(full);
     }
-    if (mpButtonParent != NULL && mpButtonParent->getAlphaRate() != btn) {
+    if (!restored && mpButtonParent != NULL && mpButtonParent->getAlphaRate() != btn) {
         // Pinning the parent propagates init alphas to ALL children — but the
         // Midna prompt is alpha-gated by game state; preserve its own alpha.
         u8 midnaAlpha = 0;
@@ -419,16 +496,18 @@ void dMeter2Draw_c::forceCompanionAlpha() {
             mpButtonMidona->setAlpha(midnaAlpha);
         }
     }
-    if (mpButtonCrossParent != NULL) {
+    if (!restored && mpButtonCrossParent != NULL) {
         mpButtonCrossParent->setAlphaRate(btn);
     }
+    // X and Y stay on the companion in both modes.
     if (mpButtonXY[0] != NULL) {
         mpButtonXY[0]->setAlphaRate(btn);
     }
     if (mpButtonXY[1] != NULL) {
         mpButtonXY[1]->setAlphaRate(btn);
     }
-    if (mpButtonXY[2] != NULL) {
+    // Z rides with the cluster, so Functional leaves it to the main screen.
+    if (!restored && mpButtonXY[2] != NULL) {
         mpButtonXY[2]->setAlphaRate(btn);
     }
 }
@@ -1057,6 +1136,7 @@ void dMeter2Draw_c::exec(u32 i_status) {
             mButtonsScale = mainButtonsScale;
             mpButtonParent->scale(mainButtonsScale, mainButtonsScale);
         }
+
     }
 #else
     if (i_status & 0x1000000) {
@@ -1091,26 +1171,111 @@ void dMeter2Draw_c::exec(u32 i_status) {
 }
 
 #if TARGET_PC
-// Dual-screen: status readouts and the controller button cluster live on
-// the second screen; contextual bottom prompts (spur/dismount meters, sub
-// contents) keep drawing on the main view. Panes are re-shown for one frame
-// after the setting turns off.
-void dMeter2Draw_c::dualScreenSyncPaneVisibility(bool i_dualScreenHud) {
-    static bool sDualScreenHudPrev = false;
-    if (i_dualScreenHud || sDualScreenHudPrev) {
-        CPaneMgr* statusPanes[] = {mpLifeParent, mpMagicParent, mpLightDropParent,
-            mpRupeeKeyParent, mpButtonParent, mpButtonCrossParent, mpButtonXY[0], mpButtonXY[1]};
-        for (CPaneMgr* pane : statusPanes) {
-            if (pane != NULL) {
-                if (i_dualScreenHud) {
-                    pane->hide();
-                } else {
-                    pane->show();
-                }
+// Dual-screen: partition the HUD between the two screens. Nothing is drawn on
+// both — each pane belongs to exactly one screen per mode.
+//   Cinematic  - every status readout and the whole button cluster is on the
+//                companion; contextual bottom prompts stay on the main view.
+//   Functional - hearts, vessel, the A/B/Z cluster and the d-pad move BACK to
+//                the main screen; only the rupee/key readouts and the X/Y item
+//                buttons stay on the companion.
+// Panes are re-shown for one frame after dual-screen turns off.
+void dMeter2Draw_c::dualScreenSyncPaneVisibility(bool i_dualScreenHud, bool i_mainHudRestored,
+    bool i_lowLifeHearts)
+{
+    // Track the resolved state rather than a bool: switching Cinematic <->
+    // Functional changes which panes are hidden, so a mode change has to
+    // re-sync as well, or panes stay stuck from the previous mode.
+    enum { STATE_MAIN, STATE_CINEMATIC, STATE_FUNCTIONAL };
+    const int state =
+        !i_dualScreenHud ? STATE_MAIN : (i_mainHudRestored ? STATE_FUNCTIONAL : STATE_CINEMATIC);
+    static int sPrevState = STATE_MAIN;
+    if (state == STATE_MAIN && sPrevState == STATE_MAIN) {
+        return;
+    }
+
+    // On the companion whenever dual-screen is on, in either mode. The X/Y
+    // item icons are separate panes from the X/Y buttons, so hide them too —
+    // in Functional their parent cluster is visible and would otherwise keep
+    // drawing the icons for buttons that are not there. The d-pad joins
+    // them: the companion's tab strip and pages replace what it toggled, so
+    // it has no job on the main screen in either mode.
+    CPaneMgr* companionPanes[] = {mpMagicParent, mpRupeeKeyParent, mpButtonXY[0], mpButtonXY[1],
+        mpItemXY[0], mpItemXY[1], mpButtonCrossParent};
+    for (CPaneMgr* pane : companionPanes) {
+        if (pane != NULL) {
+            if (state == STATE_MAIN) {
+                pane->show();
+            } else {
+                pane->hide();
             }
         }
     }
-    sDualScreenHudPrev = i_dualScreenHud;
+
+    // Cinematic-only: Functional moves these back to the main screen. The
+    // hearts alone come back even in Cinematic while the low-health pop-in
+    // holds — a warning belongs on the screen the eyes are on. (The
+    // companion composite draws these panes with explicit rects, so showing
+    // them here affects only the main screen.)
+    CPaneMgr* cinematicOnlyPanes[] = {mpLifeParent, mpLightDropParent, mpButtonParent};
+    for (CPaneMgr* pane : cinematicOnlyPanes) {
+        if (pane != NULL) {
+            const bool show =
+                state != STATE_CINEMATIC || (pane == mpLifeParent && i_lowLifeHearts);
+            if (show) {
+                pane->show();
+            } else {
+                pane->hide();
+            }
+        }
+    }
+
+    // FUNCTIONAL-ONLY: the Z/Midna prompt pane is a child of the button
+    // cluster, which Functional keeps on the main screen for A/B — but the
+    // companion's bottom-left Z corner already shows the same portrait, so
+    // the main-screen copy hides rather than duplicating it. The game
+    // drives this prompt via pane ALPHA only (never visibility), so an
+    // unconditional show() on the way out cannot resurrect a stale state,
+    // and the companion's composite ignores the root's own flag
+    // (collectPaneLayers) — only getMidnaButtonPaneRaw needed to learn
+    // about the partition hide.
+    if (mpButtonMidona != NULL) {
+        if (state == STATE_FUNCTIONAL) {
+            mpButtonMidona->hide();
+        } else {
+            mpButtonMidona->show();
+        }
+    }
+    // Same dedup for the Z button glyph itself (zbtn_n, also a child of the
+    // cluster): the companion's bottom-left Z corner is its Functional home.
+    // Like the Midna prompt, the game drives it via alpha only, and no
+    // Functional composite reads this pane.
+    if (mpButtonXY[2] != NULL) {
+        if (state == STATE_FUNCTIONAL) {
+            mpButtonXY[2]->hide();
+        } else {
+            mpButtonXY[2]->show();
+        }
+    }
+
+    // FUNCTIONAL-ONLY: the X/Y action words ("Sense"/"Dig"). Cinematic hides
+    // their parent cluster, which already stops them drawing, so touching
+    // them there would only destroy the visibility flag getActionTextXY
+    // relies on — that is what made the words show in human form. Functional
+    // keeps the cluster visible for A/B/Z, so these must be hidden by hand.
+    // On the way OUT of Functional nothing is shown here: an unconditional
+    // show() would resurrect stale words in human form (drawButtonXY only
+    // re-asserts visibility on a status change). moveButtonXY forces that
+    // redraw on the partition change instead, so the game state decides.
+    if (state == STATE_FUNCTIONAL) {
+        CPaneMgr* functionalOnlyPanes[] = {mpTextXY[0], mpTextXY[1]};
+        for (CPaneMgr* pane : functionalOnlyPanes) {
+            if (pane != NULL) {
+                pane->hide();
+            }
+        }
+    }
+
+    sPrevState = state;
 }
 #endif
 
@@ -1120,26 +1285,89 @@ void dMeter2Draw_c::draw() {
 
 #if TARGET_PC
     const bool touchControlsEnabled = dusk::getSettings().game.enableTouchControls;
-    if (touchControlsEnabled) {
-        mpButtonParent->hide();
-    } else {
-        mpButtonParent->show();
-    }
-
     const bool dualScreenHud = dusk::dualscreen::hudOnCompanion();
-    dualScreenSyncPaneVisibility(dualScreenHud);
+    // Functional keeps the gameplay-critical HUD on this screen; only the
+    // readouts and X/Y stay on the companion.
+    const bool mainHudRestored = dusk::dualscreen::mainHudRestored();
+    // Everything on this screen still draws when the HUD is restored.
+    const bool hudOnThisScreen = dusk::dualscreen::mainHudActive();
+    dualScreenSyncPaneVisibility(dualScreenHud, mainHudRestored,
+        dusk::dualscreen::lowLifePopIn());
+    // 3DS Style: carry the uzu swirl ornament up-right to the relocated A/B
+    // pair — measured so the 93px swirl's centre lands on the pair's
+    // bounding centre (its blo spot wrapped the full five-button cluster
+    // and reads low-left of the compact pair). The screen animation re-asserts the
+    // pane's blo transform at its own times, so a one-shot move gets
+    // stomped: re-apply whenever the pane is not where we last put it,
+    // using the game's fresh position as the base. move() is absolute, so
+    // this is idempotent — an untouched pane is never moved twice.
+    if (mpUzu != NULL && mpUzu->getPanePtr() != NULL) {
+        static f32 sUzuSetX = -99999.0f;
+        static f32 sUzuSetY = 0.0f;
+        J2DPane* uzuPane = mpUzu->getPanePtr();
+        const JGeometry::TBox2<f32>& ub = uzuPane->getBounds();
+        const bool carryUzu = mainHudRestored && !dComIfGp_event_runCheck() &&
+            !getCameraSubject() && !getItemSubject() && !getPlayerSubject();
+        if (carryUzu) {
+            if (ub.i.x != sUzuSetX || ub.i.y != sUzuSetY) {
+                uzuPane->move(ub.i.x + 42.0f, ub.i.y - 50.0f);
+                const JGeometry::TBox2<f32>& nb = uzuPane->getBounds();
+                sUzuSetX = nb.i.x;
+                sUzuSetY = nb.i.y;
+            }
+        } else {
+            // Leaving 3DS Style: put the swirl back once if it still sits
+            // where we left it; the game's own writes stand otherwise.
+            if (ub.i.x == sUzuSetX && ub.i.y == sUzuSetY && sUzuSetX > -99998.0f) {
+                uzuPane->move(ub.i.x - 42.0f, ub.i.y + 50.0f);
+            }
+            sUzuSetX = -99999.0f;
+        }
+    }
+    // 3DS Style: the Vessel of Light rides the SAME shift as the uzu
+    // ornament, so the whole relocated cluster stays together. Moving the
+    // vessel's parent carries its tears and glow with it. Idempotent
+    // re-apply / restore, exactly as above.
+    if (mpLightDropParent != NULL && mpLightDropParent->getPanePtr() != NULL) {
+        static f32 sVesselSetX = -99999.0f;
+        static f32 sVesselSetY = 0.0f;
+        J2DPane* vesselPane = mpLightDropParent->getPanePtr();
+        const JGeometry::TBox2<f32>& vb = vesselPane->getBounds();
+        const bool carryVessel = mainHudRestored && !dComIfGp_event_runCheck() &&
+            !getCameraSubject() && !getItemSubject() && !getPlayerSubject();
+        if (carryVessel) {
+            if (vb.i.x != sVesselSetX || vb.i.y != sVesselSetY) {
+                vesselPane->move(vb.i.x + 42.0f, vb.i.y - 50.0f);
+                const JGeometry::TBox2<f32>& nv = vesselPane->getBounds();
+                sVesselSetX = nv.i.x;
+                sVesselSetY = nv.i.y;
+            }
+        } else {
+            if (vb.i.x == sVesselSetX && vb.i.y == sVesselSetY && sVesselSetX > -99998.0f) {
+                vesselPane->move(vb.i.x - 42.0f, vb.i.y + 50.0f);
+            }
+            sVesselSetX = -99999.0f;
+        }
+    }
+    // The touch overlay replaces the on-screen cluster, so it has the final
+    // say — but only while the cluster is on this screen at all. In Cinematic
+    // the pane partition above already hid it and must not be undone.
+    if (hudOnThisScreen) {
+        if (touchControlsEnabled) {
+            mpButtonParent->hide();
+        } else {
+            mpButtonParent->show();
+        }
+    }
 #endif
 
     mpScreen->draw(0.0f, 0.0f, graf_ctx);
-#if TARGET_PC
-    // Dual-screen: the lantern oil meter lives on the second screen.
-    if (!dualScreenHud) {
-#endif
+    // Always run both passes: besides drawing, they update the pane geometry
+    // and alpha the companion composites, and drive the drowning-warning SFX.
+    // drawKanteraScreen suppresses its own on-screen draw when the HUD is on
+    // the companion, so nothing lands here in either dual-screen mode.
     drawKanteraScreen(1);
     drawKanteraScreen(2);
-#if TARGET_PC
-    }
-#endif
 
 #if TARGET_PC
     if (!touchControlsEnabled) {
@@ -1171,6 +1399,9 @@ void dMeter2Draw_c::draw() {
 
     for (int i = 0; i < 2; i++) {
 #if TARGET_PC
+        // Kantera gauges belong to the companion in BOTH dual-screen modes —
+        // Functional puts the lantern on its status strip, so drawing them
+        // here too would double them up.
         if (dualScreenHud) {
             break;
         }
@@ -1178,9 +1409,12 @@ void dMeter2Draw_c::draw() {
         mpKanteraMeter[i]->drawSelf();
     }
 
+    // A/B pulses follow their buttons: on this screen unless Cinematic moved
+    // the cluster to the companion. The X/Y pulses inside stay companion-only
+    // in both modes, since the X/Y buttons never come back.
     if (!dComIfGp_isPauseFlag() && mpButtonParent->getAlphaRate() != 0.0f
 #if TARGET_PC
-        && !dualScreenHud
+        && hudOnThisScreen
 #endif
     ) {
         if (field_0x608 > 0.0f) {
@@ -1217,10 +1451,11 @@ void dMeter2Draw_c::draw() {
 
     if (mpLightDropParent->getAlphaRate() != 0.0f
 #if TARGET_PC
-        // Dual screen: the vessel lives on the companion; its tear glow
-        // sparkles are direct draws at the panes' main-screen positions,
-        // so they must be skipped here too.
-        && !dualScreenHud
+        // Dual screen: in Cinematic the vessel lives on the companion, and
+        // its tear glow sparkles are direct draws at the panes' main-screen
+        // positions, so they must be skipped here too. Functional brings the
+        // vessel back and the glow with it.
+        && hudOnThisScreen
 #endif
     ) {
         f32 var_f28 = g_drawHIO.mLightDrop.mPikariScaleNormal;
@@ -1304,8 +1539,9 @@ void dMeter2Draw_c::draw() {
     }
 
 #if TARGET_PC
-    if (!touchControlsEnabled && !dusk::dualscreen::hudOnCompanion() &&
-        field_0x738 > 0.0f) {
+    // Midna's pulse rides her icon, which returns to this screen in Functional
+    // along with the Z button it sits on.
+    if (!touchControlsEnabled && hudOnThisScreen && field_0x738 > 0.0f) {
 #else
     if (field_0x738 > 0.0f) {
 #endif
@@ -2229,7 +2465,14 @@ void dMeter2Draw_c::drawKanteraScreen(u8 i_meterType) {
     mpMagicParent->paneTrans(field_0x5e4[i_meterType], field_0x5f0[i_meterType]);
 #endif
 
-    mpKanteraScreen->draw(0.0f, 0.0f, graf_ctx);
+#if TARGET_PC
+    // Everything above is state the companion reads; only the draw itself is
+    // main-screen-only.
+    if (!dusk::dualscreen::hudOnCompanion())
+#endif
+    {
+        mpKanteraScreen->draw(0.0f, 0.0f, graf_ctx);
+    }
 }
 
 void dMeter2Draw_c::drawMagic(s16 i_max, s16 i_magic, f32 i_posX, f32 i_posY) {
@@ -2860,6 +3103,24 @@ void dMeter2Draw_c::setAlphaKeyAnimeMax() {
 
 void dMeter2Draw_c::drawButtonA(u8 i_action, f32 i_posX, f32 i_posY, f32 i_textPosX, f32 i_textPosY,
                                 f32 i_scale, bool param_6, bool param_7) {
+#if TARGET_PC
+    // 3DS Style keeps only A and B on this screen (X/Y/Z/Midna live on the
+    // companion): shift the pair AS A GROUP up into the top-right corner —
+    // same delta for A and B, preserving their vanilla diagonal — so the
+    // group's top edge (A's top) sits on the hearts row's line. Text
+    // offsets shift equally so the action words follow their button.
+    // Idle-cluster state only: events and the subject views (hawk, grass
+    // whistle, aiming) reposition the buttons on purpose, and stacking the
+    // corner offset on those pushed them off the top of the screen.
+    if (dusk::dualscreen::mainHudRestored() && !dComIfGp_event_runCheck() &&
+        !getCameraSubject() && !getItemSubject() && !getPlayerSubject() && !param_7)
+    {
+        i_posX += 43.0f;
+        i_posY -= 48.0f;
+        i_textPosX += 43.0f;
+        i_textPosY -= 48.0f;
+    }
+#endif
     char* mp_string = getActionString(i_action, 1, &field_0x761);
     f32 var_f31 = g_drawHIO.mButtonAScale;
     f32 var_f30 = g_drawHIO.mButtonATextScale;
@@ -2924,6 +3185,19 @@ void dMeter2Draw_c::drawButtonA(u8 i_action, f32 i_posX, f32 i_posY, f32 i_textP
 
 void dMeter2Draw_c::drawButtonB(u8 i_action, bool param_1, f32 i_posX, f32 i_posY, f32 i_textPosX,
                                 f32 i_textPosY, f32 i_scale, bool param_7) {
+#if TARGET_PC
+    // See drawButtonA: 3DS Style shifts the A/B group as one — SAME delta,
+    // keeping B's vanilla below-left relation to A.
+    // See drawButtonA: idle-cluster state only.
+    if (dusk::dualscreen::mainHudRestored() && !dComIfGp_event_runCheck() &&
+        !getCameraSubject() && !getItemSubject() && !getPlayerSubject())
+    {
+        i_posX += 43.0f;
+        i_posY -= 48.0f;
+        i_textPosX += 43.0f;
+        i_textPosY -= 48.0f;
+    }
+#endif
     int var_r31 = 0;
     f32 var_f31 = g_drawHIO.mButtonBScale;
     f32 var_f30 = g_drawHIO.mButtonBFontScale;
@@ -3834,6 +4108,21 @@ void dMeter2Draw_c::setButtonIconMidonaAlpha(u32 param_0) {
 
 void dMeter2Draw_c::setButtonIconAlpha(int i_no, u8 unused0, u32 unused1, bool unused2) {
     JUT_ASSERT(0, i_no < SELECT_MAX_e);
+
+#if TARGET_PC
+    // Companion: dMeter2Info's use-button bits are only truthful between
+    // Link's execute (which sets them) and the reset at the end of the
+    // meter's own execute — the companion's draw pass runs after that reset.
+    // This function runs every frame inside the truthful window, so snapshot
+    // all four item buttons' usability here, before the visibility gate
+    // below (dual-screen hides these panes on this screen).
+    if (i_no == 0) {
+        for (int b = 0; b < 4; b++) {
+            sItemUsable[b] =
+                dMeter2Info_isUseButton(dMeter2Info_useButtonBitForItemBtn(b)) != 0;
+        }
+    }
+#endif
 
     if (mpItemXY[i_no]->isVisible() || mpLightXY[i_no]->isVisible() ||
         mpButtonXY[i_no]->isVisible())

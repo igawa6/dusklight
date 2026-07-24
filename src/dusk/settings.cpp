@@ -10,7 +10,10 @@ UserSettings g_userSettings = {
         .enableVsync {"video.enableVsync", true},
         .lockAspectRatio {"video.lockAspectRatio", false},
         .enableFpsOverlay {"game.enableFpsOverlay", false},
-        .fpsOverlayCorner {"game.fpsOverlayCorner", 0},
+        // Companion by default: dual-screen is this fork's headline setup,
+        // and the overlay falls back to a main-screen corner on its own when
+        // no companion display exists (ui/overlay.cpp).
+        .fpsOverlayCorner {"game.fpsOverlayCorner", kFpsCornerCompanion},
         .maxFrameRate {"video.maxFrameRate", 240},
         .rememberWindowSize {"video.rememberWindowSize", false},
         .lastWindowWidth {"video.lastWindowWidth", 0},
@@ -63,10 +66,12 @@ UserSettings g_userSettings = {
         .enableDiscordPresence {"game.enableDiscordPresence", true},
         .menuScalingMode {"game.menuScalingMode", MenuScaling::Wii},
         .dualScreen {"game.dualScreen", true},
+        .dualScreenHudMode {"game.dualScreenHudMode", kDualHudFunctional},
         .dualScreenDisplay {"game.dualScreenDisplay", -1},
         .dualScreenPosX {"game.dualScreenPosX", -1},
         .dualScreenPosY {"game.dualScreenPosY", -1},
         .dualScreenHaptics {"game.dualScreenHaptics", true},
+        .configMigration {"game.configMigration", 0},
 
         // Graphics
         .bloomMode {"game.bloomMode", BloomMode::Dusk},
@@ -211,6 +216,18 @@ UserSettings g_userSettings = {
             ActionBindConfigVar{"actionBindings.turboButton_port2", PAD_NATIVE_BUTTON_INVALID},
             ActionBindConfigVar{"actionBindings.turboButton_port3", PAD_NATIVE_BUTTON_INVALID},
         },
+        .useSlotItem1 {
+            ActionBindConfigVar{"actionBindings.useSlotItem1_port0", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.useSlotItem1_port1", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.useSlotItem1_port2", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.useSlotItem1_port3", PAD_NATIVE_BUTTON_INVALID},
+        },
+        .useSlotItem2 {
+            ActionBindConfigVar{"actionBindings.useSlotItem2_port0", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.useSlotItem2_port1", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.useSlotItem2_port2", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.useSlotItem2_port3", PAD_NATIVE_BUTTON_INVALID},
+        },
     }
 };
 
@@ -274,10 +291,12 @@ void registerSettings() {
     Register(g_userSettings.game.minimalHUD);
     Register(g_userSettings.game.hudScale);
     Register(g_userSettings.game.dualScreen);
+    Register(g_userSettings.game.dualScreenHudMode);
     Register(g_userSettings.game.dualScreenDisplay);
     Register(g_userSettings.game.dualScreenPosX);
     Register(g_userSettings.game.dualScreenPosY);
     Register(g_userSettings.game.dualScreenHaptics);
+    Register(g_userSettings.game.configMigration);
     Register(g_userSettings.game.pauseOnFocusLost,
         [](const bool& value, const bool&) { aurora_set_pause_on_focus_lost(value); });
     Register(g_userSettings.game.enableDiscordPresence);
@@ -387,6 +406,39 @@ void registerSettings() {
     Register(g_userSettings.actionBindings.turboSpeedButton[1]);
     Register(g_userSettings.actionBindings.turboSpeedButton[2]);
     Register(g_userSettings.actionBindings.turboSpeedButton[3]);
+    Register(g_userSettings.actionBindings.useSlotItem1[0]);
+    Register(g_userSettings.actionBindings.useSlotItem1[1]);
+    Register(g_userSettings.actionBindings.useSlotItem1[2]);
+    Register(g_userSettings.actionBindings.useSlotItem1[3]);
+    Register(g_userSettings.actionBindings.useSlotItem2[0]);
+    Register(g_userSettings.actionBindings.useSlotItem2[1]);
+    Register(g_userSettings.actionBindings.useSlotItem2[2]);
+    Register(g_userSettings.actionBindings.useSlotItem2[3]);
+}
+
+void runConfigMigrations() {
+    // Bump this and add a numbered block below when an update needs to
+    // rewrite a value stored by older installs.
+    constexpr int kConfigMigration = 2;
+    auto& applied = g_userSettings.game.configMigration;
+    if (applied.getValue() >= kConfigMigration) {
+        return;
+    }
+    if (applied.getValue() < 1) {
+        // 1: "3DS Style" (Functional) became the intended mode for updated
+        // installs; older configs carry an explicit Cinematic value from
+        // when that was the only/default mode.
+        g_userSettings.game.dualScreenHudMode.setValue(kDualHudFunctional);
+    }
+    if (applied.getValue() < 2) {
+        // 2: dual-screen baseline — the FPS counter homes on the companion
+        // (safe on single-screen: the overlay falls back to a main corner)
+        // and Minimal HUD off (the companion replaces its purpose).
+        g_userSettings.video.fpsOverlayCorner.setValue(kFpsCornerCompanion);
+        g_userSettings.game.minimalHUD.setValue(false);
+    }
+    applied.setValue(kConfigMigration);
+    config::save();
 }
 
 // Transient settings

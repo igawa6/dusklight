@@ -53,6 +53,7 @@
 
 #if TARGET_PC
 #include "dusk/action_bindings.h"
+#include "dusk/companion.h"
 #include "dusk/frame_interpolation.h"
 #include "dusk/settings.h"
 #include "res/Object/Alink.h"
@@ -9335,12 +9336,12 @@ BOOL daAlink_c::checkDebugMoveInput() {
 }
 #endif
 
-BOOL daAlink_c::itemTriggerCheck(u8 i_btnFlag) {
+BOOL daAlink_c::itemTriggerCheck(u16 i_btnFlag) {
     mUseButtonFlags |= i_btnFlag;
     return mItemTrigger & i_btnFlag;
 }
 
-BOOL daAlink_c::itemButtonCheck(u8 i_btnFlag) {
+BOOL daAlink_c::itemButtonCheck(u16 i_btnFlag) {
     mUseButtonFlags |= i_btnFlag;
     return mItemButton & i_btnFlag;
 }
@@ -9521,6 +9522,19 @@ void daAlink_c::setStickData() {
         if (mDoCPd_c::getHoldLockR(PAD_1)) {
             mItemButton |= (daAlink_ITEM_BTN)BTN_R;
         }
+
+#if TARGET_PC
+        // Slot buttons I/II: first-class item buttons 2/3, driven by the
+        // companion's touch layer and the "Use Slot" action binds. Their
+        // bits sit directly above X/Y, so itemTrigger()/itemButton()
+        // (1 << mSelectItemId) cover select-item indices 2/3 unchanged.
+        {
+            const u16 slotTrig = dusk::companion::slotTriggerBits();
+            const u16 slotHold = dusk::companion::slotHoldBits();
+            mItemTrigger |= slotTrig << 2;
+            mItemButton |= slotHold << 2;
+        }
+#endif
 
         if (checkHeavyStateOn(TRUE, TRUE) &&
             (!checkBootsOrArmorHeavy() || !checkNoResetFlg0(FLG0_WATER_IN_MOVE)))
@@ -11292,13 +11306,22 @@ BOOL daAlink_c::checkUpperItemActionFly() {
 
 void daAlink_c::checkItemButtonChange() {
     if (mProcID != PROC_CANOE_PADDLE_PUT && mEquipItem != dItemNo_NONE_e && !checkEquipAnime()) {
-        u8 temp_r0;
-        for (u8 i = 0; i < 2; i++) {
-            temp_r0 = (i + 1) % 2;
-            if (mEquipItem == dComIfGp_getSelectItem(i) &&
-                (mEquipItem != dComIfGp_getSelectItem(temp_r0) || mSelectItemId != temp_r0))
-            {
-                mSelectItemId = i;
+        // Retarget mSelectItemId at whichever button now carries the item in
+        // hand — unless another button carries it too and already owns the
+        // id (generalized from the retail two-button (i + 1) % 2 form).
+        for (u8 i = 0; i < ITEM_BTN_COUNT; i++) {
+            if (mEquipItem == dComIfGp_getSelectItem(i)) {
+                bool otherOwns = false;
+                for (u8 j = 0; j < ITEM_BTN_COUNT; j++) {
+                    if (j != i && mEquipItem == dComIfGp_getSelectItem(j) &&
+                        mSelectItemId == j)
+                    {
+                        otherOwns = true;
+                    }
+                }
+                if (!otherOwns) {
+                    mSelectItemId = i;
+                }
             }
         }
     }
@@ -12103,7 +12126,7 @@ void daAlink_c::allUnequip(BOOL param_0) {
     if (checkNoResetFlg2(FLG2_UNK_1) && param_0 && !checkCanoeRide() &&
         mEquipItem != dItemNo_KANTERA_e)
     {
-        for (u8 i = 0; i < 2; i++) {
+        for (u8 i = 0; i < ITEM_BTN_COUNT; i++) {
             if (dComIfGp_getSelectItem(i) == dItemNo_KANTERA_e) {
                 mSelectItemId = i;
             }
@@ -12155,7 +12178,7 @@ BOOL daAlink_c::checkItemChangeFromButton() {
             itemEquip(0x105);
         } else {
             u8 i;
-            for (i = 0; i < 2; i++) {
+            for (i = 0; i < ITEM_BTN_COUNT; i++) {
                 int proc_type = checkNewItemChange(i);
                 if (proc_type != 0 && itemTriggerCheck(1 << i)) {
                     BOOL var_r27 = changeItemTriggerKeepProc(i, proc_type);
@@ -12176,7 +12199,7 @@ BOOL daAlink_c::checkItemChangeFromButton() {
             } else if (mEquipItem == dItemNo_NONE_e && mThrowBoomerangAcKeep.getActor() == NULL &&
                        !checkCanoeRide() && checkNoUpperAnime() && checkNoResetFlg2(FLG2_UNK_1))
             {
-                for (i = 0; i < 2; i++) {
+                for (i = 0; i < ITEM_BTN_COUNT; i++) {
                     if (dComIfGp_getSelectItem(i) == dItemNo_KANTERA_e) {
                         mSelectItemId = i;
                     }
@@ -12188,7 +12211,7 @@ BOOL daAlink_c::checkItemChangeFromButton() {
                        mEquipItem != 0x102 && (!checkCanoeRide() || !checkFisingRodLure()))
             {
                 if (!checkEventRun() || strcmp(dComIfGp_getEventManager().getRunEventName(), "ANGER") != 0) {
-                    if (strcmp(dComIfGp_getEventManager().getRunEventName(), "ANGER2") != 0 && checkItemSetButton(mEquipItem) == 2) {
+                    if (strcmp(dComIfGp_getEventManager().getRunEventName(), "ANGER2") != 0 && checkItemSetButton(mEquipItem) == ITEM_BTN_COUNT) {
                         allUnequip(1);
                     }
                 }
@@ -14394,7 +14417,7 @@ BOOL daAlink_c::checkGroupItem(int i_itemNo, int i_selItem) const {
 }
 
 int daAlink_c::checkSetItemTrigger(int i_itemNo) {
-    for (u8 i = 0; i < 2; i++) {
+    for (u8 i = 0; i < ITEM_BTN_COUNT; i++) {
         if (checkGroupItem(i_itemNo, dComIfGp_getSelectItem(i)) && itemTriggerCheck(1 << i)) {
             if (i_itemNo != dItemNo_HVY_BOOTS_e) {
                 mSelectItemId = i;
@@ -14406,14 +14429,15 @@ int daAlink_c::checkSetItemTrigger(int i_itemNo) {
     return 0;
 }
 
+// Returns ITEM_BTN_COUNT when the item is bound to no button.
 int daAlink_c::checkItemSetButton(int i_itemNo) {
-    for (u8 i = 0; i < 2; i++) {
+    for (u8 i = 0; i < ITEM_BTN_COUNT; i++) {
         if (checkGroupItem(i_itemNo, dComIfGp_getSelectItem(i))) {
             return i;
         }
     }
 
-    return 2;
+    return ITEM_BTN_COUNT;
 }
 
 bool daAlink_c::checkField() {
@@ -14613,7 +14637,9 @@ int daAlink_c::checkNewItemChange(u8 i_selItemIdx) {
                 return ITEM_PROC_BOTTLE_DRINK;
             }
 
-            if (checkOilBottleItem(sel_item) && checkItemSetButton(dItemNo_KANTERA_e) != 2) {
+            if (checkOilBottleItem(sel_item) &&
+                checkItemSetButton(dItemNo_KANTERA_e) != ITEM_BTN_COUNT)
+            {
                 return ITEM_PROC_KANDELAAR_POUR;
             }
         } else if (sel_item == dItemNo_HVY_BOOTS_e) {
@@ -14658,7 +14684,7 @@ int daAlink_c::checkNewItemChange(u8 i_selItemIdx) {
                     return ITEM_PROC_SPINNER_READY;
                 } else if (checkDungeonWarpItem(sel_item)) {
                     return ITEM_PROC_DUNGEON_WARP_READY;
-                } else if (checkItemSetButton(0x108) != 2 &&
+                } else if (checkItemSetButton(0x108) != ITEM_BTN_COUNT &&
                            (sel_item == dItemNo_WORM_e || sel_item == dItemNo_BEE_CHILD_e))
                 {
                     int itemNo = dComIfGp_getSelectItem(checkItemSetButton(0x108));
@@ -14682,7 +14708,9 @@ int daAlink_c::checkNewItemChange(u8 i_selItemIdx) {
                     return ITEM_PROC_NOT_USE_ITEM;
                 } else if (sel_item == dItemNo_HORSE_FLUTE_e) {
                     return ITEM_PROC_GRASS_WHISTLE;
-                } else if (checkOilBottleItem(sel_item) && checkItemSetButton(0x48) != 2) {
+                } else if (checkOilBottleItem(sel_item) &&
+                           checkItemSetButton(0x48) != ITEM_BTN_COUNT)
+                {
                     return ITEM_PROC_KANDELAAR_POUR;
                 } else if (sel_item == dItemNo_HAWK_EYE_e) {
                     if (acceptSubjectModeChange()) {
@@ -17796,7 +17824,45 @@ int daAlink_c::procGoronRideWait() {
 }
 
 int daAlink_c::execute() {
+#if TARGET_PC
+    // Same hazard as the shield swap below, and the one that actually bit:
+    // loadModelDVD frees Link's WHOLE archive (mpArcHeap->freeAll()) the
+    // frame the clothes timer hits 2, but changeLink() — which rebuilds the
+    // models and re-points field_0x06c0 at the new face model data — only
+    // runs a later frame. Vanilla is safe because clothes only change inside
+    // the pause status window, where the world is frozen and Link's procs
+    // never run. The companion equips gear during live play, so Link keeps
+    // running procs across that window; any proc that sets a face animation
+    // (the idle "service wait" among them) reaches
+    // setFaceBtp -> searchUpdateMaterialID(field_0x06c0) and walks freed
+    // model data. Drive the reload to completion so no gameplay frame ever
+    // runs with the models freed — one hitch beats a use-after-free.
+    //
+    // Metamorphose is excluded: the transform sequence is built around the
+    // multi-frame load and vanilla drives it itself.
+    if (!dComIfGp_isPauseFlag() && mClothesChangeWaitTimer != 0 &&
+        mProcID != PROC_METAMORPHOSE && mProcID != PROC_METAMORPHOSE_ONLY)
+    {
+        bool reloaded = false;
+        for (int guard = 0; guard < 100000; guard++) {
+            if (loadModelDVD() != 0) {
+                reloaded = true;
+                break;
+            }
+            OSYieldThread();
+        }
+        if (!reloaded) {
+            // Loader stalled past the guard: freeze Link for this frame and
+            // retry next — strictly safer than falling through to run procs
+            // over model data the reload may have freed.
+            return 1;
+        }
+    } else {
+        loadModelDVD();
+    }
+#else
     loadModelDVD();
+#endif
 
 #if TARGET_PC
     // The companion screen's gear equip can start a shield swap during live
@@ -17806,11 +17872,17 @@ int daAlink_c::execute() {
     // completion here (bounded — bails to next frame if the DVD thread
     // stalls).
     if (!dComIfGp_isPauseFlag() && mShieldChangeWaitTimer != 0) {
+        bool reloaded = false;
         for (int guard = 0; guard < 100000; guard++) {
             if (loadShieldModelDVD() != 0) {
+                reloaded = true;
                 break;
             }
             OSYieldThread();
+        }
+        if (!reloaded) {
+            // Same bail as the clothes reload above.
+            return 1;
         }
     }
 #endif
@@ -17853,7 +17925,7 @@ int daAlink_c::execute() {
 
     if (checkNoResetFlg2(FLG2_UNK_1) != FALSE &&
         mEquipItem != dItemNo_KANTERA_e &&
-        checkItemSetButton(dItemNo_KANTERA_e) == 2) {
+        checkItemSetButton(dItemNo_KANTERA_e) == ITEM_BTN_COUNT) {
         offKandelaarModel();
     }
 
@@ -18242,7 +18314,7 @@ int daAlink_c::execute() {
 
         if (checkEquipHeavyBoots()) {
             int itemButton = checkItemSetButton(dItemNo_HVY_BOOTS_e);
-            if (itemButton == 2 || checkNotHeavyBootsStage()) {
+            if (itemButton == ITEM_BTN_COUNT || checkNotHeavyBootsStage()) {
                 if (!dComIfGp_checkPlayerStatus1(0, 0x10000) || !checkHookshotRoofLv7Boss()) {
                     setHeavyBoots(0);
                 }
@@ -18763,20 +18835,25 @@ int daAlink_c::execute() {
             }
 
             if (!checkWolf()) {
-                u8 tmp;
-                for (u8 i = 0; i < 2; i++) {
-                    tmp = (i + 1) % 2;
-                    if (dComIfGp_getSelectItem(i) == dItemNo_EMPTY_BOTTLE_e && (mUseButtonFlags & (1 << i)) &&
-                        dComIfGp_getSelectItem(tmp) == dItemNo_EMPTY_BOTTLE_e)
+                // An empty bottle polled on one button marks every other
+                // button that also carries an empty bottle (generalized from
+                // the retail (i + 1) % 2 pair form).
+                for (u8 i = 0; i < ITEM_BTN_COUNT; i++) {
+                    if (dComIfGp_getSelectItem(i) == dItemNo_EMPTY_BOTTLE_e &&
+                        (mUseButtonFlags & (1 << i)))
                     {
-                        mUseButtonFlags |= (u8)(1 << tmp);
+                        for (u8 j = 0; j < ITEM_BTN_COUNT; j++) {
+                            if (j != i && dComIfGp_getSelectItem(j) == dItemNo_EMPTY_BOTTLE_e) {
+                                mUseButtonFlags |= 1 << j;
+                            }
+                        }
                     }
                 }
             }
 
-            for (int i = 0; i < 2; i++) {
+            for (int i = 0; i < ITEM_BTN_COUNT; i++) {
                 if (!(mUseButtonFlags & (1 << i)) && !(field_0x2faf & (1 << i))) {
-                    dMeter2Info_offUseButton(METER2_USEBUTTON_X << i);
+                    dMeter2Info_offUseButton(dMeter2Info_useButtonBitForItemBtn(i));
                 }
             }
 

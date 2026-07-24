@@ -8,6 +8,7 @@
 #include "f_op/f_op_scene_iter.h"
 #include "f_op/f_op_scene_req.h"
 #include <cstdio>
+#include "dusk/dualscreen.h"
 #include "dusk/logging.h"
 
 scene_class* fopScnM_SearchByID(fpc_ProcID id) {
@@ -21,6 +22,10 @@ int fopScnM_ChangeReq(scene_class* i_scene, s16 i_procName, s16 param_3, u16 par
     if (request_id == fpcM_ERROR_PROCESS_ID_e) {
         return 0;
     }
+
+    // The companion splash re-arms on any change that leaves gameplay
+    // (title, file select); play-to-play stage loads keep the last frame.
+    dusk::dualscreen::onSceneChangeReq(i_procName);
 
     l_scnRqID = request_id;
     return 1;

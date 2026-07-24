@@ -55,9 +55,10 @@ static procFunc stick_proc[] = {
 
 #if TARGET_PC
 // Dual-screen: the wheel layout leaves room for the HUD cluster on the
-// right; with the cluster on the companion screen, re-center it.
+// right; with the cluster on the companion screen, re-center it. Functional
+// brings the cluster back, so the wheel returns to its vanilla position.
 static f32 ringCenterOffsetX() {
-    return dusk::dualscreen::hudOnCompanion() ? 52.0f : 0.0f;
+    return dusk::dualscreen::mainHudActive() ? 0.0f : 52.0f;
 }
 #else
 static f32 ringCenterOffsetX() { return 0.0f; }
@@ -259,9 +260,14 @@ dMenu_Ring_c::dMenu_Ring_c(JKRExpHeap* i_heap, STControl* i_stick, CSTControl* i
         if (dComIfGs_getSelectItemIndex(1) == dComIfGs_getLineUpItem(i)) {
             mYButtonSlot = i;
         }
+#if !TARGET_PC
+        // Wii: select index 2 is the wolf down-button ability. On PC it is
+        // the companion's slot I (an inventory slot index), which could
+        // false-match an ability id here.
         if (dComIfGs_getSelectItemIndex(2) == dComIfGs_getWolfAbility(i)) {
             field_0x6ac = i;
         }
+#endif
     }
     mRingRadiusH = g_ringHIO.mRingRadiusH;
     mRingRadiusV = g_ringHIO.mRingRadiusV;

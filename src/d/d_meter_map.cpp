@@ -17,6 +17,7 @@
 #include "m_Do/m_Do_controller_pad.h"
 #include "d/d_camera.h"
 #if TARGET_PC
+#include "dusk/dualscreen.h"
 #include "dusk/settings.h"
 #include <algorithm>
 #endif
@@ -765,6 +766,9 @@ void dMeterMap_c::ctrlShowMap() {
         } else if (!isEventRunCheck() &&
                    (dMeter2Info_getMapStatus() == 0 || dMeter2Info_getMapStatus() == 1) &&
                    isEnableDispMapAndMapDispSizeTypeNo() &&
+                   // Nothing to toggle: the minimap is on the companion in
+                   // both dual-screen modes.
+                   !dusk::dualscreen::hudOnCompanion() &&
                    dusk::getActionBindTrig(dusk::ActionBinds::TOGGLE_MINIMAP, PAD_1))
         {
             if (isDispPosInsideFlg()) {
@@ -946,7 +950,14 @@ void dMeterMap_c::keyCheck() {
                 Z2GetAudioMgr()->seStart(Z2SE_SY_MAP_OPEN_S, NULL, 0, 0, 1.0f, 1.0f, -1.0f, -1.0f,
                                          0);
                 dMeter2Info_set2DVibration();
-            } else {
+            } else
+#if TARGET_PC
+                // Same rule as the RIGHT trigger below: with dual-screen on
+                // the minimap lives on the companion, so this on-screen
+                // toggle state (and its open sound) mean nothing here.
+                if (!dusk::dualscreen::hudOnCompanion())
+#endif
+            {
                 setDispPosInsideFlg_SE_On();
                 Z2GetAudioMgr()->seStart(Z2SE_SY_MAP_OPEN_S, NULL, 0, 0, 1.0f, 1.0f, -1.0f, -1.0f,
                                          0);
@@ -958,7 +969,11 @@ void dMeterMap_c::keyCheck() {
                (dMeter2Info_getMapStatus() == 0 || dMeter2Info_getMapStatus() == 1))
     {
         if (dMeter2Info_getMapStatus() == 0) {
-            if (isEnableDispMapAndMapDispSizeTypeNo()) {
+            // Pressing MAP normally cycles none -> minimap on screen -> full
+            // map screen. With dual-screen on, the minimap permanently lives
+            // on the companion in BOTH modes, so that middle state changes
+            // nothing visible here; skip it and open the full map directly.
+            if (isEnableDispMapAndMapDispSizeTypeNo() && !dusk::dualscreen::hudOnCompanion()) {
                 if (!isDispPosInsideFlg()) {
                     setDispPosInsideFlg_SE_On();
                     Z2GetAudioMgr()->seStart(Z2SE_SY_MAP_OPEN_S, NULL, 0, 0, 1.0f, 1.0f, -1.0f,

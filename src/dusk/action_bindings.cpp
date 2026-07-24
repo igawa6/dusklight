@@ -23,6 +23,8 @@ ActionBindsMap& getActionBinds() {
         {ActionBinds::TOGGLE_MINIMAP,      {&getSettings().actionBindings.toggleMinimap,     "Toggle Minimap"}},
         {ActionBinds::OPEN_DUSKLIGHT_MENU, {&getSettings().actionBindings.openDusklightMenu, "Open Dusklight Menu"}},
         {ActionBinds::TURBO_SPEED_BUTTON,  {&getSettings().actionBindings.turboSpeedButton,  "Turbo Speed Button"}},
+        {ActionBinds::USE_SLOT_ITEM_1,     {&getSettings().actionBindings.useSlotItem1,      "Use Slot I Item"}},
+        {ActionBinds::USE_SLOT_ITEM_2,     {&getSettings().actionBindings.useSlotItem2,      "Use Slot II Item"}},
     };
     return actionBinds;
 }

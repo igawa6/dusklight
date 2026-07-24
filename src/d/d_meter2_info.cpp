@@ -1623,7 +1623,12 @@ void dMeter2Info_c::changeWater(u8 i_slotNo) {
     if (dComIfGs_getItem(i_slotNo, true) == dItemNo_HOT_SPRING_e) {
         dComIfGs_setItem(i_slotNo, dItemNo_WATER_BOTTLE_e);
 
+#if TARGET_PC
+        // Cover the slot buttons (select indices 2/3) as well.
+        for (int i = 0; i < 4; i++) {
+#else
         for (int i = 0; i < 3; i++) {
+#endif
             if (i_slotNo == dComIfGs_getSelectItemIndex(i)) {
                 dComIfGp_setSelectItem(i);
             }

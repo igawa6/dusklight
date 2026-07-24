@@ -2333,7 +2333,12 @@ int dMsgFlow_c::event028(mesg_flow_node_event* i_flowNode_p, fopAc_ac_c* i_speak
     if (dComIfGs_getItem((u8)(SLOT_15 + BombBag), true) != dItemNo_BOMB_ARROW_e) {
         dComIfGs_setItem((u8)(SLOT_15 + BombBag), dItemNo_BOMB_BAG_LV1_e);
     } else {
+#if TARGET_PC
+        // Cover the slot buttons (select indices 2/3) as well.
+        for (int i = 0; i < 4; i++) {
+#else
         for (int i = 0; i < 3; i++) {
+#endif
             if (SLOT_15 + BombBag == dComIfGs_getSelectItemIndex(i)) {
                 u8 mix_item = dComIfGs_getMixItemIndex(i);
 

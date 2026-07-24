@@ -4,6 +4,7 @@
 #include "dusk/main.h"
 #include "dusk/settings.h"
 #include "d/d_com_inf_game.h"
+#include "f_pc/f_pc_name.h"
 #include "JSystem/J2DGraph/J2DOrthoGraph.h"
 #include "m_Do/m_Do_graphic.h"
 #include "m_Do/m_Do_mtx.h"
@@ -24,6 +25,13 @@ bool s_splash = false;
 // Written from the Android UI thread (display add/remove), read by the
 // game thread's per-frame gates — hence atomic.
 std::atomic<bool> s_everPresented{false};
+// Set when the current scene change leaves gameplay (title / file select):
+// the dashboard keeps drawing through the fade-out, and once the HUD meter
+// dies the splash returns instead of a frozen last frame. Play-to-play
+// stage transitions clear it, keeping the existing hold-last-frame skip.
+bool s_leftGameplay = false;
+// Low-health hearts pop-in latch (Cinematic only); see lowLifePopIn().
+bool s_lowLifeLatch = false;
 // Second physical display present? Android reports via setDisplayAvailable;
 // desktop opens its own window on demand.
 #if defined(TARGET_ANDROID) || defined(__ANDROID__) || defined(ANDROID)
@@ -154,8 +162,32 @@ void beginHudCapture() {
     updateAuxWindow(wanted);
     s_active = enabled;
     // Boot/loading: keep the second screen on the branded splash instead of
-    // black until the dashboard has real content.
-    s_splash = wanted && !s_everPresented;
+    // black until the dashboard has real content. Leaving gameplay (quit to
+    // title, game over) re-arms it — endHudCapture keeps the dashboard while
+    // the meter still lives (the fade-out), then falls back to the splash.
+    s_splash = wanted && (!s_everPresented || s_leftGameplay);
+
+    // Low-health hearts pop-in (Cinematic only). Life is 4 units/heart, max
+    // is 5 units/heart (drawLife's own divisors). Threshold scales with max
+    // hearts, clamped to 1..2; the release point is one full heart higher so
+    // the boundary can't flicker.
+    if (!enabled || mainHudRestored() || !companion::hudReady()) {
+        s_lowLifeLatch = false;
+    } else {
+        int showHearts = (dComIfGs_getMaxLife() / 5) / 4;
+        if (showHearts < 1) {
+            showHearts = 1;
+        } else if (showHearts > 2) {
+            showHearts = 2;
+        }
+        const u16 life = dComIfGs_getLife();
+        if (life <= (u16)(showHearts * 4)) {
+            s_lowLifeLatch = true;
+        } else if (life > (u16)((showHearts + 1) * 4)) {
+            s_lowLifeLatch = false;
+        }
+    }
+
     if (enabled) {
         companion::update();
     }
@@ -222,6 +254,27 @@ void endHudCapture() {
 
 bool hudOnCompanion() {
     return getSettings().game.dualScreen.getValue() && s_displayAvailable;
+}
+
+bool mainHudRestored() {
+    return hudOnCompanion() &&
+           getSettings().game.dualScreenHudMode.getValue() == kDualHudFunctional;
+}
+
+bool mainHudActive() {
+    return !hudOnCompanion() || mainHudRestored();
+}
+
+bool lowLifePopIn() {
+    return s_lowLifeLatch;
+}
+
+void onSceneChangeReq(short procName) {
+    s_leftGameplay = procName != fpcNm_PLAY_SCENE_e;
+}
+
+bool leftGameplay() {
+    return s_leftGameplay;
 }
 
 void setDisplayAvailable(bool available) {

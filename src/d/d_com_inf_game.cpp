@@ -1962,7 +1962,14 @@ u8 dComIfGs_getMixItemIndex(int i_no) {
 }
 
 void dComIfGp_setSelectItem(int i_selItemIdx) {
+#if TARGET_PC
+    // Index 2 is a normal item button on PC (companion slot I) — the Wii
+    // branch below stores the RAW SLOT NUMBER there for the wolf down-button
+    // semantics, which would corrupt the slot's resolved-item mirror.
+    if (false) {
+#else
     if (i_selItemIdx == SELECT_ITEM_DOWN) {
+#endif
         if (dComIfGs_getSelectItemIndex(i_selItemIdx) != 0xFF) {
             u8 selItem_slotNo = dComIfGs_getSelectItemIndex(i_selItemIdx);
             g_dComIfG_gameInfo.play.setSelectItem(i_selItemIdx, selItem_slotNo);
@@ -1988,8 +1995,15 @@ void dComIfGp_setSelectItem(int i_selItemIdx) {
 u8 dComIfGp_getSelectItem(int i_selItemIdx) {
     u8 playItem = g_dComIfG_gameInfo.play.getSelectItem(i_selItemIdx);
 
+#if TARGET_PC
+    // The companion's slot buttons (indices 2/3) are full item buttons and
+    // carry combos too — resolve the mix on all four.
+    if (i_selItemIdx >= 0 && i_selItemIdx < 4 &&
+        dComIfGs_getMixItemIndex(i_selItemIdx) != 0xFF)
+#else
     if ((i_selItemIdx == SELECT_ITEM_X || i_selItemIdx == SELECT_ITEM_Y) &&
         dComIfGs_getMixItemIndex(i_selItemIdx) != 0xFF)
+#endif
     {
         u8 saveItem = dComIfGs_getItem(dComIfGs_getMixItemIndex(i_selItemIdx), false);
 

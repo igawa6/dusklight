@@ -181,6 +181,26 @@ const ResTIMG* dmapFloorFaceTimg(bool i_wolf) {
     return (const ResTIMG*)(i_wolf ? l_dmapFaceWolfBti : l_dmapFaceRinkBti);
 }
 
+// Same portraits, but point-sampled. The source art is only 44x45, so the
+// bilinear filter baked into the BTI header turns any upscale soft. The
+// floor-list markers want the smooth version; the transform button draws
+// them much larger and wants crisp pixels instead — no filtering pass, just
+// the texture's own filter mode. One writable copy per form, patched once.
+const ResTIMG* dmapFloorFaceTimgSharp(bool i_wolf) {
+    alignas(32) static u8 s_sharp[2][sizeof(l_dmapFaceRinkBti)];
+    static bool s_ready[2];
+    const int idx = i_wolf ? 1 : 0;
+    if (!s_ready[idx]) {
+        memcpy(s_sharp[idx], i_wolf ? l_dmapFaceWolfBti : l_dmapFaceRinkBti,
+            sizeof(l_dmapFaceRinkBti));
+        ResTIMG* t = (ResTIMG*)s_sharp[idx];
+        t->minFilter = 0;  // GX_NEAR
+        t->magFilter = 0;
+        s_ready[idx] = true;
+    }
+    return (const ResTIMG*)s_sharp[idx];
+}
+
 const ResTIMG* dmapFloorFaceTimg() {
     return dmapFloorFaceTimg(daPy_py_c::checkNowWolf());
 }

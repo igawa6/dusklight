@@ -180,8 +180,8 @@ int ammoForItem(u8 itemNo, int i_xy, int i_invSlot) {
 
 #include "companion_logo.inc"
 
-// Pause-menu decoration art (see DECO_* in companion_internal.h). Bigger
-// buffers: TT_BLOCK128 is 128x128.
+// Pause-menu decoration art (see DECO_* in companion_internal.h). Sized for
+// the largest piece, TT_BLOCK128 (128x128).
 alignas(32) u8 s_decoBuf[DECO_COUNT][0x9000];
 bool s_decoValid[DECO_COUNT];
 
@@ -226,6 +226,8 @@ void loadCollectIcons() {
         dRes_INDEX_CLCTRES_BTI_IM_DUNGEON_MAP_FLOOR_PARTS_10_e,  // wi_save plate
         dRes_INDEX_CLCTRES_BTI_TT_LINE2_e,
         dRes_INDEX_CLCTRES_BTI_TT_YAKUSHIMA_e,
+        dRes_INDEX_CLCTRES_BTI_TT_SPOT_SQUARE3_e,
+        dRes_INDEX_CLCTRES_BTI_TT_KAZARI_2ND_OKAN_64_e,
     };
     for (int i = 0; i < DECO_COUNT; i++) {
         const u32 size = JKRReadIdxResource(s_decoBuf[i], sizeof(s_decoBuf[0]), l_deco[i], arc);

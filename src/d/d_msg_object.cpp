@@ -2325,7 +2325,15 @@ void dMsgObject_c::setSmellTypeLocal(u8 smellType) {
     mSmellType = smellType;
     dComIfGs_onItemFirstBit(smellType);
     dComIfGs_setCollectSmell(mSmellType);
+#if !TARGET_PC
+    // Retail parks the scent's ITEM NUMBER in select index 2 (unused on GC,
+    // the wolf down-button on Wii). On PC that index is the companion's
+    // slot I item binding — an inventory SLOT index — so this write would
+    // wipe the player's binding. Every reader that matters gets the scent
+    // via dComIfGs_getCollectSmell (set above); the few select-index-2
+    // readers resolve out-of-range values to "no item" anyway.
     dComIfGs_setSelectItemIndex(2, mSmellType);
+#endif
 }
 
 u8 dMsgObject_c::getSelectCursorPosLocal() {

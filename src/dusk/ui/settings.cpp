@@ -74,6 +74,40 @@ constexpr std::array kFpsOverlayCornerNames = {
     "Companion",
 };
 
+// Indexed by dusk::kDualHudCinematic / kDualHudFunctional. User-facing names
+// lean on familiar Nintendo layouts: "Wii U Style" = whole HUD off-loaded to
+// the second screen (Wind Waker HD off-TV look), "3DS Style" = vital HUD on
+// the main screen with a touch inventory/map below (OoT 3D layout).
+constexpr std::array kDualScreenHudModeNames = {
+    "Wii U Style",
+    "3DS Style",
+};
+
+// Shared by every dual-screen button: turning the feature on points the FPS
+// counter at the companion and clears Minimal HUD; turning it off hands the
+// counter back. Callers invoke this only on an Off <-> On transition —
+// switching between modes leaves both settings alone, so a counter the user
+// re-homed afterwards is not yanked back. The caller saves the config.
+void applyDualScreenSideEffects(bool enabled) {
+    auto& corner = getSettings().video.fpsOverlayCorner;
+    auto& minimal = getSettings().game.minimalHUD;
+    // Only when a second display actually exists — on a single-screen device
+    // the setting is inert, and pointing the counter at a companion that never
+    // draws would simply hide it.
+    if (enabled && dusk::dualscreen::hudOnCompanion()) {
+        if (corner.getValue() != dusk::kFpsCornerCompanion) {
+            corner.setValue(dusk::kFpsCornerCompanion);
+        }
+        if (minimal.getValue()) {
+            minimal.setValue(false);
+        }
+    } else if (!enabled && corner.getValue() == dusk::kFpsCornerCompanion) {
+        // Explicit main corner, NOT getDefaultValue(): the default itself is
+        // Companion now, which would leave this hand-back a no-op.
+        corner.setValue(0);
+    }
+}
+
 
 constexpr std::array kInterpolationModes = {
     "Off",
@@ -1198,38 +1232,70 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
             "Scales the size of the gameplay HUD (hearts, buttons, mini-map, etc.). Does not affect dialog boxes or menus.",
             50, 200, 5,
             [] { return getSettings().game.minimalHUD.getValue(); });
-        config_bool_select(leftPane, rightPane, getSettings().game.dualScreen,
-            {
-                .key = "Dual Screen HUD (Experimental)",
-                .helpText =
-                    "Redirects the HUD, mini-map, and pause menus into a separate view, shown in "
-                    "the \"Dual Screen Preview\" window.<br/>Prototype for second-monitor output."
-                    "<br/>Moves the FPS counter to the companion screen and turns off Minimal HUD "
-                    "when enabled.",
-                .onChange =
-                    [](bool value) {
-                        auto& corner = getSettings().video.fpsOverlayCorner;
-                        auto& minimal = getSettings().game.minimalHUD;
-                        bool changed = false;
-                        // Only when a second display actually exists — on a
-                        // single-screen device the setting is inert, and
-                        // pointing the counter at a companion that never draws
-                        // would simply hide it.
-                        if (value && dusk::dualscreen::hudOnCompanion()) {
-                            corner.setValue(dusk::kFpsCornerCompanion);
-                            changed = true;
-                            if (minimal.getValue()) {
-                                minimal.setValue(false);
-                            }
-                        } else if (!value && corner.getValue() == dusk::kFpsCornerCompanion) {
-                            corner.setValue(corner.getDefaultValue());
-                            changed = true;
+        leftPane.register_control(
+            leftPane.add_select_button({
+                // Short key: the row prints the key on the left and the live
+                // value on the right, and "Wii U Style" needs the room.
+                .key = "Dual Screen HUD",
+                .getValue =
+                    [] {
+                        if (!getSettings().game.dualScreen.getValue()) {
+                            return Rml::String{"Off"};
                         }
-                        if (changed) {
-                            // config::save() already ran before this callback.
-                            config::save();
+                        int idx = getSettings().game.dualScreenHudMode.getValue();
+                        if (idx < 0 || idx >= static_cast<int>(kDualScreenHudModeNames.size())) {
+                            idx = dusk::kDualHudFunctional;
                         }
+                        return Rml::String{kDualScreenHudModeNames[idx]};
                     },
+                // Never dot-marked as "modified": dual-screen defaults to Off,
+                // so the marker would sit there for every dual-screen player
+                // forever — it reads as a mystery bullet, not as information.
+                .isModified = [] { return false; },
+            }),
+            rightPane, [](Pane& pane) {
+                pane.add_button(
+                        {
+                            .text = "Off",
+                            .isSelected = [] { return !getSettings().game.dualScreen.getValue(); },
+                        })
+                    .on_pressed([] {
+                        mDoAud_seStartMenu(kSoundItemChange);
+                        getSettings().game.dualScreen.setValue(false);
+                        applyDualScreenSideEffects(false);
+                        config::save();
+                    });
+                for (int i = 0; i < static_cast<int>(kDualScreenHudModeNames.size()); ++i) {
+                    pane.add_button(
+                            {
+                                .text = kDualScreenHudModeNames[i],
+                                .isSelected =
+                                    [i] {
+                                        return getSettings().game.dualScreen.getValue() &&
+                                               getSettings().game.dualScreenHudMode.getValue() == i;
+                                    },
+                            })
+                        .on_pressed([i] {
+                            mDoAud_seStartMenu(kSoundItemChange);
+                            const bool wasOn = getSettings().game.dualScreen.getValue();
+                            getSettings().game.dualScreen.setValue(true);
+                            getSettings().game.dualScreenHudMode.setValue(i);
+                            // Only on the Off -> On edge: a plain mode switch
+                            // must not re-force the FPS corner or Minimal HUD
+                            // the user may have re-adjusted since enabling.
+                            if (!wasOn) {
+                                applyDualScreenSideEffects(true);
+                            }
+                            config::save();
+                        });
+                }
+                pane.add_rml(
+                    "<br/>Shows the HUD, map and menus on a second screen. "
+                    "Wii U Style moves the whole HUD there, leaving the game view clear. "
+                    "3DS Style keeps hearts, A/B/Z and the d-pad on the main screen and "
+                    "makes the second screen a touch control surface."
+                    "<br/>Enabling moves the FPS counter to the companion screen and turns "
+                    "off Minimal HUD.");
             });
         addOption("Restore Wii 1.0 Glitches", getSettings().game.restoreWiiGlitches,
             "Restores patched glitches from Wii USA 1.0, the first released version.");

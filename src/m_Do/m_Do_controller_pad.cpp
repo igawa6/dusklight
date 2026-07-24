@@ -13,6 +13,7 @@
 #include "tracy/Tracy.hpp"
 
 #if TARGET_PC
+#include "dusk/companion.h"
 #include "dusk/menu_pointer.h"
 #include "dusk/ui/touch_controls.hpp"
 #endif
@@ -113,6 +114,40 @@ void mDoCPd_c::read() {
         interface2++;
 #endif
     }
+
+#if TARGET_PC
+    // Companion Z button (Functional dual-screen layout). Injected here, at
+    // the pad, rather than at Link's item masks so that every consumer sees
+    // an ordinary Z press — talking to Midna, the camera, and Z actions
+    // inside menus all work without their own hooks. Applied after the fill
+    // loop because a disconnected pad memsets the whole struct to zero.
+    // Consumed (and dropped) even when it cannot be applied, so a press
+    // never sits latched waiting for a later frame.
+    bool injectZ = dusk::companion::consumeZPress();
+    // Touch X/Y buttons assert a HELD mask for as long as the finger rests
+    // on the button — bow-class items fire on release, so a one-shot press
+    // would only raise them. (The I/II slot buttons don't come through the
+    // pad: they are item buttons 2/3, injected at Link's item masks in
+    // setStickData.) The trigger (pressed) bits are edge-computed here
+    // against the previous frame.
+    u32 holdMask = dusk::companion::padHoldMask();
+#if DEBUG
+    // Debug mode redirects converted input to m_debugCpadInfo and zeroes the
+    // game-facing array — don't leak companion input past that steal.
+    if (dComIfG_isDebugMode()) {
+        injectZ = false;
+        holdMask = 0;
+    }
+#endif
+    if (injectZ) {
+        m_cpadInfo[0].mButtonFlags |= PAD_TRIGGER_Z;
+        m_cpadInfo[0].mPressedButtonFlags |= PAD_TRIGGER_Z;
+    }
+    static u32 sPrevHoldMask;
+    m_cpadInfo[0].mButtonFlags |= holdMask;
+    m_cpadInfo[0].mPressedButtonFlags |= holdMask & ~sPrevHoldMask;
+    sPrevHoldMask = holdMask;
+#endif
 }
 
 void mDoCPd_c::convert(interface_of_controller_pad* pInterface, JUTGamePad* pPad) {

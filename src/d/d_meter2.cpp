@@ -167,7 +167,12 @@ int dMeter2_c::_create() {
     mXSetFlag = dComIfGp_isXSetFlag(2);
     mYSetFlag = dComIfGp_isYSetFlag(2);
 
+#if TARGET_PC
+    // Refresh the slot buttons' play mirror too (select indices 2/3).
+    for (int i = 0; i < 4; i++) {
+#else
     for (int i = 0; i < 2; i++) {
+#endif
         dComIfGp_setSelectItem(i);
     }
 
@@ -367,9 +372,10 @@ int dMeter2_c::_draw() {
     // meter (type 1), the crawling arrows (type 2) and the scope overlay
     // (type 4, hawkeye/slingshot zoom mask), which are gameplay-critical and
     // stay on the main view.
-    const bool subContentsOnMain =
-        !dusk::dualscreen::hudOnCompanion() || mSubContentType == 1 ||
-        mSubContentType == 2 || mSubContentType == 4;
+    // Functional keeps every contextual panel on the main screen; Cinematic
+    // hands all but the gameplay-critical ones to the companion.
+    const bool subContentsOnMain = dusk::dualscreen::mainHudActive() ||
+        mSubContentType == 1 || mSubContentType == 2 || mSubContentType == 4;
 #else
     const bool subContentsOnMain = true;
 #endif
@@ -736,6 +742,24 @@ void dMeter2_c::moveLife() {
         mHeartScale = g_drawHIO.mHeartMarkScale;
         draw_life = true;
     }
+
+#if TARGET_PC
+    // drawLife is lazy — it only re-runs when the value or scale changes.
+    // Defensive re-layout on a partition change: the companion draws the
+    // game's own heart panes with the explicit-rect J2DPicture::draw (it
+    // saves and restores each pane's position matrix, so nothing SHOULD be
+    // left stale), and this forced draw_life guarantees fresh layout even if
+    // a future companion draw path forgets that restore.
+    // Static rather than a member: the meter is a singleton and the decomp's
+    // struct layout is fixed.
+    const bool heartsOnMain =
+        dusk::dualscreen::mainHudActive() || dusk::dualscreen::lowLifePopIn();
+    static bool sHeartsOnMainPrev = true;
+    if (sHeartsOnMainPrev != heartsOnMain) {
+        sHeartsOnMainPrev = heartsOnMain;
+        draw_life = true;
+    }
+#endif
 
     if (mLargeHeartScale != g_drawHIO.mBigHeartScale) {
         mLargeHeartScale = g_drawHIO.mBigHeartScale;
@@ -1459,6 +1483,25 @@ void dMeter2_c::moveButtonA() {
         draw_buttonA = true;
     }
 
+#if TARGET_PC
+    // Functional offsets A's position (drawButtonA): a dual-screen mode
+    // change must force this lazy redraw or the button keeps the other
+    // layout's spot until the next organic change.
+    static bool sARestoredPrev = false;
+    // Mirrors drawButtonA's own offset gate EXACTLY, including its aim term
+    // (hawk/grass-whistle/status-0x100) — an asymmetric predicate here would
+    // miss the redraw when only that term flips.
+    const bool aAiming = (mStatus & 0x100) || daPy_getPlayerActorClass()->checkHawkWait() ||
+        daPy_getPlayerActorClass()->checkGrassWhistle();
+    const bool aOffsetState = dusk::dualscreen::mainHudRestored() &&
+        !dComIfGp_event_runCheck() && !mpMeterDraw->getCameraSubject() &&
+        !mpMeterDraw->getItemSubject() && !mpMeterDraw->getPlayerSubject() && !aAiming;
+    if (sARestoredPrev != aOffsetState) {
+        sARestoredPrev = aOffsetState;
+        draw_buttonA = true;
+    }
+#endif
+
     if (draw_buttonA) {
         mpMeterDraw->drawButtonA(mDoStatus, mButtonATalkPosX[0], mButtonATalkPosY[0],
                                  mButtonATalkPosX[1], mButtonATalkPosY[1], field_0x144, var_r29,
@@ -1668,6 +1711,18 @@ void dMeter2_c::moveButtonB() {
         field_0x1c6 = daPy_getPlayerActorClass()->checkGrassWhistle();
         draw_buttonB = true;
     }
+
+#if TARGET_PC
+    // See moveButtonA: Functional offsets B's position (drawButtonB).
+    static bool sBRestoredPrev = false;
+    const bool bOffsetState = dusk::dualscreen::mainHudRestored() &&
+        !dComIfGp_event_runCheck() && !mpMeterDraw->getCameraSubject() &&
+        !mpMeterDraw->getItemSubject() && !mpMeterDraw->getPlayerSubject();
+    if (sBRestoredPrev != bOffsetState) {
+        sBRestoredPrev = bOffsetState;
+        draw_buttonB = true;
+    }
+#endif
 
     if (draw_buttonB) {
         mpMeterDraw->drawButtonB(mAStatus, field_0x128 == 0, field_0x148[0], field_0x150[0],
@@ -1887,6 +1942,23 @@ void dMeter2_c::moveButtonXY() {
         sp8[i] = 0;
         spC[i] = 0;
     }
+
+#if TARGET_PC
+    // While Functional dual-screen is on, the pane sync force-hides the X/Y
+    // action-word panes every frame, so their game-side visibility flag goes
+    // stale (drawButtonXY only re-asserts it on a status change). Force a
+    // redraw on the partition change so the flag is rebuilt from game state
+    // — an unconditional show() on exit resurrected stale wolf words in
+    // human form. Static rather than a member: the meter is a singleton and
+    // the decomp's struct layout is fixed.
+    static bool sXYRestoredPrev = false;
+    const bool xyRestored = dusk::dualscreen::mainHudRestored();
+    if (sXYRestoredPrev != xyRestored) {
+        sXYRestoredPrev = xyRestored;
+        sp8[0] = 1;
+        sp8[1] = 1;
+    }
+#endif
 
     if (field_0x33c != g_drawHIO.mButtonXScale) {
         field_0x33c = g_drawHIO.mButtonXScale;
@@ -2220,7 +2292,17 @@ void dMeter2_c::moveButtonCross() {
         temp_f31 = mpMap->getMapDispEdgeTop();
         temp_f1 = (temp_f31 - mpMeterDraw->getButtonCrossParentInitTransY()) - 15.0f;
 
-        if (mpMap->isDispPosInsideFlg()) {
+        // The d-pad slides up to clear the minimap. In Functional dual-screen
+        // the minimap is on the companion, so there is nothing on this screen
+        // to clear — hold the resting (map-hidden) position rather than
+        // leaving a gap for an absent map.
+        bool mapInside = mpMap->isDispPosInsideFlg();
+#if TARGET_PC
+        if (dusk::dualscreen::mainHudRestored()) {
+            mapInside = false;
+        }
+#endif
+        if (mapInside) {
             if (field_0x1b4 < g_drawHIO.mButtonCrossMoveFrame) {
                 field_0x1b4++;
                 draw_cross = true;
@@ -2597,7 +2679,12 @@ void dMeter2_c::moveBombNum() {
 
                 if (var_r22 == 0) {
                     if (temp_r31 == dItemNo_BOMB_ARROW_e) {
+#if TARGET_PC
+                        // Bomb-arrow combos can live on the slot buttons too.
+                        for (int j = 0; j < 4; j++) {
+#else
                         for (int j = 0; j < 2; j++) {
+#endif
                             if (i + SLOT_15 == dComIfGs_getSelectItemIndex(j) ||
                                 i + SLOT_15 == dComIfGs_getMixItemIndex(j))
                             {
@@ -2610,7 +2697,11 @@ void dMeter2_c::moveBombNum() {
                     dComIfGs_setItem(i + SLOT_15, dItemNo_BOMB_BAG_LV1_e);
                     dComIfGp_setItem(i + SLOT_15, dItemNo_BOMB_BAG_LV1_e);
 
+#if TARGET_PC
+                    for (int j = 0; j < 4; j++) {
+#else
                     for (int j = 0; j < 2; j++) {
+#endif
                         if (i + SLOT_15 == dComIfGs_getSelectMixItemNoArrowIndex(j)) {
                             dComIfGp_setSelectItem(j);
                         }

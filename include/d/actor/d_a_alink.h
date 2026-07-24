@@ -1371,6 +1371,28 @@ public:
         PROC_MAX,
     };
 
+#if TARGET_PC
+    // PC: four ITEM buttons — X, Y and the companion's two slot buttons
+    // occupy bits 0-3, so itemTrigger()/itemButton() (1 << mSelectItemId)
+    // extend to select-item indices 2/3 with no remapping. The remaining
+    // buttons shift up; the mask fields and check params are u16 for BTN_R.
+    // Every reader is symbolic (verified: no raw masks or switches), so the
+    // renumbering is transparent.
+    enum daAlink_ITEM_BTN {
+        /* 0x001 */ BTN_X = (1 << 0),
+        /* 0x002 */ BTN_Y = (1 << 1),
+        /* 0x004 */ BTN_S1 = (1 << 2),
+        /* 0x008 */ BTN_S2 = (1 << 3),
+        /* 0x010 */ BTN_Z = (1 << 4),
+        /* 0x020 */ BTN_B = (1 << 5),
+        /* 0x040 */ BTN_A = (1 << 6),
+        /* 0x080 */ BTN_L = (1 << 7),
+        /* 0x100 */ BTN_R = (1 << 8),
+    };
+    // Item-select buttons Link polls (X, Y + slots I/II); doubles as
+    // checkItemSetButton's "bound to no button" sentinel.
+    static const int ITEM_BTN_COUNT = 4;
+#else
     enum daAlink_ITEM_BTN {
         /* 0x01 */ BTN_X = (1 << 0),
         /* 0x02 */ BTN_Y = (1 << 1),
@@ -1380,6 +1402,8 @@ public:
         /* 0x20 */ BTN_L = (1 << 5),
         /* 0x40 */ BTN_R = (1 << 6),
     };
+    static const int ITEM_BTN_COUNT = 2;
+#endif
 
     /**
      * Moving direction calculated from an angle
@@ -1582,8 +1606,8 @@ public:
     bool checkLv2MiddleBossBgRide(s16 i_procName);
     bool getSlidePolygon(cM3dGPla* o_tripla);
     BOOL checkSlope() const;
-    BOOL itemTriggerCheck(u8 i_btnFlag);
-    BOOL itemButtonCheck(u8 i_btnFlag);
+    BOOL itemTriggerCheck(u16 i_btnFlag);
+    BOOL itemButtonCheck(u16 i_btnFlag);
     BOOL itemButton();
     BOOL itemTrigger();
     BOOL spActionButton();
@@ -4127,9 +4151,18 @@ public:
     /* 0x02F5C */ LIGHT_INFLUENCE mMagneBootsPlight;
     /* 0x02F7C */ u8 field_0x2f7c[16];
     /* 0x02F8C */ u8 field_0x2f8c;
+#if TARGET_PC
+    // Widened for the four-item-button bit space (BTN_R = 1 << 8). Offsets
+    // after this point shift on PC; the port compiles everything from
+    // source, so only symbolic access exists.
+    u16 mItemTrigger;
+    u16 mItemButton;
+    u16 field_0x2f8f;
+#else
     /* 0x02F8D */ u8 mItemTrigger;
     /* 0x02F8E */ u8 mItemButton;
     /* 0x02F8F */ u8 field_0x2f8f;
+#endif
     /* 0x02F90 */ u8 field_0x2f90;
     /* 0x02F91 */ u8 field_0x2f91;
     /* 0x02F92 */ u8 mLeftHandIndex;
@@ -4160,8 +4193,13 @@ public:
     /* 0x02FAB */ u8 field_0x2fab;
     /* 0x02FAC */ u8 mExitDirection;
     /* 0x02FAD */ u8 mPeepExitID;
+#if TARGET_PC
+    u16 mUseButtonFlags;  // widened, see mItemTrigger
+    u16 field_0x2faf;
+#else
     /* 0x02FAE */ u8 mUseButtonFlags;
     /* 0x02FAF */ u8 field_0x2faf;
+#endif
     /* 0x02FB0 */ u8 field_0x2fb0;
     /* 0x02FB1 */ u8 mWolfLockNum;
     /* 0x02FB2 */ u8 mMidnaTalkDelayTimer;

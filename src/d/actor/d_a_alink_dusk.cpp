@@ -3,6 +3,7 @@
 #include "d/d_meter2.h"
 #include "d/d_meter2_draw.h"
 #include "d/d_meter2_info.h"
+#include "dusk/dualscreen.h"
 
 void daAlink_c::handleWolfHowl() {
     if (checkWolf()) {
@@ -93,8 +94,13 @@ bool daAlink_c::checkQuickTransformOK() {
         return false;
     }
 
-    // Ensure that the Z Button is not dimmed
-    if (meterDrawPtr->getButtonZAlpha() != 1.f) {
+    // Ensure that the Z Button is not dimmed. 3DS Style is exempt: it hides
+    // the main screen's Z button outright, and without the Cinematic
+    // companion-composite alpha pin (which holds this at 1) the game's own
+    // dim animation makes the proxy read false at random — the conditions
+    // the dim stood for (events, Midna availability, menus) are all checked
+    // explicitly around this.
+    if (!dusk::dualscreen::mainHudRestored() && meterDrawPtr->getButtonZAlpha() != 1.f) {
         return false;
     }
 

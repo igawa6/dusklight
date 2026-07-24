@@ -6,13 +6,16 @@
 
 #include "dusk/companion.h"
 #include "dusk/companion_internal.h"
+#include "dusk/dualscreen.h"
 
 #include "Z2AudioLib/Z2SeMgr.h"
 #include "d/d_com_inf_game.h"
 #include "d/d_item_data.h"
+#include "d/d_meter2_draw.h"
 #include "d/d_meter2_info.h"
 #include "d/actor/d_a_player.h"
 #include "d/actor/d_a_alink.h"
+#include <dolphin/pad.h>
 
 #include <cstdarg>
 #include <cstdio>
@@ -22,7 +25,11 @@ namespace {
 
 // Drag gesture tracking.
 bool s_touchTracking = false;
+f32 s_readerTapRect[4] = {};
 f32 s_downX, s_downY;
+// This gesture started inside the Functional left column's bottom box, so a
+// vertical release there pages its carousel.
+bool s_leftBoxSwipe = false;
 
 // Post the transient equip feedback line (drawn by the active page).
 void setEquipMsg(int frames, const char* fmt, ...) {
@@ -33,11 +40,11 @@ void setEquipMsg(int frames, const char* fmt, ...) {
     s_equipMsgFrames = frames;
 }
 
-// Bow combos. Dropping a bomb bag / hawkeye onto a button that holds the
-// bow (plain or already comboed) arms bomb/hawk arrows — the same state the
-// item wheel writes (select = bomb slot, mix = bow slot). Dropping the bow
-// onto its own combo button turns the combo off. Returns true when the drop
-// was consumed as a combo action.
+// Bow combos, on any of the four item buttons. Dropping a bomb bag /
+// hawkeye onto a button that holds the bow (plain or already comboed) arms
+// bomb/hawk arrows — the same state the item wheel writes (select = bomb
+// slot, mix = bow slot). Dropping the bow onto its own combo button turns
+// the combo off. Returns true when the drop was consumed as a combo action.
 bool tryBowCombo(int btn, int slot, u8 itemNo) {
     const bool comboPartner = itemNo == dItemNo_NORMAL_BOMB_e ||
         itemNo == dItemNo_WATER_BOMB_e || itemNo == dItemNo_POKE_BOMB_e ||
@@ -45,16 +52,20 @@ bool tryBowCombo(int btn, int slot, u8 itemNo) {
     const bool btnHasBow = dComIfGs_getSelectItemIndex(btn) == SLOT_4 ||
         dComIfGs_getMixItemIndex(btn) == SLOT_4;
     if (comboPartner && btnHasBow) {
-        // The bow can only ever mix on one button.
-        const int other = 1 - btn;
-        if (dComIfGs_getMixItemIndex(other) == SLOT_4) {
-            dComIfGs_setMixItemIndex(other, dItemNo_NONE_e);
-            dComIfGs_setSelectItemIndex(other, SLOT_4);
-        }
-        // If the combo partner sits on the other button, clear it there.
-        if (dComIfGs_getSelectItemIndex(other) == slot) {
-            dComIfGs_setMixItemIndex(other, dItemNo_NONE_e);
-            dComIfGs_setSelectItemIndex(other, dItemNo_NONE_e);
+        for (int other = 0; other < 4; other++) {
+            if (other == btn) {
+                continue;
+            }
+            // The bow can only ever mix on one button.
+            if (dComIfGs_getMixItemIndex(other) == SLOT_4) {
+                dComIfGs_setMixItemIndex(other, dItemNo_NONE_e);
+                dComIfGs_setSelectItemIndex(other, SLOT_4);
+            }
+            // If the combo partner sits on another button, clear it there.
+            if (dComIfGs_getSelectItemIndex(other) == slot) {
+                dComIfGs_setMixItemIndex(other, dItemNo_NONE_e);
+                dComIfGs_setSelectItemIndex(other, dItemNo_NONE_e);
+            }
         }
         dComIfGs_setMixItemIndex(btn, SLOT_4);
         dComIfGs_setSelectItemIndex(btn, (u8)slot);
@@ -75,41 +86,114 @@ bool tryBowCombo(int btn, int slot, u8 itemNo) {
     return false;
 }
 
-void equipFromCompanion(int btn, int slot) {
+void plainEquip(int btn, int slot);
+
+bool equipFromCompanion(int btn, int slot) {
     if (anyMenuOpen()) {
         setEquipMsg(150, "Can't equip while a menu is open");
         queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
-        return;
+        return false;
     }
-    if (daPy_getPlayerActorClass() != NULL && daPy_getPlayerActorClass()->checkWolf()) {
+    if (companionWolf()) {
         setEquipMsg(150, "Can't equip items as a wolf");
         queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
-        return;
+        return false;
     }
     if (slot < 0 || slot >= MAX_ITEM_SLOTS ||
         dComIfGs_getItem(slot, false) == dItemNo_NONE_e)
     {
-        return;
+        return false;
     }
     const u8 itemNo = dComIfGs_getItem(slot, false);
-    if (tryBowCombo(btn, slot, itemNo)) {
-        return;
+    if (btn >= DROP_TARGET_SLOT1) {
+        // Talk/trade items need the per-button talk-event plumbing that only
+        // exists for X/Y.
+        if (daPy_py_c::checkTradeItem(itemNo)) {
+            setEquipMsg(150, "Can't put that on a slot");
+            queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
+            return false;
+        }
+        // Dropping the slot's own PLAIN item back unbinds it (toggle) —
+        // unless it forms a combo (bow onto its combo = combo off, below).
+        if (slotBinding(btn - DROP_TARGET_SLOT1) == slot &&
+            dComIfGs_getMixItemIndex(btn) == 0xFF)
+        {
+            setSlotBinding(btn - DROP_TARGET_SLOT1, -1);
+            setEquipMsg(120, "Cleared slot %s", btn == DROP_TARGET_SLOT1 ? "I" : "II");
+            queueSound(Z2SE_SY_CURSOR_CANCEL, HAPTIC_LIGHT);
+            return true;
+        }
     }
+    // Ambiguous drop: a combo partner onto a bow-holding button. GC vanilla
+    // splits the outcomes across inputs (X/Y equip replaces, only the
+    // explicit R press combines) — touch has one gesture, so ask instead of
+    // assuming. The chooser (drawComboChoice) resolves to tryBowCombo or
+    // plainEquip in handleTouch.
+    {
+        const bool comboPartner = itemNo == dItemNo_NORMAL_BOMB_e ||
+            itemNo == dItemNo_WATER_BOMB_e || itemNo == dItemNo_POKE_BOMB_e ||
+            itemNo == dItemNo_HAWK_EYE_e;
+        const bool btnHasBow = dComIfGs_getSelectItemIndex(btn) == SLOT_4 ||
+            dComIfGs_getMixItemIndex(btn) == SLOT_4;
+        if (comboPartner && btnHasBow) {
+            s_comboChoiceBtn = btn;
+            s_comboChoiceSlot = slot;
+            queueSound(Z2SE_SY_CURSOR_ITEM, HAPTIC_LIGHT);
+            return true;
+        }
+    }
+    // Combo-off still works directly (bow dropped onto its own combo).
+    if (tryBowCombo(btn, slot, itemNo)) {
+        return true;
+    }
+    plainEquip(btn, slot);
+    return true;
+}
 
-    // Plain equip. Clear any stale mix on this button first: leaving
-    // mix = bow behind would make it keep resolving to the bow.
+// Plain (no-combo) equip executor — the wheel's setItem semantics; also the
+// chooser's "Replace" outcome.
+void plainEquip(int btn, int slot) {
+    // Plain equip onto any of the four buttons (btn IS the select-item
+    // index; the slots are indices 2/3), with the wheel's own semantics
+    // (dMenu_Ring_c::setItem): the equipped item always arrives PLAIN; a
+    // button whose SELECT is taken receives this button's previous
+    // select-and-mix pair whole (a swapped-aside combo survives); equipping
+    // a button's MIX partner (the bow) dissolves that combo and its bag
+    // drops off the buttons. Trade items never land on a slot.
+    const u8 prevSel = dComIfGs_getSelectItemIndex(btn);
+    const u8 prevMix = dComIfGs_getMixItemIndex(btn);
     dComIfGs_setMixItemIndex(btn, dItemNo_NONE_e);
-    // If the item is on the other button, swap the two assignments
-    // (clearing that button's mix too — its combo can't survive a swap).
-    const int other = 1 - btn;
-    if (dComIfGs_getSelectItemIndex(other) == slot) {
-        dComIfGs_setMixItemIndex(other, dItemNo_NONE_e);
-        dComIfGs_setSelectItemIndex(other, dComIfGs_getSelectItemIndex(btn));
+    for (int b = 0; b < 4; b++) {
+        if (b == btn) {
+            continue;
+        }
+        const bool selMatch = dComIfGs_getSelectItemIndex(b) == (u8)slot;
+        const bool mixMatch = dComIfGs_getMixItemIndex(b) == (u8)slot;
+        if (!selMatch && !mixMatch) {
+            continue;
+        }
+        u8 give = prevSel;
+        u8 giveMix = selMatch ? prevMix : (u8)dItemNo_NONE_e;
+        if (b >= DROP_TARGET_SLOT1 && give < MAX_ITEM_SLOTS &&
+            daPy_py_c::checkTradeItem(dComIfGs_getItem(give, false)))
+        {
+            give = dItemNo_NONE_e;
+        }
+        if (give == dItemNo_NONE_e) {
+            giveMix = dItemNo_NONE_e;
+        }
+        dComIfGs_setMixItemIndex(b, giveMix);
+        dComIfGs_setSelectItemIndex(b, give);
     }
     dComIfGs_setSelectItemIndex(btn, (u8)slot);
-    // Distinct per-button cues, exactly as the vanilla menus equip.
-    queueSound(btn == 0 ? Z2SE_SY_ITEM_SET_X : Z2SE_SY_ITEM_SET_Y, HAPTIC_CONFIRM);
-    s_equipMsgFrames = 0;
+    if (btn >= DROP_TARGET_SLOT1) {
+        setEquipMsg(120, "Bound to slot %s", btn == DROP_TARGET_SLOT1 ? "I" : "II");
+        queueSound(Z2SE_SY_CURSOR_OK, HAPTIC_CONFIRM);
+    } else {
+        // Distinct per-button cues, exactly as the vanilla menus equip.
+        queueSound(btn == 0 ? Z2SE_SY_ITEM_SET_X : Z2SE_SY_ITEM_SET_Y, HAPTIC_CONFIRM);
+        s_equipMsgFrames = 0;
+    }
 }
 
 // Gear changes are blocked in menus, as a wolf, and while a previous model
@@ -170,6 +254,135 @@ void equipGear(int idx) {
     queueSound(Z2SE_SY_ITEM_SET_X, HAPTIC_CONFIRM);
 }
 
+// --- Touch item buttons (Functional) ----------------------------------------
+
+// Menus own the X/Y buttons (the wheel equips with them, the item-explain
+// window closes with them) — never inject item presses there.
+bool touchUseBlocked() {
+    return anyMenuOpen() || dMeter2Info_getItemExplainWindowStatus() != 0;
+}
+
+// Start a touch hold on an item button (0 = X, 1 = Y, 2/3 = slots I/II).
+// The button reads held until the finger lifts — bow-class items aim on
+// hold and fire on release, so a one-shot press would only raise them. No
+// cue: the game's own item sounds are the feedback, like a physical press.
+void beginHold(int btn) {
+    s_holdBtn = btn;
+    s_holdFrames = 0;
+    s_holdReleaseReq = false;
+    if (btn < 2) {
+        s_padHoldMaskState.store(btn == 0 ? PAD_BUTTON_X : PAD_BUTTON_Y);
+    } else {
+        s_slotHoldMaskState.store(1u << (btn - 2));
+    }
+}
+
+// Finger lifted (or the gesture was cancelled): release the held button.
+// Short taps are deferred until the press has lasted TAP_HOLD_FRAMES game
+// frames (beginFrameCompanionInput applies them), so a tap reads as a
+// deliberate press instead of a wind-up-cancelling blip.
+void releaseHold() {
+    if (s_holdBtn < 0) {
+        return;
+    }
+    // Up-click at the FINGER's lift (not the deferred synthetic release):
+    // lighter than the down-click, completing the press/release pair. For
+    // short taps both land in the same frame and the flush coalesces them
+    // into the single firmer click, so taps don't double-buzz.
+    queueHaptic(HAPTIC_LIGHT);
+    if (s_holdFrames < TAP_HOLD_FRAMES) {
+        s_holdReleaseReq = true;
+        return;
+    }
+    s_holdBtn = -1;
+    s_holdReleaseReq = false;
+    s_padHoldMaskState.store(0);
+    s_slotHoldMaskState.store(0);
+}
+
+// Tap on a round X/Y button: use the equipped item. In equip mode the tap
+// keeps its equip meaning (handled on release via dropTargetAt).
+void handleXYTap(int xy) {
+    if (inEquipMode()) {
+        return;
+    }
+    // A selection with a menu open means the player is TRYING to equip but
+    // the mode couldn't engage — say why instead of silently beeping (same
+    // message the gear boxes post).
+    if (s_selSlot >= 0 && anyMenuOpen()) {
+        setEquipMsg(150, "Can't equip while a menu is open");
+        queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
+        s_denyFlash[xy] = DENY_FLASH_FRAMES;
+        return;
+    }
+    dMeter2Draw_c* md = meterDraw();
+    // Wolf form: items are never usable, but X/Y ARE the wolf's action
+    // buttons — the circles draw the game's own "Sense"/"Dig" words, and a
+    // tap presses through whenever a word is showing. Without this the
+    // usability gate below would deny every wolf tap.
+    if (companionWolf()) {
+        const char* action =
+            (md != NULL && !touchUseBlocked()) ? md->getActionTextXY(xy) : NULL;
+        if (action == NULL || action[0] == 0) {
+            s_denyFlash[xy] = DENY_FLASH_FRAMES;
+            return;
+        }
+        queueHaptic(HAPTIC_PRESS);
+        beginHold(xy);
+        return;
+    }
+    if (md == NULL || dComIfGp_getSelectItem(xy) == dItemNo_NONE_e) {
+        // Empty button: swallow, but still flash — a tap that dies with no
+        // reaction at all reads as a broken button, not an empty one.
+        s_denyFlash[xy] = DENY_FLASH_FRAMES;
+        return;
+    }
+    if (touchUseBlocked() || !md->isItemUsable(xy)) {
+        queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
+        s_denyFlash[xy] = DENY_FLASH_FRAMES;
+        return;
+    }
+    queueHaptic(HAPTIC_PRESS);
+    beginHold(xy);
+}
+
+// Tap on the I / II slot: press item button 2/3 — the slots ARE first-class
+// buttons now, so this is exactly a tap on X or Y.
+void handleSlotTap(int which) {
+    if (inEquipMode()) {
+        return;  // release path binds the selection to this slot
+    }
+    // Wolf form: the corners are pure readouts (scent / Poe souls) on dark
+    // unequipped-style plates — a tap is swallowed inert (no sound, no
+    // flash) so nothing suggests they were ever buttons. The rect still
+    // publishes so the tap can't fall through to the page beneath.
+    if (companionWolf()) {
+        return;
+    }
+    // See handleXYTap: a blocked equip attempt explains itself.
+    if (s_selSlot >= 0 && anyMenuOpen()) {
+        setEquipMsg(150, "Can't equip while a menu is open");
+        queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
+        s_denyFlash[2 + which] = DENY_FLASH_FRAMES;
+        return;
+    }
+    const int bound = slotBinding(which);
+    const u8 itemNo = bound >= 0 ? dComIfGs_getItem(bound, false) : (u8)dItemNo_NONE_e;
+    if (itemNo == dItemNo_NONE_e) {
+        // Empty slot: swallow with a flash (see handleXYTap).
+        s_denyFlash[2 + which] = DENY_FLASH_FRAMES;
+        return;
+    }
+    dMeter2Draw_c* md = meterDraw();
+    if (md == NULL || touchUseBlocked() || !md->isItemUsable(2 + which)) {
+        queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
+        s_denyFlash[2 + which] = DENY_FLASH_FRAMES;
+        return;
+    }
+    queueHaptic(HAPTIC_PRESS);
+    beginHold(2 + which);
+}
+
 // ITEMS grid cell index under (tx, ty), -1 when none.
 int invCellIndexAt(f32 tx, f32 ty) {
     for (int i = 0; i < s_invCellCount; i++) {
@@ -182,10 +395,13 @@ int invCellIndexAt(f32 tx, f32 ty) {
     return -1;
 }
 
-// X/Y drop-target index under (tx, ty) with an 8px grab margin, -1 when none.
+// Drop-target index under (tx, ty) with an 8px grab margin, -1 when none:
+// 0/1 the real X/Y buttons, 2/3 the I/II slot bindings. Entries the current
+// layout didn't publish this frame have zero width.
 int dropTargetAt(f32 tx, f32 ty) {
-    for (int i = 0; s_dropRectValid && i < 2; i++) {
-        if (tx >= s_dropRect[i][0] - 8.0f && tx <= s_dropRect[i][2] + 8.0f &&
+    for (int i = 0; s_dropRectValid && i < DROP_TARGET_COUNT; i++) {
+        if (s_dropRect[i][2] > s_dropRect[i][0] &&
+            tx >= s_dropRect[i][0] - 8.0f && tx <= s_dropRect[i][2] + 8.0f &&
             ty >= s_dropRect[i][1] - 8.0f && ty <= s_dropRect[i][3] + 8.0f)
         {
             return i;
@@ -196,10 +412,11 @@ int dropTargetAt(f32 tx, f32 ty) {
 
 // QUEST page: category sub-tab taps (the list itself drag-scrolls).
 // Returns true when the tap was consumed.
-bool handleQuestTouch(f32 tx, f32 ty, f32 x1) {
-    const f32 cy0 = HEARTS_H + 8.0f;
-    const f32 sx0 = 16.0f;
-    const f32 sx1 = x1 - 2.0f;
+bool handleQuestTouch(f32 tx, f32 ty) {
+    // Insets match what drawContentWindow hands the page draw.
+    const f32 cy0 = s_contentRect[1];
+    const f32 sx0 = s_contentRect[0] + 4.0f;
+    const f32 sx1 = s_contentRect[2] - 2.0f;
     if (tx < sx0 || tx > sx1) {
         return false;
     }
@@ -222,26 +439,31 @@ bool handleQuestTouch(f32 tx, f32 ty, f32 x1) {
 
 // COLLECT page: sub-tab strip, then overview gear-box tap-to-equip.
 // Returns true when the tap was consumed.
-bool handleCollectTouch(f32 tx, f32 ty, f32 x1) {
-    const f32 cy0 = HEARTS_H + 8.0f;
-    const f32 sx0 = 16.0f;
-    const f32 sx1 = x1 - 2.0f;
-    if (ty >= cy0 + 8.0f && ty <= cy0 + 8.0f + CTAB_H && tx >= sx0 && tx <= sx1) {
-        const f32 cx0 = sx0 + 12.0f;
-        const f32 cx1 = sx1 - 12.0f;
-        const f32 ctabW = (cx1 - cx0 - CTAB_GAP * (COLLECT_TAB_COUNT - 1)) / COLLECT_TAB_COUNT;
-        for (int i = 0; i < COLLECT_TAB_COUNT; i++) {
-            const f32 x = cx0 + i * (ctabW + CTAB_GAP);
-            if (tx >= x && tx <= x + ctabW) {
-                s_collectTab.store(i);
-                // Fresh tab: back to its list view, scrolled to the top.
-                s_readerSel = -1;
-                s_readerTapCand = -1;
-                s_scrollSkills = 0.0f;
-                s_scrollMail = 0.0f;
-                s_scrollBody = 0.0f;
-                return true;
+bool handleCollectTouch(f32 tx, f32 ty) {
+    // Library icon row (published by the overview draw only): opens that
+    // section as a detail view. Back out is the context tab.
+    for (int i = 0; i < 4; i++) {
+        if (s_collectIconRects[i][2] > s_collectIconRects[i][0] &&
+            tx >= s_collectIconRects[i][0] && tx <= s_collectIconRects[i][2] &&
+            ty >= s_collectIconRects[i][1] && ty <= s_collectIconRects[i][3])
+        {
+            s_collectTab.store(i + 1);
+            // Grow the section out of the tapped cell.
+            for (int r = 0; r < 4; r++) {
+                s_collectZoomFrom[r] = s_collectIconRects[i][r];
             }
+            s_collectZoomT = 0.0f;
+            s_collectZoomClosing = false;
+            // Fresh section: list view, scrolled to the top, selection
+            // cleared so the Read tab starts as Back.
+            s_readerSel = -1;
+            s_readerTapCand = -1;
+            s_collectSel = -1;
+            s_scrollSkills = 0.0f;
+            s_scrollMail = 0.0f;
+            s_scrollBody = 0.0f;
+            queueSound(Z2SE_SY_MENU_CHANGE_WINDOW, HAPTIC_LIGHT);
+            return true;
         }
     }
     // Overview: taps on the gear boxes equip that gear.
@@ -255,10 +477,11 @@ bool handleCollectTouch(f32 tx, f32 ty, f32 x1) {
             }
         }
     }
-    // Skills / Mail reader rects. Rows (ids >= 0) defer to touch-up so a
-    // drag scrolls instead of opening; Back (-2) fires immediately.
+    // Section/reader rects. Entry rows (ids >= 0) defer to touch-up so a
+    // drag scrolls instead of opening; the reader header's "< Back" (-4)
+    // fires immediately, stepping out to the entry list.
     const int ctab = s_collectTab.load();
-    if (ctab == 3 || ctab == 4) {
+    if (ctab >= 1 && ctab <= 4) {
         for (int i = 0; i < s_readerRectCount; i++) {
             if (tx >= s_readerRects[i][0] && tx <= s_readerRects[i][2] &&
                 ty >= s_readerRects[i][1] && ty <= s_readerRects[i][3])
@@ -266,10 +489,16 @@ bool handleCollectTouch(f32 tx, f32 ty, f32 x1) {
                 const int id = s_readerRectIds[i];
                 if (id >= 0) {
                     s_readerTapCand = id;
-                } else if (id == -2) {
-                    s_readerSel = -1;
+                    // Remember the row so the detail can pop out of it.
+                    for (int r = 0; r < 4; r++) {
+                        s_readerTapRect[r] = s_readerRects[i][r];
+                    }
+                } else if (id == -4) {
+                    // Shrink back into its row; drawReaderDetail clears
+                    // s_readerSel when the animation lands.
                     s_readerTapCand = -1;
-                    s_scrollBody = 0.0f;
+                    s_readerZoomClosing = true;
+                    queueSound(Z2SE_SY_CURSOR_CANCEL, HAPTIC_LIGHT);
                 }
                 return true;
             }
@@ -306,113 +535,249 @@ u8 gearItemFor(int idx) {
     }
 }
 
-void handleTouch(f32 w, f32 h, f32 x0, f32 x1) {
+void handleTouch(f32 w, f32 h) {
     const uint32_t packed = s_pendingTouch.exchange(~0u);
     if (packed == ~0u) {
         return;
     }
+    // Cutscene: the tap is consumed (not queued for later) and ignored —
+    // nothing on the companion is operable during an event. Gated on the
+    // LIVE event state, not the dim level: the dim takes ~10 frames to
+    // decay after an event ends, and a tap in that window (tapping
+    // Transform right after a Midna dialogue is the classic case) must
+    // work, not die against a fading overlay.
+    if (dComIfGp_event_runCheck()) {
+        return;
+    }
     const f32 tx = (f32)(packed >> 16) / 65535.0f * w;
     const f32 ty = (f32)(packed & 0xFFFF) / 65535.0f * h;
-    if (ty < h - TABS_H) {
-        // Wolf/human transform button (right panel, above the d-pad). Sits
-        // outside the content window, so it can't shadow any page rect.
-        if (s_transformBtnRect[2] > s_transformBtnRect[0] &&
-            tx >= s_transformBtnRect[0] && tx <= s_transformBtnRect[2] &&
-            ty >= s_transformBtnRect[1] && ty <= s_transformBtnRect[3])
+    // The combo-or-replace chooser is modal: one of its plates, or cancel.
+    if (s_comboChoiceBtn >= 0) {
+        const int btn = s_comboChoiceBtn;
+        const int slot = s_comboChoiceSlot;
+        s_comboChoiceBtn = -1;
+        s_comboChoiceSlot = -1;
+        if (s_comboChoiceRects[0][2] > s_comboChoiceRects[0][0] &&
+            tx >= s_comboChoiceRects[0][0] && tx <= s_comboChoiceRects[0][2] &&
+            ty >= s_comboChoiceRects[0][1] && ty <= s_comboChoiceRects[0][3])
         {
-            s_transformReq.store(true);
-            return;
-        }
-        // ITEMS: the Info button (grid view, item selected) / Back (info
-        // view) share one rect.
-        if (s_page.load() == PAGE_INVENTORY &&
-            s_itemInfoBtnRect[2] > s_itemInfoBtnRect[0] &&
-            tx >= s_itemInfoBtnRect[0] && tx <= s_itemInfoBtnRect[2] &&
-            ty >= s_itemInfoBtnRect[1] && ty <= s_itemInfoBtnRect[3])
+            tryBowCombo(btn, slot, dComIfGs_getItem(slot, false));
+        } else if (s_comboChoiceRects[1][2] > s_comboChoiceRects[1][0] &&
+            tx >= s_comboChoiceRects[1][0] && tx <= s_comboChoiceRects[1][2] &&
+            ty >= s_comboChoiceRects[1][1] && ty <= s_comboChoiceRects[1][3])
         {
-            if (s_itemInfoSlot >= 0) {
-                s_itemInfoSlot = -1;
-            } else if (s_selSlot >= 0) {
-                s_itemInfoSlot = s_selSlot;
-            }
-            s_scrollItemInfo = 0.0f;
-            return;
-        }
-        if (s_page.load() == PAGE_QUEST) {
-            handleQuestTouch(tx, ty, x1);
-        } else if (s_page.load() == PAGE_COLLECTION) {
-            handleCollectTouch(tx, ty, x1);
-        } else if (s_page.load() == PAGE_MAP) {
-            // Floor button toggles the pop-up list (dungeons only).
-            if (s_dmapFloorBtnRect[2] > s_dmapFloorBtnRect[0] &&
-                tx >= s_dmapFloorBtnRect[0] && tx <= s_dmapFloorBtnRect[2] &&
-                ty >= s_dmapFloorBtnRect[1] && ty <= s_dmapFloorBtnRect[3])
-            {
-                s_dmapFloorPickOpen = !s_dmapFloorPickOpen;
-                return;
-            }
-            for (int i = 0; i < s_dmapFloorRectCount; i++) {
-                if (tx >= s_dmapFloorRects[i][0] && tx <= s_dmapFloorRects[i][2] &&
-                    ty >= s_dmapFloorRects[i][1] && ty <= s_dmapFloorRects[i][3])
-                {
-                    s_dmapFloorSel = s_dmapFloorVals[i];
-                    s_dmapFloorPickOpen = false;
-                    return;
-                }
-            }
-            // Any other tap closes the pop-up.
-            s_dmapFloorPickOpen = false;
-            // Warp button, bottom-left of the map window. Re-check the
-            // permission at press time rather than trusting the dim state the
-            // draw published, the same way tryQuickTransform re-checks.
-            if (s_warpBtnRect[2] > s_warpBtnRect[0] && tx >= s_warpBtnRect[0] &&
-                tx <= s_warpBtnRect[2] && ty >= s_warpBtnRect[1] && ty <= s_warpBtnRect[3])
-            {
-                if (isFieldMapScreen()) {
-                    // Map screen is up: act as its Z key. The menu owns the
-                    // outcome — including its own toggle sounds and the
-                    // "can't warp here" explanations — so don't pre-judge it.
-                    requestWarpToggle();
-                    queueSound(Z2SE_SY_CURSOR_OK, HAPTIC_LIGHT);
-                } else if (warpAllowed()) {
-                    s_warpReq.store(true);
-                    queueSound(Z2SE_WARP_MAP_ON, HAPTIC_CONFIRM);
-                } else {
-                    setEquipMsg(150, "Can't warp from here");
-                    queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
-                }
-                return;
-            }
-            // Reset-view button (mode-specific view state).
-            if (s_mapResetRect[2] > s_mapResetRect[0] && tx >= s_mapResetRect[0] &&
-                tx <= s_mapResetRect[2] && ty >= s_mapResetRect[1] && ty <= s_mapResetRect[3])
-            {
-                s_mapPanX = 0.0f;
-                s_mapPanY = 0.0f;
-                if (s_dmapAvailable) {
-                    // Back to the room-view default; the center slides there.
-                    s_dmapResetReq = true;
-                    s_dmapFloorSel = DMAP_FLOOR_FOLLOW;
-                } else {
-                    s_mapZoom = 1.0f;
-                    s_mapViewOffX = 0.0f;
-                    s_mapViewOffZ = 0.0f;
-                }
-            }
+            plainEquip(btn, slot);
+        } else {
+            queueSound(Z2SE_SY_CURSOR_CANCEL, HAPTIC_LIGHT);
         }
         return;
     }
-    constexpr f32 GAP = 3.0f;
-    const f32 tabW = (x1 - x0 - GAP * (PAGE_COUNT - 1)) / PAGE_COUNT;
-    for (int i = 0; i < PAGE_COUNT; i++) {
-        const f32 x = x0 + i * (tabW + GAP);
-        if (tx >= x && tx <= x + tabW) {
+    // Corner buttons are tested BEFORE the tab-strip split: the bottom two
+    // deliberately sit level with the tab bar, so gating them on
+    // "ty < h - TABS_H" would leave only their upper halves tappable.
+    // They never overlap the tabs horizontally (the tabs live between the
+    // two side columns), so testing them first steals nothing.
+    //
+    // Wolf/human transform button, and the Functional layout's Z button —
+    // the Z press is injected at the pad next frame, so every consumer
+    // (Midna, camera, menu Z actions) sees an ordinary Z.
+    // Both left corners get a grace margin: they hug the screen edge, where
+    // devices shave touchable area (gesture zones, rounded corners), and
+    // nothing else lives near them to steal from.
+    constexpr f32 CORNER_GRACE = 12.0f;
+    if (s_transformBtnRect[2] > s_transformBtnRect[0] &&
+        tx >= s_transformBtnRect[0] - CORNER_GRACE &&
+        tx <= s_transformBtnRect[2] + CORNER_GRACE &&
+        ty >= s_transformBtnRect[1] - CORNER_GRACE &&
+        ty <= s_transformBtnRect[3] + CORNER_GRACE)
+    {
+        s_pressAnim[4] = 1.0f;
+        queueHaptic(HAPTIC_PRESS);
+        s_transformReq.store(true);
+        return;
+    }
+    if (s_zBtnRect[2] > s_zBtnRect[0] && tx >= s_zBtnRect[0] - CORNER_GRACE &&
+        tx <= s_zBtnRect[2] + CORNER_GRACE && ty >= s_zBtnRect[1] - CORNER_GRACE &&
+        ty <= s_zBtnRect[3] + CORNER_GRACE)
+    {
+        s_pressAnim[5] = 1.0f;
+        s_zPressReq.store(true);
+        queueSound(Z2SE_SY_CURSOR_OK, HAPTIC_PRESS);
+        return;
+    }
+    // The I and II item slots: tap fires the bound item through the host
+    // button. Equip-mode taps fall through to the release path, which binds
+    // the selection instead. Empty slots still swallow the tap.
+    for (int i = 0; i < 2; i++) {
+        if (s_slotBtnRect[i][2] > s_slotBtnRect[i][0] && tx >= s_slotBtnRect[i][0] &&
+            tx <= s_slotBtnRect[i][2] && ty >= s_slotBtnRect[i][1] &&
+            ty <= s_slotBtnRect[i][3])
+        {
+            handleSlotTap(i);
+            return;
+        }
+    }
+    // Round X/Y buttons: tap-to-use (hold semantics; equip-mode taps keep
+    // their equip meaning via the release path).
+    for (int i = 0; i < 2; i++) {
+        if (s_fnXYRect[i][2] > s_fnXYRect[i][0] && tx >= s_fnXYRect[i][0] &&
+            tx <= s_fnXYRect[i][2] && ty >= s_fnXYRect[i][1] && ty <= s_fnXYRect[i][3])
+        {
+            handleXYTap(i);
+            return;
+        }
+    }
+    // Functional left-column context tab (page-independent, like the corners).
+    // The draw and this handler both call contextTabAction, so they agree on
+    // what the tab does and whether it is live.
+    if (s_ctxTabRect[2] > s_ctxTabRect[0] && tx >= s_ctxTabRect[0] && tx <= s_ctxTabRect[2] &&
+        ty >= s_ctxTabRect[1] && ty <= s_ctxTabRect[3])
+    {
+        bool clickable = false;
+        const int action = contextTabAction(&clickable);
+        if (!clickable) {
+            queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
+            return;
+        }
+        switch (action) {
+        case CTX_WARP:
+            if (isFieldMapScreen()) {
+                // Map screen up: act as its Z key; the menu owns the outcome.
+                requestWarpToggle();
+                queueSound(Z2SE_SY_CURSOR_OK, HAPTIC_LIGHT);
+            } else if (warpAllowed()) {
+                s_warpReq.store(true);
+                queueSound(Z2SE_WARP_MAP_ON, HAPTIC_CONFIRM);
+            } else {
+                setEquipMsg(150, "Can't warp from here");
+                queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
+            }
+            break;
+        case CTX_FLOOR:
+            s_dmapFloorPickOpen = !s_dmapFloorPickOpen;
+            queueSound(Z2SE_SY_CURSOR_OK, HAPTIC_LIGHT);
+            break;
+        case CTX_INFO:
+            s_itemInfoSlot = s_selSlot;
+            s_scrollItemInfo = 0.0f;
+            // Grow out of that item's own cell.
+            for (int c = 0; c < s_invCellCount; c++) {
+                if (s_invCells[c].slot == s_selSlot) {
+                    readerZoomOpenFrom(s_invCells[c].x, s_invCells[c].y,
+                        s_invCells[c].x + s_invCell, s_invCells[c].y + s_invCell);
+                    break;
+                }
+            }
+            queueSound(Z2SE_SY_CURSOR_OK, HAPTIC_LIGHT);
+            break;
+        case CTX_HOME:
+            // Straight home to the library overview from ANY depth — a open
+            // reader closes with its section. Shrink back into the library
+            // cell; the dispatch flips the tab to overview when the
+            // animation lands. Straight out if there is no recorded cell
+            // (page opened by other means, e.g. a wolf slot tap).
+            s_readerSel = -1;
+            s_readerTapCand = -1;
+            s_scrollBody = 0.0f;
+            s_readerZoomT = 1.0f;
+            s_readerZoomClosing = false;
+            s_collectSel = -1;
+            s_scrollSkills = 0.0f;
+            s_scrollMail = 0.0f;
+            if (s_collectZoomFrom[2] > s_collectZoomFrom[0]) {
+                s_collectZoomClosing = true;
+            } else {
+                s_collectTab.store(0);
+            }
+            queueSound(Z2SE_SY_CURSOR_CANCEL, HAPTIC_LIGHT);
+            break;
+        case CTX_BACK:
+            // ITEMS info reader — COLLECT navigates via CTX_HOME plus the
+            // reader header's own Back. Shrinks back into its cell;
+            // drawItemInfo clears the slot when the animation lands.
+            s_readerZoomClosing = true;
+            queueSound(Z2SE_SY_CURSOR_CANCEL, HAPTIC_LIGHT);
+            break;
+        default:
+            break;
+        }
+        return;
+    }
+    // Floor-select overlay rows (drawn over the content window; tested here so
+    // a pick isn't shadowed by the page beneath). A tap that misses closes it.
+    if (s_dmapFloorPickOpen) {
+        for (int i = 0; i < s_dmapFloorRectCount; i++) {
+            if (tx >= s_dmapFloorRects[i][0] && tx <= s_dmapFloorRects[i][2] &&
+                ty >= s_dmapFloorRects[i][1] && ty <= s_dmapFloorRects[i][3])
+            {
+                s_dmapFloorSel = s_dmapFloorVals[i];
+                s_dmapFloorPickOpen = false;
+                queueSound(Z2SE_SY_CURSOR_OK, HAPTIC_LIGHT);
+                return;
+            }
+        }
+        s_dmapFloorPickOpen = false;  // missed: close, then let the tap through
+    }
+    // Tab strip: hit-test the rects the draw published rather than
+    // recomputing the layout, and BEFORE the fixed-height page/strip split —
+    // the Functional MAP plate stands 4px taller than TABS_H, and a band test
+    // would drop taps on exactly that crown.
+    for (int i = 0; i < s_tabRectCount; i++) {
+        if (tx >= s_tabRects[i][0] && tx <= s_tabRects[i][2] && ty >= s_tabRects[i][1] &&
+            ty <= s_tabRects[i][3])
+        {
             // Silent when the tap lands on the page already showing.
-            if (s_page.exchange(i) != i) {
+            if (s_page.exchange(s_tabRectPage[i]) != s_tabRectPage[i]) {
                 queueSound(Z2SE_SY_MENU_CHANGE_WINDOW, HAPTIC_LIGHT);
             }
             return;
         }
+    }
+    if (ty < h - TABS_H) {
+        // ITEMS info reader Back button (only published while reading; the
+        // Info trigger itself is the left-column context tab now).
+        if (s_page.load() == PAGE_INVENTORY && s_itemInfoSlot >= 0 &&
+            s_itemInfoBtnRect[2] > s_itemInfoBtnRect[0] &&
+            tx >= s_itemInfoBtnRect[0] && tx <= s_itemInfoBtnRect[2] &&
+            ty >= s_itemInfoBtnRect[1] && ty <= s_itemInfoBtnRect[3])
+        {
+            s_readerZoomClosing = true;  // shrinks back into its cell
+            return;
+        }
+        if (s_pageSliding) {
+            // Mid-slide both pages published rects; swallow content taps
+            // until the transition lands.
+            return;
+        }
+        if (s_page.load() == PAGE_QUEST) {
+            handleQuestTouch(tx, ty);
+        } else if (s_page.load() == PAGE_COLLECTION) {
+            handleCollectTouch(tx, ty);
+        } else if (s_page.load() == PAGE_MAP) {
+            // Warp and Floor are the left-column context tab now (handled
+            // above, page-independent). Only the in-window Reset button
+            // remains here.
+            // Reset-view button (mode-specific view state). Nothing snaps:
+            // the glide (ticked on the MAP page in drawDashboard) eases the
+            // view home; the dungeon's zoom/center ride its existing
+            // room-follow glide, re-engaged here WITHOUT s_dmapResetReq —
+            // that flag's snap is for stage init, not for this button.
+            if (s_mapResetRect[2] > s_mapResetRect[0] && tx >= s_mapResetRect[0] &&
+                tx <= s_mapResetRect[2] && ty >= s_mapResetRect[1] && ty <= s_mapResetRect[3])
+            {
+                s_mapResetGlide = true;
+                if (s_dmapAvailable) {
+                    // The room-fit request IS the "supposed" view — the
+                    // round-154 glide dropped it and the dungeon stopped
+                    // returning to the room-fit zoom. The center still
+                    // glides via room-follow; only the zoom snaps.
+                    s_dmapResetReq = true;
+                    s_dmapFollow = true;
+                    s_dmapFloorSel = DMAP_FLOOR_FOLLOW;
+                }
+            }
+        }
+        return;
     }
 }
 
@@ -426,19 +791,27 @@ void processDragTouch(f32 w, f32 h) {
     if (phase == 3) {
         // Pinch took over: drop the single-finger gesture without a tap
         // (including a pending deferred row tap — it must not fire on the
-        // next unrelated touch-up).
+        // next unrelated touch-up, and a left-box swipe must not phantom-flip
+        // the carousel on a stray UP after the cancel).
         s_touchPhase.store(0);
         s_touchTracking = false;
         s_dragging = false;
         s_dragSlot = -1;
         s_readerTapCand = -1;
+        s_leftBoxSwipe = false;
+        s_leftBoxTracking = false;
+        // A held touch button releases like a lifted finger.
+        releaseHold();
         return;
     }
     const uint32_t packed = s_touchPos.load();
     const f32 tx = (f32)(packed >> 16) / 65535.0f * w;
     const f32 ty = (f32)(packed & 0xFFFF) / 65535.0f * h;
     const bool onItemsPage = s_page.load() == PAGE_INVENTORY && s_invGeomValid;
-    const bool onMapPage = s_page.load() == PAGE_MAP;
+    // Panning the map requires the gesture to have STARTED over the map
+    // itself. Without that, a swipe anywhere on the companion — the dungeon
+    // icon box, the side columns — dragged the map with it.
+    const bool onMapPage = s_page.load() == PAGE_MAP && s_downOnContent && !s_pageSliding;
     // Scrollable list under the finger: quest table, skills/mail lists and
     // the open reader body. Vertical drags feed its scroll offset; the
     // draws clamp it.
@@ -462,6 +835,9 @@ void processDragTouch(f32 w, f32 h) {
             s_downX = tx;
             s_downY = ty;
             s_dragSlot = -1;
+            s_leftBoxSwipe = dusk::dualscreen::mainHudRestored() &&
+                s_leftBoxRect[2] > s_leftBoxRect[0] && tx >= s_leftBoxRect[0] &&
+                tx <= s_leftBoxRect[2] && ty >= s_leftBoxRect[1] && ty <= s_leftBoxRect[3];
             if (onItemsPage) {
                 const int cell = invCellIndexAt(tx, ty);
                 if (cell >= 0) {
@@ -476,19 +852,55 @@ void processDragTouch(f32 w, f32 h) {
         // gesture's first frame: s_dragX/Y still hold the previous gesture's
         // last position and would produce a jump.
         if (onMapPage && !firstFrame) {
-            s_mapPanX += tx - s_dragX;
-            s_mapPanY += ty - s_dragY;
+            // While the reset glide runs, a REAL drag (past the tap slop)
+            // takes the view back — but the Reset tap's own 1-3px finger
+            // wobble must not: on device it cancelled the glide one frame
+            // in, so Reset only ever moved a fraction per tap.
+            const f32 gdx = tx - s_downX;
+            const f32 gdy = ty - s_downY;
+            if (!s_mapResetGlide || gdx * gdx + gdy * gdy > 100.0f) {
+                s_mapPanX += tx - s_dragX;
+                s_mapPanY += ty - s_dragY;
+                s_mapResetGlide = false;
+            }
         }
         if (scrollVar != NULL && !firstFrame) {
             *scrollVar -= ty - s_dragY;
+        }
+        if (s_leftBoxSwipe) {
+            // Carousel follow: the box content rides the finger.
+            s_leftBoxDragY = ty - s_downY;
+            s_leftBoxTracking = true;
+        }
+        // Floor-picker detents: a light tick whenever the finger crosses
+        // into another row of the open floor list, like a selector wheel.
+        if (s_dmapFloorPickOpen) {
+            static int sLastFloorRow = -1;
+            int row = -1;
+            for (int i = 0; i < s_dmapFloorRectCount; i++) {
+                if (tx >= s_dmapFloorRects[i][0] && tx <= s_dmapFloorRects[i][2] &&
+                    ty >= s_dmapFloorRects[i][1] && ty <= s_dmapFloorRects[i][3])
+                {
+                    row = i;
+                    break;
+                }
+            }
+            if (row >= 0 && row != sLastFloorRow) {
+                queueHaptic(HAPTIC_LIGHT);
+            }
+            sLastFloorRow = row;
         }
         s_dragX = tx;
         s_dragY = ty;
         const f32 dx = tx - s_downX;
         const f32 dy = ty - s_downY;
         if (dx * dx + dy * dy > 100.0f) {
-            if (s_dragSlot >= 0) {
+            if (s_dragSlot >= 0 && !s_dragging) {
                 s_dragging = true;
+                // Pluck: the ghost pops slightly large and a light tick
+                // marks the item leaving the grid.
+                s_ghostPop = 1.0f;
+                queueHaptic(HAPTIC_LIGHT);
             }
             // Moved past the slop: this is a scroll, not a row tap.
             s_readerTapCand = -1;
@@ -499,21 +911,98 @@ void processDragTouch(f32 w, f32 h) {
     // phase == 2: released.
     s_touchPhase.store(0);
     s_touchTracking = false;
+    // Release the touch-held button: this is what fires bow-class items.
+    // The ghost's host binding is restored a few frames later (drawDashboard)
+    // so the release press is consumed with the ghost item still equipped.
+    releaseHold();
+    // Left-column carousel: a mostly-VERTICAL drag that started in the box
+    // pages it — the box is taller than it is wide, so an up/down flick has
+    // more room to register than a sideways one. Nothing else lives in that
+    // column, so this can consume the gesture outright.
+    if (s_leftBoxSwipe) {
+        s_leftBoxSwipe = false;
+        s_leftBoxTracking = false;
+        const f32 sdx = tx - s_downX;
+        const f32 sdy = ty - s_downY;
+        if (sdy * sdy > 400.0f && sdy * sdy > sdx * sdx) {
+            int pages[LEFT_BOX_PAGES];
+            const int count = leftBoxPages(pages);
+            const int page = s_leftBoxPage.load();
+            int idx = 0;
+            for (int i = 0; i < count; i++) {
+                if (pages[i] == page) {
+                    idx = i;
+                    break;
+                }
+            }
+            // Swipe up walks forward, matching a scrolling list.
+            const int step = sdy < 0.0f ? 1 : count - 1;
+            s_leftBoxPage.store(pages[(idx + step) % count]);
+            queueSound(Z2SE_SY_CURSOR_FLOOR, HAPTIC_LIGHT);
+        }
+        s_dragging = false;
+        s_dragSlot = -1;
+        s_readerTapCand = -1;
+        return;
+    }
     // Deferred reader-row tap: fires only if the finger stayed within the
-    // slop (otherwise the gesture was a scroll).
+    // slop (otherwise the gesture was a scroll). Tapping a row OPENS that
+    // entry outright — the context tab is the way home, not the way in, so
+    // there is no select-then-confirm step here.
     if (s_readerTapCand >= 0) {
         s_readerSel = s_readerTapCand;
         s_scrollBody = 0.0f;
+        readerZoomOpenFrom(s_readerTapRect[0], s_readerTapRect[1], s_readerTapRect[2],
+            s_readerTapRect[3]);
         s_readerTapCand = -1;
         s_dragging = false;
         s_dragSlot = -1;
+        queueSound(Z2SE_SY_CURSOR_OK, HAPTIC_LIGHT);
         return;
     }
     if (s_dragging) {
-        if (onItemsPage) {
-            const int target = dropTargetAt(tx, ty);
+        // Cutscene: the tap path swallows input while an event runs — a
+        // drag released during one drops without equipping, or the two
+        // gestures would disagree about whether events block equips.
+        // Live event state, matching handleTouch (not the decaying dim).
+        const int dragSlot = s_dragSlot;
+        int target = -1;
+        bool consumed = false;
+        if (onItemsPage && !dComIfGp_event_runCheck()) {
+            target = dropTargetAt(tx, ty);
             if (target >= 0) {
-                equipFromCompanion(target, s_dragSlot);
+                consumed = equipFromCompanion(target, dragSlot);
+            }
+        }
+        // Fly-out: the ghost shrinks into the consumed target, or flies
+        // home to its grid cell on a miss/deny — it never just vanishes.
+        const u8 flyItem =
+            dragSlot >= 0 ? dComIfGs_getItem(dragSlot, false) : (u8)dItemNo_NONE_e;
+        if (flyItem != dItemNo_NONE_e) {
+            f32 toX = 0.0f, toY = 0.0f;
+            bool haveTo = false;
+            if (consumed && target >= 0 && s_dropRect[target][2] > s_dropRect[target][0]) {
+                toX = (s_dropRect[target][0] + s_dropRect[target][2]) * 0.5f;
+                toY = (s_dropRect[target][1] + s_dropRect[target][3]) * 0.5f;
+                haveTo = true;
+            } else {
+                for (int c = 0; c < s_invCellCount; c++) {
+                    if (s_invCells[c].slot == dragSlot) {
+                        toX = s_invCells[c].x + s_invCell * 0.5f;
+                        toY = s_invCells[c].y + s_invCell * 0.5f;
+                        haveTo = true;
+                        break;
+                    }
+                }
+            }
+            if (haveTo) {
+                s_ghostFlyItem = flyItem;
+                s_ghostFlySlot = dragSlot;
+                s_ghostFlyFromX = tx;
+                s_ghostFlyFromY = ty;
+                s_ghostFlyToX = toX;
+                s_ghostFlyToY = toY;
+                s_ghostFlyT = 0.0f;
             }
         }
         s_dragging = false;

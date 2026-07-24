@@ -162,9 +162,7 @@ public:
     J2DPane* getCounterPane(int i_which);            // 0 = rupees, 1 = keys
     const char* getActionTextB();
     const char* getActionTextXY(int i_no);
-    J2DPane* getMidnaButtonPane();
     J2DPane* getMidnaButtonPaneRaw();
-    J2DPicture* getMidnaButtonPicture();
     J2DPicture* getLightDropPicture();
     J2DPane* getButtonCrossPane();
     const char* getDpadLabel(int i_no);
@@ -173,12 +171,34 @@ public:
     J2DPane* getVesselTearPane(int i_idx);
     void drawVesselPikariForCompanion(const f32* i_tearX, const f32* i_tearY, f32 i_sizeScale);
     void refreshVesselForCompanion();
+    // Pane count for the vessel save/restore buffers below: the light-drop
+    // parent, the two SI parents and the 16x2 tear pane grid (3 + 32).
+    static const int VESSEL_ALPHA_SAVE_COUNT = 35;
+    // Functional's vessel box: the vessel is LIVE on the main screen there,
+    // so the composite saves alphas AND positions (and the parent's scale),
+    // rewrites the panes to the canonical corner layout
+    // (refreshVesselForCompanion), and restores the live state — including
+    // a mid-flight tear animation on the main screen — right after. An
+    // alpha-only pin was tried first and abandoned: it left the live
+    // positions in the composite, whose union bounds explode while the
+    // main screen animates the vessel (the box looked empty mid-quest).
+    void pushVesselStateForCompanion(f32* o_alpha, f32* o_x, f32* o_y, f32* o_scale);
+    void popVesselStateForCompanion(const f32* i_alpha, const f32* i_x, const f32* i_y,
+        const f32* i_scale);
     dKantera_icon_c* getKanteraMeter(int i_no);
+    // Whether the oxygen (drowning) meter is live — rides the game's own
+    // fade (mMeterAlphaRate) so the companion bar appears and disappears on
+    // the main screen meter's timing.
+    bool isOxygenActive();
+    // Whether the X (0) / Y (1) item can currently be used (per-frame
+    // snapshot of the use-button bits; see setButtonIconAlpha).
+    bool isItemUsable(int i_xy);
     void forceCompanionAlpha();
     bool isButtonClusterVisible();
     int getHeartPictures(int i_no, J2DPicture** o_pics);
     f32 getLightDropAlpha();
-    void dualScreenSyncPaneVisibility(bool i_dualScreenHud);
+    void dualScreenSyncPaneVisibility(bool i_dualScreenHud, bool i_mainHudRestored,
+        bool i_lowLifeHearts);
 #endif
 
 private:

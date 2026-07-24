@@ -15,6 +15,7 @@
 #include "d/d_com_inf_game.h"
 #if TARGET_PC
 #include "dusk/companion.h"
+#include "dusk/dualscreen.h"
 #endif
 #if TARGET_PC
 #include <dolphin/gx/GXExtra.h>
@@ -545,6 +546,12 @@ f32 renderingAmap_c::getRestartCursorSize() {
 // zoomed-out map — shrink them with the widened render window instead.
 f32 dMap_c::getPlayerCursorSize() {
     f32 size = renderingAmap_c::getPlayerCursorSize();
+    // The companion draws the minimap far larger than the on-screen crop,
+    // which proportionally inflates the cursors — take both arrows down a
+    // notch whenever the map lives on the second screen (either mode).
+    if (dusk::dualscreen::hudOnCompanion()) {
+        size *= 0.72f;
+    }
     f32 offX, offZ, texelScale;
     if (dusk::companion::mapViewAdjust(&offX, &offZ, &texelScale) && texelScale > 1.0f) {
         size /= texelScale;

@@ -19,6 +19,7 @@
 #include "dolphin/gx/GXAurora.h"
 #include "m_Do/m_Do_ext.h"
 
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -107,6 +108,52 @@ J2DPicture* createPicture(const ResTIMG* timg) {
     return pic;
 }
 
+u32 s_winClip[4] = {};
+
+void setWinScissor(f32 x0, f32 y0, f32 x1, f32 y1) {
+    if (x0 < 0.0f) {
+        x0 = 0.0f;
+    }
+    if (y0 < 0.0f) {
+        y0 = 0.0f;
+    }
+    if (x1 < x0) {
+        x1 = x0;
+    }
+    if (y1 < y0) {
+        y1 = y0;
+    }
+    u32 sx = (u32)(x0 * s_pixelScale);
+    u32 sy = (u32)(y0 * s_pixelScale);
+    u32 ex = (u32)(x1 * s_pixelScale) + 1;
+    u32 ey = (u32)(y1 * s_pixelScale) + 1;
+    if (s_winClip[2] > 0) {
+        const u32 cx1 = s_winClip[0] + s_winClip[2];
+        const u32 cy1 = s_winClip[1] + s_winClip[3];
+        if (sx < s_winClip[0]) {
+            sx = s_winClip[0];
+        }
+        if (sy < s_winClip[1]) {
+            sy = s_winClip[1];
+        }
+        if (ex > cx1) {
+            ex = cx1;
+        }
+        if (ey > cy1) {
+            ey = cy1;
+        }
+    }
+    GXSetScissorRender(sx, sy, ex > sx ? ex - sx : 0, ey > sy ? ey - sy : 0);
+}
+
+void applyWinClip() {
+    if (s_winClip[2] > 0) {
+        GXSetScissorRender(s_winClip[0], s_winClip[1], s_winClip[2], s_winClip[3]);
+    } else {
+        GXSetScissorRender(0, 0, s_nativeW, s_nativeH);
+    }
+}
+
 void fillRect(f32 x, f32 y, f32 x2, f32 y2, GXColor color) {
     dDlst_2DQuad_c quad;
     quad.init((s16)x, (s16)y, (s16)x2, (s16)y2, color);
@@ -177,6 +224,245 @@ void fillChamferRect(f32 x0, f32 y0, f32 x1, f32 y1, f32 ch, GXColor color, int 
     f32 pts[16];
     const int n = chamferOutline(x0, y0, x1, y1, ch, cornerMask, pts);
     fillPoly(pts, n, color);
+}
+
+namespace {
+
+GXColor lerpGX(GXColor a, GXColor b, f32 t) {
+    return {(u8)((int)a.r + (int)(((int)b.r - (int)a.r) * t)),
+        (u8)((int)a.g + (int)(((int)b.g - (int)a.g) * t)),
+        (u8)((int)a.b + (int)(((int)b.b - (int)a.b) * t)),
+        (u8)((int)a.a + (int)(((int)b.a - (int)a.a) * t))};
+}
+
+// A chamfered octagon filled with a smooth top-to-bottom colour gradient
+// (per-vertex colours, interpolated by each vertex's y). Same GX setup as
+// fillPoly but with a vertex colour channel — used for the raised bevel
+// face of the corner buttons.
+void fillChamferVGrad(f32 x0, f32 y0, f32 x1, f32 y1, f32 ch, GXColor top, GXColor bot,
+    int cornerMask) {
+    f32 pts[16];
+    const int n = chamferOutline(x0, y0, x1, y1, ch, cornerMask, pts);
+    const f32 span = y1 - y0 > 0.001f ? y1 - y0 : 1.0f;
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+    GXSetVtxDesc(GX_VA_CLR0, GX_DIRECT);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+    GXSetNumChans(1);
+    GXSetChanCtrl(GX_COLOR0A0, GX_DISABLE, GX_SRC_VTX, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE,
+        GX_AF_NONE);
+    GXSetNumTexGens(0);
+    GXSetNumTevStages(1);
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
+    GXSetTevOp(GX_TEVSTAGE0, GX_PASSCLR);
+    GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_SET);
+    GXLoadPosMtxImm(cMtx_getIdentity(), GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
+    GXBegin(GX_TRIANGLEFAN, GX_VTXFMT0, n);
+    for (int i = 0; i < n; i++) {
+        const f32 vy = pts[i * 2 + 1];
+        f32 t = (vy - y0) / span;
+        t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+        const GXColor c = lerpGX(top, bot, t);
+        GXPosition3f32(pts[i * 2], vy, 0.0f);
+        GXColor4u8(c.r, c.g, c.b, c.a);
+    }
+    GXEnd();
+    dComIfGp_getCurrentGrafPort()->setup2D();
+}
+
+}  // namespace
+
+// Shared geometry and palette of the beveled-button look (button + border).
+namespace {
+
+constexpr GXColor BEVEL_RIM_GOLD = {198, 166, 104, 255};
+constexpr GXColor BEVEL_RIM_GREY = {104, 99, 88, 255};
+// The face (or the border's bevel frames) sit this far inside the rim.
+constexpr f32 BEVEL_FACE_INSET = 2.5f;
+
+f32 bevelChamfer(f32 x0, f32 y0, f32 x1, f32 y1) {
+    const f32 side = (x1 - x0) < (y1 - y0) ? (x1 - x0) : (y1 - y0);
+    const f32 ch = side * 0.16f;
+    return ch > 14.0f ? 14.0f : ch;
+}
+
+// Top-left inner highlight and bottom-right shade: two thin, offset chamfer
+// frames give the edge a lit/shadowed bevel. Enabled-state only (callers
+// skip it for the flat disabled look). Returns nothing to restore — pure
+// draws.
+void bevelInnerFrames(f32 x0, f32 y0, f32 x1, f32 y1, f32 ch, int M) {
+    const f32 r = BEVEL_FACE_INSET;
+    f32 fch = ch - r * 0.6f;
+    if (fch < 0.0f) {
+        fch = 0.0f;
+    }
+    drawChamferFrame(x0 + r, y0 + r, x1 - r - 1.0f, y1 - r - 1.0f, fch, 1.2f,
+        {112, 105, 92, 130}, M);
+    drawChamferFrame(x0 + r + 1.0f, y0 + r + 1.0f, x1 - r, y1 - r, fch, 1.2f, {0, 0, 0, 90},
+        M);
+}
+
+}  // namespace
+
+// A drawn (no game texture) beveled button: a warm face with a soft top-lit
+// gradient, a thin gold rim and a top-left inner highlight, so it reads as a
+// physical button. Disabled greys the rim and flattens the gradient. The
+// corner buttons pass the default all-corner mask; the context tabs pass a
+// top-only mask (1|2) so they sit flush against the screen edge below.
+void drawBeveledCornerButton(f32 x0, f32 y0, f32 x1, f32 y1, bool enabled, int M) {
+    const f32 ch = bevelChamfer(x0, y0, x1, y1);
+    // Dark seat, one pixel proud all round, so the rim reads against the
+    // stone backdrop instead of blending into it.
+    fillChamferRect(x0 - 1.0f, y0 - 1.0f, x1 + 1.0f, y1 + 1.0f, ch + 1.0f, {0, 0, 0, 150}, M);
+    // Gold rim: a solid plate under the face (a frame ring here would risk
+    // hairline seams against the face's chamfer diagonal).
+    fillChamferRect(x0, y0, x1, y1, ch, enabled ? BEVEL_RIM_GOLD : BEVEL_RIM_GREY, M);
+    // Face: inset off the rim, top light → bottom dark for a raised look.
+    const f32 r = BEVEL_FACE_INSET;
+    f32 fch = ch - r * 0.6f;
+    if (fch < 0.0f) {
+        fch = 0.0f;
+    }
+    const GXColor top = enabled ? GXColor{80, 75, 65, 255} : GXColor{52, 50, 46, 255};
+    const GXColor bot = enabled ? GXColor{37, 35, 30, 255} : GXColor{31, 30, 27, 255};
+    fillChamferVGrad(x0 + r, y0 + r, x1 - r, y1 - r, fch, top, bot, M);
+    if (enabled) {
+        bevelInnerFrames(x0, y0, x1, y1, ch, M);
+    }
+}
+
+// Just the beveled button's BORDER — the gold rim and its lit/shadowed inner
+// bevel — with no face fill, so it can wrap a caller-drawn plate (the context
+// tabs keep the game's own plate texture as their fill but take this rim).
+void drawBeveledBorder(f32 x0, f32 y0, f32 x1, f32 y1, bool enabled, int M) {
+    const f32 ch = bevelChamfer(x0, y0, x1, y1);
+    drawChamferFrame(x0, y0, x1, y1, ch, BEVEL_FACE_INSET,
+        enabled ? BEVEL_RIM_GOLD : BEVEL_RIM_GREY, M);
+    if (enabled) {
+        bevelInnerFrames(x0, y0, x1, y1, ch, M);
+    }
+}
+
+// Plain panel for the reader/detail body boxes: window fill + thin frame.
+// Deliberately NOT drawMenuBox — the item-cell plate stretched over a big
+// reader box reads wrong (user feedback), the plate stays on actual cells.
+void drawDetailBox(f32 x0, f32 y0, f32 x1, f32 y1) {
+    fillRect(x0, y0, x1, y1, COL_WINDOW);
+    constexpr GXColor frame = {90, 84, 74, 210};
+    fillRect(x0, y0, x1, y0 + 1.0f, frame);
+    fillRect(x0, y1 - 1.0f, x1, y1, frame);
+    fillRect(x0, y0, x0 + 1.0f, y1, frame);
+    fillRect(x1 - 1.0f, y0, x1, y1, frame);
+}
+
+// Flat-color convex polygon, exposed for callers that need to mask a shape.
+void fillPolyPublic(const f32* xy, int count, GXColor color) {
+    fillPoly(xy, count, color);
+}
+
+// Filled circle as a 20-gon — smooth enough at the sizes this is used for
+// (page dots, the day/night glyph) and it needs no texture.
+void fillDisc(f32 cx, f32 cy, f32 r, GXColor color) {
+    constexpr int SEGS = 20;
+    f32 xy[SEGS * 2];
+    for (int i = 0; i < SEGS; i++) {
+        const f32 a = 6.2831853f * (f32)i / (f32)SEGS;
+        xy[i * 2] = cx + cosf(a) * r;
+        xy[i * 2 + 1] = cy + sinf(a) * r;
+    }
+    fillPoly(xy, SEGS, color);
+}
+
+// The tab plate drawn into a CHAMFERED silhouette, by stacking horizontal
+// strips of the texture whose width follows the chamfer diagonal. Nothing is
+// painted outside the shape, so the backdrop shows through the cut corners —
+// masking them with a fill colour left visible corner patches instead.
+// One over-scaled draw of the plate, clipped to a rectangle by the render
+// scissor. Over-scaling pushes the plate's own baked-in frame OUTSIDE the box
+// so the rect samples only its interior grain — otherwise that frame paints a
+// square inside our chamfered outline.
+static void plateStrip(const ResTIMG* plate, f32 ox, f32 oy, f32 ow, f32 oh, f32 rx0, f32 ry0,
+    f32 rx1, f32 ry1, u8 alpha, u32 black, u32 white) {
+    if (rx1 <= rx0 || ry1 <= ry0) {
+        return;
+    }
+    setWinScissor(rx0, ry0, rx1, ry1);
+    drawTimgTinted(plate, ox, oy, ow, oh, alpha, black, white);
+}
+
+void drawChamferPlate(f32 x0, f32 y0, f32 x1, f32 y1, f32 ch, bool selected, int cornerMask) {
+    const ResTIMG* plate = decoTimg(DECO_TAB_PLATE);
+    if (plate == NULL) {
+        fillChamferRect(x0, y0, x1, y1, ch, selected ? COL_TAB_ACTIVE : COL_TAB, cornerMask);
+        return;
+    }
+    const u8 alpha = selected ? 0xFF : 230;
+    const u32 black = selected ? 0x726C60FFu : 0x1A1814FFu;
+    const u32 white = selected ? 0xF4EEDEFFu : 0x5A5448FFu;
+
+    // The plate quad, over-scaled and centred on the box so the box interior
+    // samples only the plate's centre grain (its baked frame lands well
+    // outside). Every strip below draws THIS same quad; only the scissor
+    // rectangle changes, so the plate is continuous across the whole box.
+    constexpr f32 SCALE = 1.7f;
+    const f32 bw = x1 - x0;
+    const f32 bh = y1 - y0;
+    const f32 ow = bw * SCALE;
+    const f32 oh = bh * SCALE;
+    const f32 ox = x0 - (ow - bw) * 0.5f;
+    const f32 oy = y0 - (oh - bh) * 0.5f;
+
+    // Middle band: full width. Then the chamfered ends as horizontal strips
+    // whose width follows the diagonal — the union of scissor rects is the
+    // octagon, so the plate shows through it and nothing else.
+    plateStrip(plate, ox, oy, ow, oh, x0, y0 + ch, x1, y1 - ch, alpha, black, white);
+    const int steps = (int)ch;
+    for (int i = 0; i < steps; i++) {
+        const f32 t0 = (f32)i;
+        // Inset at the strip's TOP edge. Biasing to the bottom edge instead
+        // (to close the seam against an overlaid frame) makes the plate
+        // overshoot the ideal diagonal and chew visible notches out of the
+        // frame's own black edge — worse than the seam it fixes.
+        const f32 inset = ch - t0;
+        // Each end strip insets only on the sides whose corner is masked, so
+        // a partial mask (e.g. left-only) leaves the other side square.
+        const f32 topL = (cornerMask & 1) ? x0 + inset : x0;
+        const f32 topR = (cornerMask & 2) ? x1 - inset : x1;
+        const f32 botL = (cornerMask & 8) ? x0 + inset : x0;
+        const f32 botR = (cornerMask & 4) ? x1 - inset : x1;
+        plateStrip(plate, ox, oy, ow, oh, topL, y0 + t0, topR, y0 + t0 + 1.0f, alpha, black,
+            white);
+        plateStrip(plate, ox, oy, ow, oh, botL, y1 - t0 - 1.0f, botR, y1 - t0, alpha, black,
+            white);
+    }
+    applyWinClip();  // restores the window clip mid-page, full screen otherwise
+}
+
+// Flat-color annulus, drawn as a fan of quads. Used to ring the Functional
+// layout's round X/Y buttons when they are equip drop targets.
+void drawRing(f32 cx, f32 cy, f32 radius, f32 thickness, GXColor color) {
+    constexpr int SEGMENTS = 32;
+    const f32 inner = radius - thickness;
+    if (inner <= 0.0f) {
+        return;
+    }
+    for (int i = 0; i < SEGMENTS; i++) {
+        const f32 a0 = (f32)i / (f32)SEGMENTS * 6.2831853f;
+        const f32 a1 = (f32)(i + 1) / (f32)SEGMENTS * 6.2831853f;
+        const f32 c0 = cosf(a0);
+        const f32 s0 = sinf(a0);
+        const f32 c1 = cosf(a1);
+        const f32 s1 = sinf(a1);
+        const f32 quad[8] = {
+            cx + c0 * inner, cy + s0 * inner,
+            cx + c0 * radius, cy + s0 * radius,
+            cx + c1 * radius, cy + s1 * radius,
+            cx + c1 * inner, cy + s1 * inner,
+        };
+        fillPoly(quad, 4, color);
+    }
 }
 
 f32 clampListScroll(f32* io_scroll, f32 contentH, f32 viewH) {
@@ -378,6 +664,30 @@ void markPlateLayers(const PaneLayer* layers, int count, bool* skip) {
 
 // Tinted draw for the menu's intensity textures: black/white feed the
 // picture's TEV color pair, exactly how the game's own layouts color them.
+void drawTimgTintedMirror(const ResTIMG* timg, f32 x, f32 y, f32 w, f32 h, u8 alpha,
+    u32 blackRgba, u32 whiteRgba, bool mirrorX, bool mirrorY) {
+    if (timg == NULL || timg->width == 0 || timg->height == 0) {
+        return;
+    }
+    if (s_iconPic == NULL) {
+        s_iconPic = createPicture(timg);
+        s_lastTimg = timg;
+        if (s_iconPic == NULL) {
+            return;
+        }
+    }
+    if (timg != s_lastTimg) {
+        s_iconPic->changeTexture(timg, 0);
+        s_lastTimg = timg;
+    }
+    s_iconPic->setBlackWhite(JUtility::TColor(blackRgba), JUtility::TColor(whiteRgba));
+    s_iconPic->setAlpha(alpha);
+    s_iconPic->draw(x, y, w, h, mirrorX, mirrorY, false);
+    s_iconPic->setBlackWhite(JUtility::TColor(0x00000000u), JUtility::TColor(0xFFFFFFFFu));
+    s_iconPic->setAlpha(0xFF);
+    dComIfGp_getCurrentGrafPort()->setup2D();
+}
+
 void drawTimgTinted(const ResTIMG* timg, f32 x, f32 y, f32 w, f32 h, u8 alpha, u32 blackRgba,
     u32 whiteRgba) {
     if (timg == NULL || timg->width == 0 || timg->height == 0) {
@@ -401,8 +711,76 @@ void drawTimgTinted(const ResTIMG* timg, f32 x, f32 y, f32 w, f32 h, u8 alpha, u
 }
 
 void drawMenuBox(f32 x0, f32 y0, f32 x1, f32 y1, u32 fillRgba) {
-    // Chamfered rectangle with a subtle warm outline (drawn — replaces the
-    // SPOT_SQUARE3 texture plate).
+    // The game's own item/gear cell plate (TT_SPOT_SQUARE3 — every one of
+    // the 24 cells on the collection screen uses it), tinted to the
+    // caller's fill.
+    if (const ResTIMG* plate = decoTimg(DECO_SLOT_PLATE)) {
+        auto lift = [](u32 c, int add, u8 a) {
+            int r = (int)((c >> 24) & 0xFF) + add;
+            int g = (int)((c >> 16) & 0xFF) + add;
+            int b = (int)((c >> 8) & 0xFF) + add;
+            r = r < 0 ? 0 : (r > 255 ? 255 : r);
+            g = g < 0 ? 0 : (g > 255 ? 255 : g);
+            b = b < 0 ? 0 : (b > 255 ? 255 : b);
+            return (u32)((r << 24) | (g << 16) | (b << 8) | a);
+        };
+        // The plate is an INTENSITY texture — no alpha of its own — so its
+        // dark surround would paint the caller's fill as an opaque square
+        // outside the plate shape. Alpha 0 on the black point makes that
+        // surround transparent, leaving only the plate itself.
+        const u32 black = lift(fillRgba, -6, 0);
+        const u32 white = lift(fillRgba, 82, 0xFF);
+        const f32 w = x1 - x0;
+        const f32 h = y1 - y0;
+        // Interior fill first: the plate's inside is as dark as its outside,
+        // so the tint alone can't colour it. A chamfered fill whose corner
+        // cut matches the plate's rounded corner at this size gives the
+        // "filled inside the shape, corners untouched" look.
+        {
+            const GXColor fill = {(u8)(fillRgba >> 24), (u8)(fillRgba >> 16),
+                (u8)(fillRgba >> 8), (u8)fillRgba};
+            // The plate is a near-square with only a small corner radius, so
+            // the fill's corner cut must be small too — a big chamfer left
+            // black triangles between the fill's diagonal and the plate rim.
+            // Fixed pixel cut (not a fraction of height) so wide counter
+            // cells match the square cells.
+            const f32 side = w < h ? w : h;
+            f32 ch = side * 0.12f;
+            if (ch > 7.0f) {
+                ch = 7.0f;
+            }
+            fillChamferRect(x0 + 1.0f, y0 + 1.0f, x1 - 1.0f, y1 - 1.0f, ch, fill, 0xF);
+        }
+        const f32 texW = (f32)(u16)plate->width;
+        const f32 texH = (f32)(u16)plate->height;
+        // Natural width at this height: drawing a wide cell with the plate
+        // stretched full-width smears its rounded corners. Draw it
+        // three-sliced instead — left and right caps at natural aspect,
+        // only the middle stretched — so the corners stay intact.
+        const f32 natW = h * texW / texH;
+        if (w > natW + 2.0f) {
+            const f32 cap = natW * 0.45f;
+            setWinScissor(x0, y0, x0 + cap, y1);
+            drawTimgTinted(plate, x0, y0, natW, h, (u8)fillRgba, black, white);
+            setWinScissor(x1 - cap, y0, x1, y1);
+            drawTimgTinted(plate, x1 - natW, y0, natW, h, (u8)fillRgba, black, white);
+            // Middle: magnified so ONLY the texture's centre column covers
+            // it. Stretching the whole plate here dragged its rounded
+            // corner curve into the middle, which stepped the edge line at
+            // both seams.
+            constexpr f32 MID_FRAC = 0.10f;
+            const f32 midW = w - cap * 2.0f;
+            const f32 bigW = midW / MID_FRAC;
+            setWinScissor(x0 + cap, y0, x1 - cap, y1);
+            drawTimgTinted(plate, (x0 + x1) * 0.5f - bigW * 0.5f, y0, bigW, h, (u8)fillRgba,
+                black, white);
+            applyWinClip();
+        } else {
+            drawTimgTinted(plate, x0, y0, w, h, (u8)fillRgba, black, white);
+        }
+        return;
+    }
+    // Fallback: chamfered rectangle with a subtle warm outline.
     const GXColor fill = {(u8)(fillRgba >> 24), (u8)(fillRgba >> 16), (u8)(fillRgba >> 8),
         (u8)fillRgba};
     const f32 shortSide = x1 - x0 < y1 - y0 ? x1 - x0 : y1 - y0;
@@ -461,8 +839,7 @@ void drawPaneComposite(J2DPane* root, f32 x, f32 y, f32 boxW, f32 boxH, u8 minAl
         }
     }
     const f32 scale = boxW / srcW < boxH / srcH ? boxW / srcW : boxH / srcH;
-    const f32 dstX = alignRight ? x + boxW - srcW * scale
-                                : x + (boxW - srcW * scale) * 0.5f;
+    const f32 dstX = alignRight ? x + boxW - srcW * scale : x + (boxW - srcW * scale) * 0.5f;
     const f32 dstY = y + (boxH - srcH * scale) * 0.5f;
     if (o_map != NULL) {
         o_map[0] = dstX;
@@ -508,9 +885,9 @@ void drawPaneComposite(J2DPane* root, f32 x, f32 y, f32 boxW, f32 boxH, u8 minAl
             layerAlpha = minAlpha;
         }
         s_iconPic->setAlpha(layerAlpha);
-        s_iconPic->draw(dstX + (layers[i].x0 - minX) * scale, dstY + (layers[i].y0 - minY) * scale,
-            (layers[i].x1 - layers[i].x0) * scale, (layers[i].y1 - layers[i].y0) * scale, false,
-            false, false);
+        s_iconPic->draw(dstX + (layers[i].x0 - minX) * scale,
+            dstY + (layers[i].y0 - minY) * scale, (layers[i].x1 - layers[i].x0) * scale,
+            (layers[i].y1 - layers[i].y0) * scale, false, false, false);
     }
     s_iconPic->setBlackWhite(JUtility::TColor(0x00000000u), JUtility::TColor(0xFFFFFFFFu));
     s_iconPic->setCornerColor(JUtility::TColor(0xFFFFFFFFu));

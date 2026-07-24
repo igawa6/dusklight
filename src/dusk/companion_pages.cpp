@@ -4,6 +4,7 @@
 #include "dusk/companion.h"
 #include "dusk/companion_internal.h"
 #include "dusk/achievements.h"
+#include "dusk/dualscreen.h"
 #include "dusk/settings.h"
 
 #include "JSystem/J2DGraph/J2DPicture.h"
@@ -31,9 +32,6 @@
 
 namespace dusk::companion {
 namespace {
-
-// Defined below; both map modes (dungeon and world) draw it.
-void drawMapWarpButton(f32 x0, f32 y1);
 
 // The map page's own texture cache (independent of the gfx icon cache):
 // the live map render texture is re-uploaded only when the game swaps it,
@@ -189,76 +187,24 @@ const ResTIMG* dmapIconTimg(u8 icon) {
 // boss icon on the boss floor at the right edge (compass-gated upstream).
 // Falls back to the skull emblem if the disc's GC layout archive was
 // unavailable.
-void drawFloorPlateMarks(f32 tx, f32 ty, f32 tw, f32 th, int floorNo, int playerFloor) {
+// i_size scales both markers: the pop-up rows keep the compact default, the
+// (taller) context tab passes a larger one.
+void drawFloorPlateMarks(f32 tx, f32 ty, f32 tw, f32 th, int floorNo, int playerFloor,
+    f32 i_size = 16.0f) {
     if (playerFloor != DMAP_FLOOR_FOLLOW && floorNo == playerFloor) {
-        drawTimg(dmapFloorFaceTimg(), tx + 2.0f, ty + th * 0.5f - 8.0f, 16.0f, 16.0f, 0xFF);
+        drawTimg(dmapFloorFaceTimg(), tx + 2.0f, ty + th * 0.5f - i_size * 0.5f, i_size, i_size,
+            0xFF);
     }
     if (s_dmapBossFloor != DMAP_FLOOR_FOLLOW && floorNo == s_dmapBossFloor) {
         const ResTIMG* boss = dmapFloorBossMarkTimg();
         if (boss == NULL) {
             boss = dmapIconTimg(ICON_BOSS_e);
         }
-        drawTimg(boss, tx + tw - 16.0f, ty + th * 0.5f - 7.0f, 14.0f, 14.0f, 0xFF);
+        const f32 bs = i_size * 0.875f;
+        drawTimg(boss, tx + tw - bs - 2.0f, ty + th * 0.5f - bs * 0.5f, bs, bs, 0xFF);
     }
 }
 
-// Floor selector, top right inside the map window: a compact button with
-// the viewed floor; tapping opens a vertical pop-up list. Viewed floor
-// uses the active-tab style, other floors the idle style; floors with
-// nothing to draw (no map item and nothing visited there) are dimmed and
-// not tappable. Plates carry the pause map's link/boss markers.
-void drawDmapFloorTabs(f32 x1, f32 y0) {
-    s_dmapFloorRectCount = 0;
-    const f32 tw = 52.0f;
-    const f32 th = 24.0f;
-    const f32 gap = 2.0f;
-    const f32 tx = x1 - 4.0f - tw;
-    const f32 ty = y0 + 4.0f;
-    const int playerFloor = dMapInfo_c::getNowStayFloorNoDecisionFlg()
-        ? dMapInfo_c::getNowStayFloorNo() : DMAP_FLOOR_FOLLOW;
-    drawTabPlate(tx, ty, tw, th, true);
-    drawTextCentered(tx + tw * 0.5f, ty + 17.0f, 12.0f, TEXT_TAB_ACTIVE,
-        dmapFloorName(s_dmapViewFloor));
-    drawFloorPlateMarks(tx, ty, tw, th, s_dmapViewFloor, playerFloor);
-    s_dmapFloorBtnRect[0] = tx;
-    s_dmapFloorBtnRect[1] = ty;
-    s_dmapFloorBtnRect[2] = tx + tw;
-    s_dmapFloorBtnRect[3] = ty + th;
-    if (!s_dmapFloorPickOpen) {
-        return;
-    }
-    s8 top = 0;
-    s8 bottom = 0;
-    dMpath_c::getTopBottomFloorNo(&top, &bottom);
-    int count = top - bottom + 1;
-    if (count > 13) {
-        count = 13;
-    }
-    constexpr GXColor COL_TAB_SCRIM = {0, 0, 0, 150};
-    f32 py = ty + th + 4.0f;
-    for (int i = 0; i < count; i++) {
-        const int floorNo = top - i;
-        const bool viewed = floorNo == s_dmapViewFloor;
-        const int bit = floorNo + 5;
-        const bool hasContent =
-            bit >= 0 && bit < 13 && (s_dmapFloorAvail & (1u << bit)) != 0;
-        drawTabPlate(tx, py, tw, th, viewed);
-        drawTextCentered(tx + tw * 0.5f, py + 17.0f, 12.0f,
-            viewed ? TEXT_TAB_ACTIVE : TEXT_DIM, dmapFloorName(floorNo));
-        drawFloorPlateMarks(tx, py, tw, th, floorNo, playerFloor);
-        if (!hasContent && !viewed) {
-            fillRect(tx, py, tx + tw, py + th, COL_TAB_SCRIM);
-        } else if (s_dmapFloorRectCount < 13) {
-            s_dmapFloorRects[s_dmapFloorRectCount][0] = tx;
-            s_dmapFloorRects[s_dmapFloorRectCount][1] = py;
-            s_dmapFloorRects[s_dmapFloorRectCount][2] = tx + tw;
-            s_dmapFloorRects[s_dmapFloorRectCount][3] = py + th;
-            s_dmapFloorVals[s_dmapFloorRectCount] = floorNo;
-            s_dmapFloorRectCount++;
-        }
-        py += th + gap;
-    }
-}
 
 // Whole-floor dungeon view: contain-fit blit of the companion's live
 // dungeon-map render (companion_dmap.cpp) plus gestures, overlay icons and
@@ -297,7 +243,13 @@ bool drawDungeonMapContent(f32 x0, f32 y0, f32 x1, f32 y1) {
     const f32 drawW = texW * fit;
     const f32 drawH = texH * fit;
     const f32 bx = bx0 + (availW - drawW) * 0.5f;
-    const f32 by = y0 + (availH - drawH) * 0.5f;
+    // Functional: top-aligned, not centred — with the name plate gone the map
+    // is the only thing in the window, and centring a wide floor left dead
+    // space along the top edge. Cinematic still draws the name plate at the
+    // window's top-left, so it keeps the centred layout the plate was
+    // designed over.
+    const f32 by = dusk::dualscreen::mainHudRestored()
+        ? y0 : y0 + (availH - drawH) * 0.5f;
 
     // Gestures: pinch scales the real render zoom; drag pans the render
     // center (content follows the finger). Applied by dmapUpdate next frame.
@@ -325,9 +277,31 @@ bool drawDungeonMapContent(f32 x0, f32 y0, f32 x1, f32 y1) {
     s_mapPanX = 0.0f;
     s_mapPanY = 0.0f;
 
-    GXSetScissorRender((u32)(bx0 * s_pixelScale), (u32)(y0 * s_pixelScale),
-        (u32)(availW * s_pixelScale), (u32)(availH * s_pixelScale));
+    setWinScissor(bx0, y0, bx0 + availW, y0 + availH);
     s_dmapPic->draw(bx, by, drawW, drawH, false, false, false);
+    // Floor change: a quick fade-through-dark over the map instead of the
+    // texture hard-swapping under the viewer (double-texture crossfades
+    // aren't worth a second render target here).
+    {
+        static int sPrevShownFloor = -99;
+        static f32 sFloorFade = 0.0f;
+        const int shown = s_dmapFloorSel == DMAP_FLOOR_FOLLOW ? playerFloor : s_dmapFloorSel;
+        if (shown != sPrevShownFloor) {
+            if (sPrevShownFloor != -99) {
+                sFloorFade = 1.0f;
+            }
+            sPrevShownFloor = shown;
+        }
+        if (sFloorFade > 0.0f) {
+            sFloorFade *= 0.78f;
+            if (sFloorFade < 0.04f) {
+                sFloorFade = 0.0f;
+            } else {
+                fillRect(bx, by, bx + drawW, by + drawH,
+                    {0, 0, 0, (u8)(230.0f * sFloorFade)});
+            }
+        }
+    }
 
     // World -> canvas mapping for the overlays (same affine the render used).
     const f32 pxPerTexel = drawW / (f32)DMAP_TEX_SIZE;
@@ -366,7 +340,7 @@ bool drawDungeonMapContent(f32 x0, f32 y0, f32 x1, f32 y1) {
             drawTimgRotated(dmapLinkIconTimg(), ax, ay, 30.0f, cM_sht2d((f32)rotY), 0xFF);
         }
     }
-    GXSetScissorRender(0, 0, s_nativeW, s_nativeH);
+    applyWinClip();
     dComIfGp_getCurrentGrafPort()->setup2D();
 
     // Reset-view button, bottom right (shared rect with the minimap mode).
@@ -378,7 +352,6 @@ bool drawDungeonMapContent(f32 x0, f32 y0, f32 x1, f32 y1) {
     s_mapResetRect[1] = y1 - 30.0f;
     s_mapResetRect[2] = x1 - 4.0f;
     s_mapResetRect[3] = y1 - 4.0f;
-    drawMapWarpButton(x0, y1);
     return true;
 }
 
@@ -403,39 +376,6 @@ const ResTIMG* warpIconTimg() {
         }
     }
     return timg;
-}
-
-void drawMapWarpButton(f32 x0, f32 y1) {
-    s_warpBtnRect[0] = 0.0f;
-    s_warpBtnRect[2] = 0.0f;
-    if (!warpUnlocked()) {
-        return;
-    }
-    // While the game's own map screen is up the button becomes its Z key
-    // (portal mode on/off) and is tinted to say so. Every other menu — start,
-    // items, submenus — hides it; with no menu at all it opens the warp map,
-    // and then only when the warp could actually start.
-    // Only the FIELD map has portals; the dungeon map has no warp at all.
-    const bool onMapScreen = isFieldMapScreen();
-    if (!onMapScreen && (anyMenuOpen() || !warpAllowed())) {
-        return;
-    }
-    constexpr f32 SIDE = 38.0f;
-    const f32 bx = x0 + 4.0f;
-    const f32 by = y1 - 4.0f - SIDE;
-    // On the map screen the styling is inverted: brown while the portals are
-    // already shown, bright while they are not. Off it, always bright.
-    const bool bright = !onMapScreen || !warpPortalsShown();
-    drawTabPlate(bx, by, SIDE, SIDE, bright);
-    constexpr f32 ICON = 21.0f;
-    drawTimg(warpIconTimg(), bx + (SIDE - ICON) * 0.5f, by + 3.0f, ICON, ICON,
-        bright ? 0xFF : 130);
-    drawTextCentered(bx + SIDE * 0.5f, by + SIDE - 4.0f, 9.0f,
-        bright ? TEXT_TAB_ACTIVE : TEXT_DIM, "Warp");
-    s_warpBtnRect[0] = bx;
-    s_warpBtnRect[1] = by;
-    s_warpBtnRect[2] = bx + SIDE;
-    s_warpBtnRect[3] = by + SIDE;
 }
 
 // ITEMS grid: two-column box grouping —
@@ -527,7 +467,7 @@ void drawInvCell(const InvGrid& g, int i) {
 }
 
 // Caption line under the grid: equip notice > selected item name > hint.
-// Owns the s_equipMsgFrames decrement while this page is active.
+// (The s_equipMsgFrames countdown lives in drawDashboard, once per frame.)
 void drawInventoryCaption(f32 x0, f32 y1) {
     u8 nameItem = dItemNo_NONE_e;
     if (s_dragging && s_dragSlot >= 0) {
@@ -535,11 +475,12 @@ void drawInventoryCaption(f32 x0, f32 y1) {
     } else if (s_selSlot >= 0) {
         nameItem = dComIfGs_getItem(s_selSlot, false);
     }
-    // All caption variants use the Info button label's metrics (13px on
-    // the y1 - 12 baseline) so the bottom row reads as one line.
+    // All caption variants share one 13px baseline, sitting low in the
+    // window's bottom margin so they read clear of the grid.
+    const f32 base = y1 - 5.0f;
     if (s_equipMsgFrames > 0) {
         constexpr u32 TEXT_WARN = 0xF0A050FF;
-        drawText(x0 + 18.0f, y1 - 12.0f, 13.0f, TEXT_WARN, "%s", s_equipMsg);
+        drawText(x0 + 18.0f, base, 13.0f, TEXT_WARN, "%s", s_equipMsg);
     } else if (nameItem != dItemNo_NONE_e) {
         static u8 s_nameItemNo = dItemNo_NONE_e;
         static char s_nameBuf[96];
@@ -549,10 +490,10 @@ void drawInventoryCaption(f32 x0, f32 y1) {
             dMeter2Info_getString(0x165 + nameItem, s_nameBuf, NULL);
         }
         if (s_nameBuf[0] != 0) {
-            drawText(x0 + 18.0f, y1 - 12.0f, 13.0f, TEXT_MAIN, "%s", s_nameBuf);
+            drawText(x0 + 18.0f, base, 13.0f, TEXT_MAIN, "%s", s_nameBuf);
         }
     } else {
-        drawText(x0 + 18.0f, y1 - 12.0f, 13.0f, TEXT_DIM,
+        drawText(x0 + 18.0f, base, 13.0f, TEXT_DIM,
             "Drag an item onto X or Y to equip");
     }
 }
@@ -633,6 +574,126 @@ void drawWrappedDescription(const char* text, f32 x, f32 ry, f32 wrapW) {
 }
 
 }  // namespace
+
+// Warp content (portal glyph + "Warp") for the Functional context tab; the
+// plate is drawn by the caller. While the game's field map is up the tab acts
+// as its Z toggle, so the icon dims to show the portals are already on.
+void drawWarpTab(f32 x0, f32 y0, f32 x1, f32 y1, bool active) {
+    const f32 tw = x1 - x0;
+    const f32 th = y1 - y0;
+    const bool portalsShown = isFieldMapScreen() && warpPortalsShown();
+    const u8 iconA = active && !portalsShown ? 0xFF : 130;
+    // Icon left, label right, the group centred on one baseline — larger than
+    // the old stacked layout.
+    constexpr f32 ICON = 28.0f;
+    constexpr f32 TS = 15.0f;
+    constexpr f32 GAP = 5.0f;
+    const f32 groupW = ICON + GAP + measureText(TS, "Warp");
+    const f32 gx = x0 + (tw - groupW) * 0.5f;
+    const f32 cy = y0 + th * 0.5f;
+    drawTimg(warpIconTimg(), gx, cy - ICON * 0.5f, ICON, ICON, iconA);
+    drawText(gx + ICON + GAP, cy + 5.0f, TS, active ? TEXT_TAB_ACTIVE : TEXT_DIM, "Warp");
+}
+
+// Floor button content (viewed-floor name + the pause map's link/boss
+// markers) for the Functional context tab; the tab plate itself is drawn by
+// the caller so its selected/unselected styling stays uniform with the other
+// context actions.
+void drawFloorTab(f32 x0, f32 y0, f32 x1, f32 y1, bool active) {
+    const int playerFloor = dMapInfo_c::getNowStayFloorNoDecisionFlg()
+        ? dMapInfo_c::getNowStayFloorNo() : DMAP_FLOOR_FOLLOW;
+    const f32 tw = x1 - x0;
+    const f32 th = y1 - y0;
+    drawTextCentered(x0 + tw * 0.5f, y0 + th * 0.5f + 6.0f, 15.0f,
+        active ? TEXT_TAB_ACTIVE : TEXT_DIM, dmapFloorName(s_dmapViewFloor));
+    drawFloorPlateMarks(x0, y0, tw, th, s_dmapViewFloor, playerFloor, 26.0f);
+}
+
+// Floor-select pop-up as a rightward overlay panel: a vertical list of floor
+// plates whose top-left starts at (px, py) — the right edge of the context
+// tab. Drawn after the content window so it sits on top. Empty floors are
+// dimmed and not tappable; the rest publish their tap rects.
+void drawFloorOverlay(f32 px, f32 py, bool centerOnCurrent, f32 clampY0, f32 clampY1) {
+    s_dmapFloorRectCount = 0;
+    if (!s_dmapFloorPickOpen) {
+        return;
+    }
+    const int playerFloor = dMapInfo_c::getNowStayFloorNoDecisionFlg()
+        ? dMapInfo_c::getNowStayFloorNo() : DMAP_FLOOR_FOLLOW;
+    const f32 tw = 62.0f;
+    const f32 th = 26.0f;
+    const f32 gap = 3.0f;
+    s8 top = 0;
+    s8 bottom = 0;
+    dMpath_c::getTopBottomFloorNo(&top, &bottom);
+    int count = top - bottom + 1;
+    if (count > 13) {
+        count = 13;
+    }
+    // Anchor the VIEWED floor on py rather than growing the list downward
+    // from it: a tall dungeon otherwise pushes the rows you actually want
+    // far from the tab you opened them with. Clamped so the list still fits
+    // the content area, and left top-anchored if it is taller than that.
+    f32 listTop = py;
+    const f32 listH = (f32)count * th + (f32)(count - 1) * gap;
+    if (centerOnCurrent) {
+        int sel = 0;
+        for (int i = 0; i < count; i++) {
+            if (top - i == s_dmapViewFloor) {
+                sel = i;
+                break;
+            }
+        }
+        listTop = py - (f32)sel * (th + gap) - th * 0.5f;
+    }
+    // Geometric clamp whenever bounds are given (both anchor styles): the
+    // plate renderer's scissor strips override any enclosing clip, so a tall
+    // list would otherwise paint straight past the content window's edge.
+    if (clampY1 > clampY0) {
+        if (listTop + listH > clampY1) {
+            listTop = clampY1 - listH;
+        }
+        if (listTop < clampY0) {
+            listTop = clampY0;
+        }
+    }
+    // Softer than the old flat-black cover, which flattened the plate grain
+    // into a smudge — this reads as "dimmed" rather than "painted over".
+    constexpr GXColor COL_TAB_SCRIM = {18, 17, 14, 122};
+    constexpr GXColor COL_FRAME = {108, 102, 90, 255};
+    constexpr GXColor COL_HERE = {233, 206, 142, 255};
+    constexpr u32 TEXT_LOCKED = 0x6E685AFFu;
+    for (int i = 0; i < count; i++) {
+        const int floorNo = top - i;
+        const bool viewed = floorNo == s_dmapViewFloor;
+        const int bit = floorNo + 5;
+        const bool hasContent =
+            bit >= 0 && bit < 13 && (s_dmapFloorAvail & (1u << bit)) != 0;
+        const f32 ty = listTop + (f32)i * (th + gap);
+        const bool here = playerFloor != DMAP_FLOOR_FOLLOW && floorNo == playerFloor;
+        // Chamfered plate + the content window's rule, like the rest of the
+        // chrome — this was the last surface still using the flat plate.
+        drawChamferPlate(px, ty, px + tw, ty + th, 8.0f, viewed, 1 | 2 | 4 | 8);
+        // Gold outline marks the floor Link is ON, which is a different
+        // question from which floor is being SHOWN (the bright plate).
+        drawChamferFrame(px, ty, px + tw, ty + th, 8.0f, 1.5f, here ? COL_HERE : COL_FRAME,
+            1 | 2 | 4 | 8);
+        drawTextCentered(px + tw * 0.5f, ty + th * 0.5f + 4.0f, 12.0f,
+            viewed ? TEXT_TAB_ACTIVE : (hasContent ? TEXT_DIM : TEXT_LOCKED),
+            dmapFloorName(floorNo));
+        drawFloorPlateMarks(px, ty, tw, th, floorNo, playerFloor);
+        if (!hasContent && !viewed) {
+            fillRect(px, ty, px + tw, ty + th, COL_TAB_SCRIM);
+        } else if (s_dmapFloorRectCount < 13) {
+            s_dmapFloorRects[s_dmapFloorRectCount][0] = px;
+            s_dmapFloorRects[s_dmapFloorRectCount][1] = ty;
+            s_dmapFloorRects[s_dmapFloorRectCount][2] = px + tw;
+            s_dmapFloorRects[s_dmapFloorRectCount][3] = ty + th;
+            s_dmapFloorVals[s_dmapFloorRectCount] = floorNo;
+            s_dmapFloorRectCount++;
+        }
+    }
+}
 
 namespace {
 
@@ -783,11 +844,10 @@ void drawMiniMapContent(f32 x0, f32 y0, f32 x1, f32 y1) {
         s_mapViewOffZ = hiZ;
     }
 
-    GXSetScissorRender((u32)(x0 * s_pixelScale), (u32)(y0 * s_pixelScale),
-        (u32)(availW * s_pixelScale), (u32)(availH * s_pixelScale));
+    setWinScissor(x0, y0, x0 + availW, y0 + availH);
     s_mapPic->draw(x0 + (availW - drawW) * 0.5f,
         y0 + (availH - drawH) * 0.5f, drawW, drawH, false, false, false);
-    GXSetScissorRender(0, 0, s_nativeW, s_nativeH);
+    applyWinClip();
     dComIfGp_getCurrentGrafPort()->setup2D();
 
     // Reset-view button, bottom right inside the window.
@@ -800,7 +860,6 @@ void drawMiniMapContent(f32 x0, f32 y0, f32 x1, f32 y1) {
     s_mapResetRect[1] = y1 - 30.0f;
     s_mapResetRect[2] = x1 - 4.0f;
     s_mapResetRect[3] = y1 - 4.0f;
-    drawMapWarpButton(x0, y1);
 }
 
 }  // namespace
@@ -915,6 +974,11 @@ const char* mapStageName() {
 // Map name plate flush in the map window's top-left corner: dark banner
 // with the bottom corners chamfered.
 void drawMapNamePlate(f32 x0, f32 y0) {
+    // Functional shows the region name in the left column's place page, so a
+    // plate over the map here would just say it twice.
+    if (dusk::dualscreen::mainHudRestored()) {
+        return;
+    }
     const char* name = mapStageName();
     if (name[0] == '\0') {
         return;
@@ -929,11 +993,59 @@ void drawMapNamePlate(f32 x0, f32 y0) {
     drawText(x0 + pad, y0 + ph * 0.5f + 4.5f, ts, TEXT_MAIN, "%s", name);
 }
 
+// Cinematic has no left column, so the context action lives as an in-window
+// button: top-right on the map (with a leftward floor overlay), bottom-right
+// on items/collect. Functional draws it in the left column instead, so this
+// is a no-op there.
+void drawCinematicContextTab(f32 x0, f32 y0, f32 x1, f32 y1) {
+    if (dusk::dualscreen::mainHudRestored()) {
+        return;
+    }
+    bool clickable = false;
+    const int action = contextTabAction(&clickable);
+    // The ITEMS reader keeps its own in-window Back button, so its CTX_BACK
+    // is suppressed here; COLLECT's detail views navigate through the tab in
+    // both modes (the library sections have no other way back).
+    if (action == CTX_NONE ||
+        (action == CTX_BACK && s_page.load() == PAGE_INVENTORY))
+    {
+        s_ctxTabRect[0] = 0.0f;
+        s_ctxTabRect[2] = 0.0f;
+        return;
+    }
+    const f32 tw = 70.0f;
+    const f32 th = 28.0f;
+    const bool onMap = s_page.load() == PAGE_MAP;
+    const f32 tx = x1 - 4.0f - tw;
+    const f32 ty = onMap ? y0 + 4.0f : y1 - 4.0f - th;
+    drawContextTab(tx, ty, tx + tw, ty + th);
+    if (onMap && s_dmapAvailable && s_dmapFloorPickOpen) {
+        // Overlay to the left of the tab so it stays inside the window;
+        // clamped to the window's vertical span because the plate strips
+        // ignore the enclosing scissor.
+        drawFloorOverlay(tx - 66.0f, ty + th + 2.0f, false, y0, y1);
+    }
+}
+
+namespace {
+
+// Feedback line for the MAP page ("Can't warp from here"): the context tab
+// sets it, but no map draw rendered it — only the error sound reached the
+// user. Bottom-left, clear of the Reset button opposite; the ITEMS caption's
+// metrics.
+void drawMapCaption(f32 x0, f32 y1) {
+    if (s_equipMsgFrames > 0) {
+        constexpr u32 TEXT_WARN = 0xF0A050FF;
+        drawText(x0 + 14.0f, y1 - 10.0f, 13.0f, TEXT_WARN, "%s", s_equipMsg);
+    }
+}
+
+}  // namespace
+
 void drawMapContent(f32 x0, f32 y0, f32 x1, f32 y1) {
     // In dungeons the live floor map replaces the minimap crop.
     if (s_dmapAvailable) {
         if (drawDungeonMapContent(x0, y0, x1, y1)) {
-            drawDmapFloorTabs(x1, y0);
             drawMapNamePlate(x0, y0);
         } else {
             // Either the companion yielded because the game's own dungeon
@@ -943,8 +1055,9 @@ void drawMapContent(f32 x0, f32 y0, f32 x1, f32 y1) {
                 dMeter2Info_getWindowStatus() == WINDOW_STATUS_DUNGEON_MAP;
             drawMapPlaceholder(x0, y0, x1, y1,
                 mapOnMain ? "View Map on Main Screen" : "Loading floor map...");
+            // The floor overlay must not linger over a map that isn't there.
             s_dmapFloorRectCount = 0;
-            s_dmapFloorBtnRect[2] = s_dmapFloorBtnRect[0];  // hidden
+            s_dmapFloorPickOpen = false;
             s_mapResetRect[2] = s_mapResetRect[0];          // hidden
             // Nothing consumed the gestures this frame — drop them so they
             // don't burst into the view once it appears.
@@ -952,12 +1065,14 @@ void drawMapContent(f32 x0, f32 y0, f32 x1, f32 y1) {
             s_mapPanY = 0.0f;
             s_mapPinchDeltaMilli.exchange(0);
         }
+        drawMapCaption(x0, y1);
         return;
     }
     drawMiniMapContent(x0, y0, x1, y1);
     drawMapNamePlate(x0, y0);
+    drawMapCaption(x0, y1);
+    // Overworld minimap has no floors: the context tab shows Warp, not Floor.
     s_dmapFloorRectCount = 0;
-    s_dmapFloorBtnRect[2] = s_dmapFloorBtnRect[0];  // hidden
     s_dmapFloorPickOpen = false;
 }
 
@@ -998,26 +1113,33 @@ void drawItemInfo(f32 x0, f32 y0, f32 x1, f32 y1) {
         readerInvalidate();
         s_scrollItemInfo = 0.0f;
     }
+    // Pop out of / back into the item cell this was opened from.
+    if (!readerZoomStep(&x0, &y0, &x1, &y1)) {
+        s_itemInfoSlot = -1;
+        s_scrollItemInfo = 0.0f;
+        return;
+    }
     // Header band: the icon keeps its old size but sits above the text
     // instead of inside it, so the description still gets the full column.
     constexpr f32 HDR_ICON = 48.0f;
     constexpr f32 HDR_H = HDR_ICON + 8.0f;
     drawItemIcon(s_itemInfoSlot, itemNo, x1 - HDR_ICON - 4.0f, y0 + 2.0f, HDR_ICON);
-    // Name vertically centred against the icon, clipped short of it.
-    drawText(x0 + 4.0f, y0 + HDR_H * 0.5f + 6.0f, 16.0f, TEXT_ACCENT, "%s", name);
+    // Name right-aligned, ending just before the icon (title-before-icon,
+    // matching the collect headers), vertically centred against it.
+    const f32 nw = measureText(16.0f, name);
+    drawText(x1 - HDR_ICON - 12.0f - nw, y0 + HDR_H * 0.5f + 6.0f, 16.0f, TEXT_ACCENT, "%s",
+        name);
     const f32 by0 = y0 + HDR_H;
     const f32 by1 = y1 - 2.0f;
-    drawMenuBox(x0, by0, x1, by1, 0x22201DFFu);
-    const f32 textBottom = by1 - 44.0f;
+    drawDetailBox(x0, by0, x1, by1);
+    const f32 textBottom = readerTextBottom(by1);
     const f32 lineH = 21.0f;
     const f32 viewH = textBottom - by0 - 12.0f;
     const int lineCount = readerBodyLineCount();
     const f32 contentH = (f32)lineCount * lineH;
     const f32 maxScroll = clampListScroll(&s_scrollItemInfo, contentH, viewH);
     if (s_nativeW != 0) {
-        GXSetScissorRender((u32)(x0 * s_pixelScale), (u32)((by0 + 6.0f) * s_pixelScale),
-            (u32)((x1 - x0) * s_pixelScale) + 1,
-            (u32)((textBottom - by0 - 6.0f) * s_pixelScale) + 1);
+        setWinScissor(x0, by0 + 6.0f, x1, textBottom);
     }
     for (int i = 0; i < lineCount; i++) {
         const f32 ly = by0 + 22.0f + (f32)i * lineH - s_scrollItemInfo;
@@ -1027,10 +1149,17 @@ void drawItemInfo(f32 x0, f32 y0, f32 x1, f32 y1) {
         readerDrawBodyLine(i, x0 + 16.0f, ly, 14.0f, TEXT_MAIN);
     }
     if (s_nativeW != 0) {
-        GXSetScissorRender(0, 0, s_nativeW, s_nativeH);
+        applyWinClip();
     }
     drawListScrollHint(x1 - 4.0f, by0 + 4.0f, textBottom - 4.0f, s_scrollItemInfo, maxScroll,
         viewH, contentH);
+    // Functional turns the context tab into Back while this is open, so the
+    // in-window button would be a second way to do the same thing.
+    if (dusk::dualscreen::mainHudRestored()) {
+        s_itemInfoBtnRect[0] = 0.0f;
+        s_itemInfoBtnRect[2] = 0.0f;
+        return;
+    }
     const f32 fy = by1 - 38.0f;
     drawTabPlate(x1 - 100.0f, fy, 90.0f, 30.0f, false);
     drawTextCentered(x1 - 55.0f, fy + 20.0f, 14.0f, TEXT_MAIN, "Back");
@@ -1056,15 +1185,8 @@ void drawInventoryContent(f32 x0, f32 y0, f32 x1, f32 y1) {
         drawInvCell(grid, i);
     }
     drawInventoryCaption(x0, y1);
-    // Info button (map-Reset style) once an item is selected.
-    if (s_selSlot >= 0 && dComIfGs_getItem(s_selSlot, false) != dItemNo_NONE_e) {
-        drawTabPlate(x1 - 70.0f, y1 - 30.0f, 66.0f, 26.0f, true);
-        drawTextCentered(x1 - 37.0f, y1 - 12.0f, 13.0f, TEXT_TAB_ACTIVE, "Info");
-        s_itemInfoBtnRect[0] = x1 - 70.0f;
-        s_itemInfoBtnRect[1] = y1 - 30.0f;
-        s_itemInfoBtnRect[2] = x1 - 4.0f;
-        s_itemInfoBtnRect[3] = y1 - 4.0f;
-    }
+    // The "Info" trigger now lives in the left column's context tab; the
+    // reader view (drawItemInfo) is unchanged.
 }
 
 // QUEST page: Dusklight's achievements, 5 category sub-tabs, drag-scrolled.
@@ -1125,7 +1247,7 @@ void drawQuestContent(f32 x0, f32 y0, f32 x1, f32 y1) {
         drawWrappedDescription(a.description, x0 + 20.0f, ry + 34.0f, wrapW);
     }
     if (s_nativeW != 0) {
-        GXSetScissorRender(0, 0, s_nativeW, s_nativeH);
+        applyWinClip();
     }
     drawListScrollHint(x1, tableTop, listBottom, s_scrollQuest, maxScroll, viewH, contentH);
 }
