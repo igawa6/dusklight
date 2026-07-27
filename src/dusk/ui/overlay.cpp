@@ -447,6 +447,15 @@ void Overlay::update_pipeline_progress() {
     {
         return;
     }
+    // Opt-out: shader pipelines are still built either way, this only hides
+    // the toast. Clear any open state so turning it off takes effect at once.
+    if (!getSettings().video.showPipelineProgress.getValue()) {
+        mPipelineProgress->RemoveAttribute("open");
+        mPipelineProgressActive = false;
+        mPipelineBatchCreatedBase = 0;
+        mLastQueuedPipelines = 0;
+        return;
+    }
 
     const auto* stats = aurora_get_stats();
     const uint32_t queuedPipelines = stats != nullptr ? stats->queuedPipelines : 0;

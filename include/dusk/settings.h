@@ -153,6 +153,7 @@ struct UserSettings {
         ConfigVar<bool> enableVsync;
         ConfigVar<bool> lockAspectRatio;
         ConfigVar<bool> enableFpsOverlay;
+        ConfigVar<bool> showPipelineProgress;
         ConfigVar<int> fpsOverlayCorner;
         ConfigVar<int> maxFrameRate;
         ConfigVar<bool> rememberWindowSize;

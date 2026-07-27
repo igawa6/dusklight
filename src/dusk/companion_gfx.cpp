@@ -6,6 +6,7 @@
 
 #include "dusk/companion.h"
 #include "dusk/companion_internal.h"
+#include "dusk/logging.h"
 
 #include "JSystem/J2DGraph/J2DPicture.h"
 #include "JSystem/JKernel/JKRExpHeap.h"  // mDoExt heaps are JKRExpHeap*
@@ -25,6 +26,10 @@
 #include <cstring>
 
 namespace dusk::companion {
+
+// Definition for the extern in companion_internal.h.
+f32 s_drawAlpha = 1.0f;
+
 namespace {
 
 // The shared texture cache: one picture object, retextured on demand.
@@ -40,6 +45,33 @@ struct PaneLayer {
     J2DPicture* pic;
     f32 x0, y0, x1, y1;
 };
+
+// Global content alpha, 0..1. Multiplied into every primitive's colour so a
+// block of drawing can be faded as a whole WITHOUT painting anything over it —
+// the window's backdrop, border and ornaments stay untouched and visible
+// through the fade, which a covering veil could not do.
+// Always restore to 1.0f: it is deliberately not scoped, because the page
+// content is drawn through dozens of call sites.
+}  // namespace
+
+u8 mulDrawAlpha(u8 a) {
+    if (s_drawAlpha >= 1.0f) {
+        return a;
+    }
+    const f32 v = (f32)a * (s_drawAlpha < 0.0f ? 0.0f : s_drawAlpha);
+    return (u8)(v < 0.0f ? 0.0f : (v > 255.0f ? 255.0f : v));
+}
+
+GXColor mulDrawAlpha(GXColor c) {
+    c.a = mulDrawAlpha(c.a);
+    return c;
+}
+
+namespace {
+
+u32 mulDrawAlphaRgba(u32 rgba) {
+    return (rgba & 0xFFFFFF00u) | mulDrawAlpha((u8)(rgba & 0xFFu));
+}
 
 void drawCompositeLayer(J2DPicture* src, f32 dx, f32 dy, f32 dw, f32 dh, u8 minAlpha) {
     if (src->getTexture(0) == NULL) {
@@ -68,7 +100,7 @@ void drawCompositeLayer(J2DPicture* src, f32 dx, f32 dy, f32 dw, f32 dh, u8 minA
     if (layerAlpha < minAlpha) {
         layerAlpha = minAlpha;
     }
-    s_iconPic->setAlpha(layerAlpha);
+    s_iconPic->setAlpha(mulDrawAlpha(layerAlpha));
     s_iconPic->draw(dx, dy, dw, dh, false, false, false);
     s_iconPic->setBlackWhite(JUtility::TColor(0x00000000u), JUtility::TColor(0xFFFFFFFFu));
     s_iconPic->setCornerColor(JUtility::TColor(0xFFFFFFFFu));
@@ -155,6 +187,7 @@ void applyWinClip() {
 }
 
 void fillRect(f32 x, f32 y, f32 x2, f32 y2, GXColor color) {
+    color = mulDrawAlpha(color);
     dDlst_2DQuad_c quad;
     quad.init((s16)x, (s16)y, (s16)x2, (s16)y2, color);
     quad.draw();
@@ -165,6 +198,7 @@ namespace {
 // Flat-color convex polygon (triangle fan) — dDlst_2DQuad_c::draw's GX
 // state with float verts.
 void fillPoly(const f32* xy, int count, GXColor color) {
+    color = mulDrawAlpha(color);
     GXClearVtxDesc();
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
@@ -235,6 +269,9 @@ GXColor lerpGX(GXColor a, GXColor b, f32 t) {
         (u8)((int)a.a + (int)(((int)b.a - (int)a.a) * t))};
 }
 
+
+}  // namespace
+
 // A chamfered octagon filled with a smooth top-to-bottom colour gradient
 // (per-vertex colours, interpolated by each vertex's y). Same GX setup as
 // fillPoly but with a vertex colour channel — used for the raised bevel
@@ -266,13 +303,11 @@ void fillChamferVGrad(f32 x0, f32 y0, f32 x1, f32 y1, f32 ch, GXColor top, GXCol
         t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
         const GXColor c = lerpGX(top, bot, t);
         GXPosition3f32(pts[i * 2], vy, 0.0f);
-        GXColor4u8(c.r, c.g, c.b, c.a);
+        GXColor4u8(c.r, c.g, c.b, mulDrawAlpha(c.a));
     }
     GXEnd();
     dComIfGp_getCurrentGrafPort()->setup2D();
 }
-
-}  // namespace
 
 // Shared geometry and palette of the beveled-button look (button + border).
 namespace {
@@ -507,6 +542,7 @@ void drawChamferFrame(f32 x0, f32 y0, f32 x1, f32 y1, f32 ch, f32 t, GXColor col
 }
 
 void drawText(f32 x, f32 y, f32 size, u32 rgba, const char* fmt, ...) {
+    rgba = mulDrawAlphaRgba(rgba);
     char buf[256];
     va_list args;
     va_start(args, fmt);
@@ -547,6 +583,210 @@ f32 measureText(f32 size, const char* text) {
 }
 
 // Draw text centered on cx using measured width.
+// Uppercase in the font's own encoding. The message font is LATIN-1
+// (verified: o-umlaut = 0xF6, sharp-s = 0xDF), so the accented lowercase
+// block 0xE0-0xFE maps to uppercase by subtracting 0x20 — except 0xF7
+// (division sign, not a letter) and 0xDF (sharp s, which has no single-byte
+// uppercase form and is left alone).
+void toUpperLatin1(char* s) {
+    for (; *s != 0; s++) {
+        const unsigned char c = (unsigned char)*s;
+        if (c >= 'a' && c <= 'z') {
+            *s = (char)(c - 0x20);
+        } else if (c >= 0xE0 && c <= 0xFE && c != 0xF7) {
+            *s = (char)(c - 0x20);
+        }
+    }
+}
+
+// An archive string in whatever language the game is running, interned by
+// message ID. Every lookup is a linear scan of the whole .bmg, and the
+// hand-rolled `static char buf[N]; if (buf[0] == 0) fetch` idiom had grown to
+// eight sites with four different buffer sizes, two IDs fetched twice over,
+// and three copies that rescanned every frame whenever the archive legitimately
+// came back empty. This is both the safer and the cheaper way to ask for a word.
+// Use it for content the game names (item names); use localizedWord below for
+// UI labels, where English keeps the dashboard's own wording.
+const char* archiveText(u32 msgId, const char* fallback, bool upper);
+
+// A UI LABEL that also exists in the archive. English keeps the dashboard's
+// own (terser) wording; every other language takes the game's. Same policy as
+// localizedWord, but sharing archiveText's interning so no caller-owned static
+// buffer is needed. Use this for labels; archiveText for content the game names.
+const char* archiveLabel(u32 msgId, const char* english, bool upper) {
+    if (OSGetLanguage() == OS_LANGUAGE_ENGLISH) {
+        return english;
+    }
+    return archiveText(msgId, english, upper);
+}
+
+const char* archiveText(u32 msgId, const char* fallback, bool upper) {
+    if (msgId == 0) {
+        return fallback;
+    }
+    // 33 distinct (id, upper) pairs are reachable in one non-English session
+// (3 tabs + Poe + Info/Back + Hawkeye + Fused Shadows + Mirror Shards +
+// Caught/Record + 6 fish + Hidden Skills + 7 skill ordinals + Bugs + Fish
+// Journal + Mail + 5 scents), so 32 was one short: the 33rd interner lost its
+// name permanently and silently. Sized with headroom, and it now says so.
+// RETRY_GAP spaces the attempts out. They used to be consecutive draws, so a
+// page opened during a room transition burned all eight inside ~130 ms — well
+// within the window where the archive is legitimately absent — and latched the
+// English fallback for the rest of the session, which is the exact failure the
+// budget exists to prevent. Eight tries 20 draws apart span ~2.7 s instead.
+enum { WORD_CACHE_MAX = 64, FETCH_TRIES = 8, RETRY_GAP = 20 };
+    static char l_text[WORD_CACHE_MAX][64];
+    static u32 l_ids[WORD_CACHE_MAX];
+    static u8 l_tries[WORD_CACHE_MAX];
+    static u8 l_wait[WORD_CACHE_MAX];
+    static bool l_upper[WORD_CACHE_MAX];
+    static int l_count = 0;
+    int slot = -1;
+    for (int i = 0; i < l_count; i++) {
+        if (l_ids[i] == msgId && l_upper[i] == upper) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) {
+        if (l_count >= WORD_CACHE_MAX) {
+            static bool l_warned = false;
+            if (!l_warned) {
+                l_warned = true;
+                DuskLog.warn("companion: archive word cache full ({}); "
+                             "further strings fall back to English",
+                    (int)WORD_CACHE_MAX);
+            }
+            return fallback;
+        }
+        slot = l_count++;
+        l_ids[slot] = msgId;
+        l_upper[slot] = upper;
+        l_tries[slot] = 0;
+        l_wait[slot] = 0;
+        l_text[slot][0] = 0;
+    }
+    if (l_text[slot][0] != 0) {
+        return l_text[slot];
+    }
+    // A draw can land before the archive is resident. Retry a few times rather
+    // than latching the first miss for the whole session — but bounded, so an
+    // ID that genuinely has no entry cannot rescan the .bmg every frame.
+    if (l_tries[slot] >= FETCH_TRIES) {
+        return fallback;
+    }
+    if (l_wait[slot] > 0) {
+        l_wait[slot]--;
+        return fallback;
+    }
+    l_wait[slot] = RETRY_GAP;
+    l_tries[slot]++;
+    dMeter2Info_getStringFull(msgId, l_text[slot], sizeof(l_text[0]));
+    if (l_text[slot][0] == 0) {
+        return fallback;
+    }
+    if (upper) {
+        toUpperLatin1(l_text[slot]);
+    }
+    return l_text[slot];
+}
+
+const char* localizedWord(u32 msgId, const char* english, bool upper) {
+    if (OSGetLanguage() == OS_LANGUAGE_ENGLISH) {
+        return english;
+    }
+    return archiveText(msgId, english, upper);
+}
+
+// Draws text shrunk just enough to fit maxW, down to minSize. Localized
+// strings run much longer than English (German especially) and most of the
+// dashboard's plates are fixed width, so anything showing archive text needs
+// this rather than a hardcoded size.
+f32 fittedTextSize(f32 size, f32 minSize, f32 maxW, const char* text) {
+    // No room at all — the floor size is the only honest answer. (Same
+    // reading of maxW <= 0 as drawTextEllipsized, which draws the ellipsis
+    // alone; these two used to disagree about it.)
+    if (maxW <= 0.0f) {
+        return minSize;
+    }
+    const f32 w = measureText(size, text);
+    if (w <= maxW || w <= 0.0f) {
+        return size;
+    }
+    // measureText scales linearly with size, so the exact fit is one division
+    // away — no need to step down 0.5 at a time re-measuring the whole string.
+    // Snap down to the same 0.5 grid the stepping loop produced.
+    f32 fitted = (f32)(int)((maxW * size / w) * 2.0f) * 0.5f;
+    if (fitted < minSize) {
+        fitted = minSize;
+    }
+    if (fitted > size) {
+        fitted = size;
+    }
+    return fitted;
+}
+
+// Left-aligned text clipped to maxW with a trailing ellipsis. Used by the
+// list rows, whose columns sit at fixed x positions — a long localized
+// subject or technique name would otherwise run straight into the next
+// column with nothing to stop it.
+// Length in bytes of the longest prefix of `text` that measures <= maxW.
+// The font is LATIN-1 (one byte per glyph) and measureText is a plain per-byte
+// sum of advances, so prefix widths accumulate exactly — one walk instead of
+// re-measuring every candidate prefix, which is what made the list rows and
+// the description wrapper O(n^2) per frame.
+int fitPrefix(f32 size, f32 maxW, const char* text) {
+    JUTFont* font = mDoExt_getMesgFont();
+    if (font == NULL || text == NULL || font->getCellWidth() <= 0) {
+        return 0;
+    }
+    const f32 scale = (size * 0.85f) / (f32)font->getCellWidth();
+    int n = 0;
+    f32 w = 0.0f;
+    for (const u8* c = (const u8*)text; *c != 0; c++) {
+        JUTFont::TWidth tw;
+        font->getWidthEntry(*c, &tw);
+        const f32 adv = (f32)tw.field_0x1 * scale;
+        if (w + adv > maxW) {
+            break;
+        }
+        w += adv;
+        n++;
+    }
+    return n;
+}
+
+void drawTextEllipsized(f32 x, f32 y, f32 size, f32 maxW, u32 rgba, const char* text) {
+    if (text == NULL || text[0] == 0) {
+        return;
+    }
+    if (maxW > 0.0f && measureText(size, text) <= maxW) {
+        drawText(x, y, size, rgba, "%s", text);
+        return;
+    }
+    char buf[256];
+    snprintf(buf, sizeof(buf), "%s", text);
+    buf[fitPrefix(size, maxW - measureText(size, "..."), buf)] = 0;
+    // Even a bare ellipsis may overrun a degenerate maxW, but drawing it
+    // still beats dropping the field silently — an empty column reads as
+    // "there is nothing here", which is a lie.
+    drawText(x, y, size, rgba, "%s...", buf);
+}
+
+void drawTextFittedCentered(f32 cx, f32 y, f32 size, f32 minSize, f32 maxW, u32 rgba,
+    const char* text) {
+    const f32 fitted = fittedTextSize(size, minSize, maxW, text);
+    const f32 w = measureText(fitted, text);
+    if (maxW > 0.0f && w > maxW) {
+        // Too long even at the floor size (long German compounds in the
+        // narrow corner plates) — clip instead of spilling over whatever
+        // sits next to the plate.
+        drawTextEllipsized(cx - maxW * 0.5f, y, fitted, maxW, rgba, text);
+        return;
+    }
+    drawText(cx - w * 0.5f, y, fitted, rgba, "%s", text);
+}
+
 void drawTextCentered(f32 cx, f32 y, f32 size, u32 rgba, const char* text) {
     drawText(cx - measureText(size, text) * 0.5f, y, size, rgba, "%s", text);
 }
@@ -566,7 +806,7 @@ void drawTimg(const ResTIMG* timg, f32 x, f32 y, f32 w, f32 h, u8 alpha) {
         s_iconPic->changeTexture(timg, 0);
         s_lastTimg = timg;
     }
-    s_iconPic->setAlpha(alpha);
+    s_iconPic->setAlpha(mulDrawAlpha(alpha));
     s_iconPic->draw(x, y, w, h, false, false, false);
     s_iconPic->setAlpha(0xFF);
     dComIfGp_getCurrentGrafPort()->setup2D();
@@ -591,7 +831,7 @@ void drawTimgRotatedRect(const ResTIMG* timg, f32 cx, f32 cy, f32 w, f32 h, f32 
         s_lastTimg = timg;
     }
     s_iconPic->rotate(w * 0.5f, h * 0.5f, ROTATE_Z, angleDeg);
-    s_iconPic->setAlpha(alpha);
+    s_iconPic->setAlpha(mulDrawAlpha(alpha));
     s_iconPic->draw(cx - w * 0.5f, cy - h * 0.5f, w, h, false, false, false);
     s_iconPic->setAlpha(0xFF);
     s_iconPic->rotate(0.0f);
@@ -612,7 +852,7 @@ void drawTimgRotated(const ResTIMG* timg, f32 cx, f32 cy, f32 size, f32 angleDeg
         s_lastTimg = timg;
     }
     s_iconPic->rotate(size * 0.5f, size * 0.5f, ROTATE_Z, angleDeg);
-    s_iconPic->setAlpha(alpha);
+    s_iconPic->setAlpha(mulDrawAlpha(alpha));
     s_iconPic->draw(cx - size * 0.5f, cy - size * 0.5f, size, size, false, false, false);
     s_iconPic->setAlpha(0xFF);
     s_iconPic->rotate(0.0f);
@@ -681,7 +921,7 @@ void drawTimgTintedMirror(const ResTIMG* timg, f32 x, f32 y, f32 w, f32 h, u8 al
         s_lastTimg = timg;
     }
     s_iconPic->setBlackWhite(JUtility::TColor(blackRgba), JUtility::TColor(whiteRgba));
-    s_iconPic->setAlpha(alpha);
+    s_iconPic->setAlpha(mulDrawAlpha(alpha));
     s_iconPic->draw(x, y, w, h, mirrorX, mirrorY, false);
     s_iconPic->setBlackWhite(JUtility::TColor(0x00000000u), JUtility::TColor(0xFFFFFFFFu));
     s_iconPic->setAlpha(0xFF);
@@ -703,7 +943,7 @@ void drawTimgTinted(const ResTIMG* timg, f32 x, f32 y, f32 w, f32 h, u8 alpha, u
         s_lastTimg = timg;
     }
     s_iconPic->setBlackWhite(JUtility::TColor(blackRgba), JUtility::TColor(whiteRgba));
-    s_iconPic->setAlpha(alpha);
+    s_iconPic->setAlpha(mulDrawAlpha(alpha));
     s_iconPic->draw(x, y, w, h, false, false, false);
     s_iconPic->setBlackWhite(JUtility::TColor(0x00000000u), JUtility::TColor(0xFFFFFFFFu));
     s_iconPic->setAlpha(0xFF);
@@ -884,7 +1124,7 @@ void drawPaneComposite(J2DPane* root, f32 x, f32 y, f32 boxW, f32 boxH, u8 minAl
         if (layerAlpha < minAlpha) {
             layerAlpha = minAlpha;
         }
-        s_iconPic->setAlpha(layerAlpha);
+        s_iconPic->setAlpha(mulDrawAlpha(layerAlpha));
         s_iconPic->draw(dstX + (layers[i].x0 - minX) * scale,
             dstY + (layers[i].y0 - minY) * scale, (layers[i].x1 - layers[i].x0) * scale,
             (layers[i].y1 - layers[i].y0) * scale, false, false, false);

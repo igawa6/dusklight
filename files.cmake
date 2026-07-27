@@ -1448,6 +1448,10 @@ set(DUSK_FILES
         include/dusk/companion.h
         src/dusk/companion.cpp
         src/dusk/companion_internal.h
+        src/dusk/companion_strings.h
+        src/dusk/companion_strings.cpp
+        src/dusk/companion_hud.cpp
+    src/dusk/companion_functional.cpp
         src/dusk/companion_gfx.cpp
         src/dusk/companion_icons.cpp
         src/dusk/companion_touch.cpp

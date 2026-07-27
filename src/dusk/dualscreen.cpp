@@ -9,10 +9,19 @@
 #include "m_Do/m_Do_graphic.h"
 #include "m_Do/m_Do_mtx.h"
 
+#include "data.hpp"
+#include "dusk/logging.h"
+
 #include <atomic>
+#include <cstdio>
+#include <mutex>
+#include <string>
+#include <vector>
 
 #include <aurora/aux_window.hpp>
 #include <aurora/gfx.hpp>
+
+#include "miniz.h"
 
 namespace dusk::dualscreen {
 namespace {
@@ -154,9 +163,97 @@ void computeAuxCanvas(u32& canvasW, u32& canvasH, u32& texW, u32& texH) {
     }
 }
 
+#if DUSK_COMPANION_CAPTURE
+// Pending screenshot destination. Written from whichever thread asked (the
+// Android UI thread for the DUMP broadcast), read on the game thread.
+std::mutex s_shotMutex;
+std::string s_shotPath;
+bool s_shotPending = false;
+// Frames the request has been outstanding. The capture can be abandoned
+// without ever completing (surface torn down, display detached), and without
+// this the request latched forever and polled silently for the rest of the
+// session.
+int s_shotWaited = 0;
+constexpr int kShotTimeoutFrames = 240;
+#endif
+
 }  // namespace
 
+#if DUSK_COMPANION_CAPTURE
+void requestScreenshot(const char* path) {
+    {
+        std::lock_guard lock{s_shotMutex};
+        if (path != nullptr && path[0] != '\0') {
+            s_shotPath = path;
+        } else {
+            // Desktop default; on Android the caller passes the app's
+            // external files dir, which is the only place adb can reach.
+            s_shotPath = (data::configured_data_path() / "companion-screenshot.png").string();
+        }
+        s_shotPending = true;
+        s_shotWaited = 0;
+    }
+    aurora::auxwin::request_capture();
+}
+
+// Writes the PNG once the read-back lands; no-op while nothing is pending.
+// File-local: one caller (beginHudCapture), no header declaration.
+static void pollScreenshot() {
+    {
+        std::lock_guard lock{s_shotMutex};
+        if (!s_shotPending) {
+            return;
+        }
+    }
+    std::vector<u8> pixels;
+    u32 width = 0;
+    u32 height = 0;
+    if (!aurora::auxwin::take_capture(pixels, &width, &height) || width == 0 || height == 0) {
+        std::lock_guard lock{s_shotMutex};
+        if (++s_shotWaited > kShotTimeoutFrames) {
+            s_shotPending = false;
+            DuskLog.warn("companion screenshot: no frame captured, giving up");
+        }
+        return;  // still in flight
+    }
+    std::string path;
+    {
+        std::lock_guard lock{s_shotMutex};
+        s_shotPending = false;
+        path = s_shotPath;
+    }
+    // Level 1, not 6: this encodes a full-panel RGBA frame (~4 MB at 1240x1080)
+    // synchronously on the GAME thread inside beginHudCapture, so the hitch is
+    // paid by the running game. Acceptable for a debug aid, but not worth
+    // several hundred extra milliseconds for a smaller file.
+    size_t pngSize = 0;
+    void* png = tdefl_write_image_to_png_file_in_memory_ex(pixels.data(), (int)width, (int)height,
+        4, &pngSize, 1, MZ_FALSE);
+    if (png == NULL) {
+        DuskLog.warn("companion screenshot: PNG encode failed");
+        return;
+    }
+    FILE* file = fopen(path.c_str(), "wb");
+    if (file != NULL) {
+        const bool ok = fwrite(png, 1, pngSize, file) == pngSize;
+        fclose(file);
+        if (ok) {
+            DuskLog.info("companion screenshot: wrote {}x{} to {}", width, height, path);
+        } else {
+            DuskLog.warn("companion screenshot: short write to {}", path);
+        }
+    } else {
+        DuskLog.warn("companion screenshot: cannot open {}", path);
+    }
+    mz_free(png);
+}
+
+#endif  // DUSK_COMPANION_CAPTURE
+
 void beginHudCapture() {
+#if DUSK_COMPANION_CAPTURE
+    pollScreenshot();
+#endif
     const bool wanted = getSettings().game.dualScreen.getValue() && s_displayAvailable;
     const bool enabled = isEnabled();
     updateAuxWindow(wanted);
@@ -200,6 +297,22 @@ void endHudCapture() {
         return;
     }
     s_active = false;
+
+    // The dim is applied by the aux window to the PRESENT blit, not painted
+    // into the dashboard. That is the whole point: on the frames below where
+    // the capture is skipped, the second screen keeps presenting its last
+    // texture and the fade still advances over it. The splash owns its own
+    // look and is never dimmed.
+    if (splash) {
+        // The splash owns the panel and carries no fade of its own. Clear the
+        // dashboard's ramp too, or the level it had already reached is still
+        // sitting there when the splash hands back and snaps a lit logo to
+        // black in one frame.
+        companion::resetDim();
+        aurora::auxwin::set_dim(0.0f);
+    } else {
+        aurora::auxwin::set_dim(companion::currentDim());
+    }
 
     // During stage transitions the HUD meter is destroyed and rebuilt; skip
     // the capture entirely so the second screen keeps its last frame instead

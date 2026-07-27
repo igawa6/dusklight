@@ -1,5 +1,23 @@
 #pragma once
 
+// Companion frame capture (the on-device screenshot aid). OFF by default: it
+// is a development tool, and its Android trigger is a broadcast receiver that
+// has to be exported to be reachable from `adb`, so it must not ship.
+//
+// Flip to 1 (here or with -DDUSK_COMPANION_CAPTURE=1) to build it in; that is
+// the intended way to use it, since build-dusklight-apk.sh produces a RELEASE
+// apk and there is no separate debug build of these files.
+//
+// NOTE: do NOT write `DEBUG` here. Every dusk translation unit compiles with
+// NDEBUG=1 and no -DDEBUG, and include/global.h:31 then defines DEBUG as 0 —
+// so `#define DUSK_COMPANION_CAPTURE DEBUG` was silently 0 in *every* build
+// and compiled the whole feature away, including the JNI entry point the
+// Android receiver calls (it failed with UnsatisfiedLinkError and a swallowed
+// log line, which is exactly why it went unnoticed).
+#ifndef DUSK_COMPANION_CAPTURE
+#define DUSK_COMPANION_CAPTURE 0
+#endif
+
 namespace dusk::dualscreen {
 
 // Renders the companion dashboard (HUD, map, inventory, ...) into an offscreen
@@ -8,6 +26,15 @@ namespace dusk::dualscreen {
 // during endHudCapture, after the main screen's own 2D pass.
 void beginHudCapture();
 void endHudCapture();
+
+#if DUSK_COMPANION_CAPTURE
+// Ask for the next presented companion frame to be written to `path` as a
+// PNG (exactly what the panel shows: letterbox, dim and all). One-shot and
+// asynchronous — the file appears a frame or two later. Verification aid:
+// on Android it is wired to the DUMP broadcast, on desktop to F12.
+// Passing an empty path uses the default location.
+void requestScreenshot(const char* path);
+#endif
 
 // Report whether a physical second display exists (Android reports this
 // from its DisplayManager; defaults to available on desktop). When

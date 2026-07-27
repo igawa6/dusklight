@@ -6,6 +6,7 @@
 
 #include "dusk/companion.h"
 #include "dusk/companion_internal.h"
+#include "dusk/companion_strings.h"
 #include "dusk/dualscreen.h"
 
 #include "Z2AudioLib/Z2SeMgr.h"
@@ -18,7 +19,6 @@
 #include <dolphin/pad.h>
 
 #include <cstdarg>
-#include <cstdio>
 
 namespace dusk::companion {
 namespace {
@@ -69,8 +69,14 @@ bool tryBowCombo(int btn, int slot, u8 itemNo) {
         }
         dComIfGs_setMixItemIndex(btn, SLOT_4);
         dComIfGs_setSelectItemIndex(btn, (u8)slot);
-        setEquipMsg(120, "%s",
-            itemNo == dItemNo_HAWK_EYE_e ? "Hawkeye + Bow combo!" : "Bomb Arrow combo!");
+        // The item name comes from the archive; the sentence around it from our
+        // table (the game has no equivalent phrasing). "Bomb Arrows" is not an
+        // item name — dItemNo_BOMB_ARROW_e resolves to "Hero's Bow" — so that
+        // one comes from the table too.
+        setEquipMsg(120, txt(STR_COMBO_ON),
+            itemNo == dItemNo_HAWK_EYE_e
+                ? archiveText(0x165 + dItemNo_HAWK_EYE_e, "Hawkeye")
+                : txt(STR_BOMB_ARROWS));
         // Marked apart from a plain equip's ITEM_SET_X/_Y: arming a combo is
         // the special outcome, so it gets the confirm cue.
         queueSound(Z2SE_SY_CURSOR_OK, HAPTIC_CONFIRM);
@@ -79,7 +85,10 @@ bool tryBowCombo(int btn, int slot, u8 itemNo) {
     if (itemNo == dItemNo_BOW_e && dComIfGs_getMixItemIndex(btn) == SLOT_4) {
         dComIfGs_setMixItemIndex(btn, dItemNo_NONE_e);
         dComIfGs_setSelectItemIndex(btn, SLOT_4);
-        setEquipMsg(120, "Combo off");
+        // archiveText, not the 5-arg localizedWord: that overload latched its
+        // English fallback permanently if the archive happened to be
+        // unavailable on the one frame it fetched (e.g. mid room transition).
+        setEquipMsg(120, "%s", archiveText(0x04D3, "Combo off"));
         queueSound(Z2SE_SY_CURSOR_CANCEL, HAPTIC_LIGHT);
         return true;
     }
@@ -90,12 +99,12 @@ void plainEquip(int btn, int slot);
 
 bool equipFromCompanion(int btn, int slot) {
     if (anyMenuOpen()) {
-        setEquipMsg(150, "Can't equip while a menu is open");
+        setEquipMsg(150, "%s", txt(STR_NO_EQUIP_MENU));
         queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
         return false;
     }
     if (companionWolf()) {
-        setEquipMsg(150, "Can't equip items as a wolf");
+        setEquipMsg(150, "%s", txt(STR_NO_EQUIP_WOLF));
         queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
         return false;
     }
@@ -109,7 +118,7 @@ bool equipFromCompanion(int btn, int slot) {
         // Talk/trade items need the per-button talk-event plumbing that only
         // exists for X/Y.
         if (daPy_py_c::checkTradeItem(itemNo)) {
-            setEquipMsg(150, "Can't put that on a slot");
+            setEquipMsg(150, "%s", txt(STR_NO_SLOT));
             queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
             return false;
         }
@@ -119,7 +128,7 @@ bool equipFromCompanion(int btn, int slot) {
             dComIfGs_getMixItemIndex(btn) == 0xFF)
         {
             setSlotBinding(btn - DROP_TARGET_SLOT1, -1);
-            setEquipMsg(120, "Cleared slot %s", btn == DROP_TARGET_SLOT1 ? "I" : "II");
+            setEquipMsg(120, txt(STR_SLOT_CLEARED), btn == DROP_TARGET_SLOT1 ? "I" : "II");
             queueSound(Z2SE_SY_CURSOR_CANCEL, HAPTIC_LIGHT);
             return true;
         }
@@ -187,7 +196,7 @@ void plainEquip(int btn, int slot) {
     }
     dComIfGs_setSelectItemIndex(btn, (u8)slot);
     if (btn >= DROP_TARGET_SLOT1) {
-        setEquipMsg(120, "Bound to slot %s", btn == DROP_TARGET_SLOT1 ? "I" : "II");
+        setEquipMsg(120, txt(STR_SLOT_BOUND), btn == DROP_TARGET_SLOT1 ? "I" : "II");
         queueSound(Z2SE_SY_CURSOR_OK, HAPTIC_CONFIRM);
     } else {
         // Distinct per-button cues, exactly as the vanilla menus equip.
@@ -200,7 +209,7 @@ void plainEquip(int btn, int slot) {
 // swap is still reloading. Posts the reason when it is user-visible.
 bool gearChangeBlocked(daPy_py_c* player) {
     if (anyMenuOpen()) {
-        setEquipMsg(150, "Can't change gear while a menu is open");
+        setEquipMsg(150, "%s", txt(STR_NO_GEAR_MENU));
         queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
         return true;
     }
@@ -208,7 +217,7 @@ bool gearChangeBlocked(daPy_py_c* player) {
         return true;
     }
     if (player->checkWolf()) {
-        setEquipMsg(150, "Can't change gear as a wolf");
+        setEquipMsg(150, "%s", txt(STR_NO_GEAR_WOLF));
         queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
         return true;
     }
@@ -249,7 +258,8 @@ void equipGear(int idx) {
     static char s_gearName[64];
     s_gearName[0] = 0;
     dMeter2Info_getString(0x165 + itemNo, s_gearName, NULL);
-    setEquipMsg(120, "Equipped %s", s_gearName[0] != 0 ? s_gearName : "gear");
+    setEquipMsg(120, txt(STR_EQUIPPED),
+        s_gearName[0] != 0 ? s_gearName : txt(STR_GEAR));
     // Same cue the vanilla collection screen uses for its own gear equips.
     queueSound(Z2SE_SY_ITEM_SET_X, HAPTIC_CONFIRM);
 }
@@ -310,7 +320,7 @@ void handleXYTap(int xy) {
     // the mode couldn't engage — say why instead of silently beeping (same
     // message the gear boxes post).
     if (s_selSlot >= 0 && anyMenuOpen()) {
-        setEquipMsg(150, "Can't equip while a menu is open");
+        setEquipMsg(150, "%s", txt(STR_NO_EQUIP_MENU));
         queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
         s_denyFlash[xy] = DENY_FLASH_FRAMES;
         return;
@@ -361,7 +371,7 @@ void handleSlotTap(int which) {
     }
     // See handleXYTap: a blocked equip attempt explains itself.
     if (s_selSlot >= 0 && anyMenuOpen()) {
-        setEquipMsg(150, "Can't equip while a menu is open");
+        setEquipMsg(150, "%s", txt(STR_NO_EQUIP_MENU));
         queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
         s_denyFlash[2 + which] = DENY_FLASH_FRAMES;
         return;
@@ -584,6 +594,38 @@ void handleTouch(f32 w, f32 h) {
     // Both left corners get a grace margin: they hug the screen edge, where
     // devices shave touchable area (gesture zones, rounded corners), and
     // nothing else lives near them to steal from.
+    // FLOOR PICKER FIRST — ahead of the corner buttons below.
+    //
+    // It is modal: while it is up the left column is hidden behind an opaque
+    // slab, so nothing under that slab may be reachable. The corner buttons
+    // are hit-tested before everything else (see the note above) and so used
+    // to fire straight THROUGH the cover — a button the player cannot see
+    // responding to a tap. Testing the picker first closes that hole.
+    // A tap on a row picks it; anything else closes the picker and is
+    // swallowed rather than falling through.
+    // Gated on the ANIMATION, not the open flag: the cover keeps drawing for
+    // ~12 frames after the flag clears, and during those frames taps used to
+    // reach the corner buttons underneath it — pick a floor, tap top-left 50ms
+    // later, and Link transformed into a wolf through an opaque slab.
+    if (s_dmapFloorPickOpen || s_dmapFloorPickT > 0.0f) {
+        // BACKWARDS: rows overlap while the list is still expanding, and they
+        // are painted in ascending order, so the last drawn is on top. A
+        // forward scan returned the row *underneath* the one being touched.
+        for (int i = s_dmapFloorRectCount - 1; i >= 0; i--) {
+            if (tx >= s_dmapFloorRects[i][0] && tx <= s_dmapFloorRects[i][2] &&
+                ty >= s_dmapFloorRects[i][1] && ty <= s_dmapFloorRects[i][3])
+            {
+                s_dmapFloorSel = s_dmapFloorVals[i];
+                s_dmapFloorPickOpen = false;
+                queueSound(Z2SE_SY_CURSOR_OK, HAPTIC_LIGHT);
+                return;
+            }
+        }
+        s_dmapFloorPickOpen = false;
+        queueSound(Z2SE_SY_CURSOR_CANCEL, HAPTIC_LIGHT);
+        return;
+    }
+
     constexpr f32 CORNER_GRACE = 12.0f;
     if (s_transformBtnRect[2] > s_transformBtnRect[0] &&
         tx >= s_transformBtnRect[0] - CORNER_GRACE &&
@@ -649,13 +691,17 @@ void handleTouch(f32 w, f32 h) {
                 s_warpReq.store(true);
                 queueSound(Z2SE_WARP_MAP_ON, HAPTIC_CONFIRM);
             } else {
-                setEquipMsg(150, "Can't warp from here");
+                setEquipMsg(150, "%s", txt(STR_NO_WARP_HERE));
                 queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
             }
             break;
         case CTX_FLOOR:
-            s_dmapFloorPickOpen = !s_dmapFloorPickOpen;
-            queueSound(Z2SE_SY_CURSOR_OK, HAPTIC_LIGHT);
+            // One floor = nothing to choose; leave the button inert rather
+            // than opening a list with a single entry in it.
+            if (dmapFloorCount() > 1) {
+                s_dmapFloorPickOpen = !s_dmapFloorPickOpen;
+                queueSound(Z2SE_SY_CURSOR_OK, HAPTIC_LIGHT);
+            }
             break;
         case CTX_INFO:
             s_itemInfoSlot = s_selSlot;
@@ -702,21 +748,6 @@ void handleTouch(f32 w, f32 h) {
             break;
         }
         return;
-    }
-    // Floor-select overlay rows (drawn over the content window; tested here so
-    // a pick isn't shadowed by the page beneath). A tap that misses closes it.
-    if (s_dmapFloorPickOpen) {
-        for (int i = 0; i < s_dmapFloorRectCount; i++) {
-            if (tx >= s_dmapFloorRects[i][0] && tx <= s_dmapFloorRects[i][2] &&
-                ty >= s_dmapFloorRects[i][1] && ty <= s_dmapFloorRects[i][3])
-            {
-                s_dmapFloorSel = s_dmapFloorVals[i];
-                s_dmapFloorPickOpen = false;
-                queueSound(Z2SE_SY_CURSOR_OK, HAPTIC_LIGHT);
-                return;
-            }
-        }
-        s_dmapFloorPickOpen = false;  // missed: close, then let the tap through
     }
     // Tab strip: hit-test the rects the draw published rather than
     // recomputing the layout, and BEFORE the fixed-height page/strip split —

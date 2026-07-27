@@ -351,7 +351,7 @@ void dmapUpdate() {
                 dDrawPath_c::floor_class* fl = rc->mpFloor;
                 for (int i = 0; fl != NULL && i < rc->mFloorNum; i++, fl++) {
                     const int bit = fl->mFloorNo + 5;
-                    if (bit >= 0 && bit < 13) {
+                    if (bit >= 0 && bit < DMAP_FLOOR_COUNT) {
                         avail |= (u16)(1u << bit);
                     }
                 }
@@ -396,13 +396,13 @@ void dmapUpdate() {
             // keep the old room's zoom until a manual Reset.
             const f32 fit = roomFitZoom(stayNo, size);
             if (fit > 0.0f) {
-                s_dmapZoom += (fit - s_dmapZoom) * 0.12f;
+                s_dmapZoom += (fit - s_dmapZoom) * ANIM_RATE_GLIDE;
             }
         } else {
-            s_dmapZoom += (1.0f - s_dmapZoom) * 0.12f;
+            s_dmapZoom += (1.0f - s_dmapZoom) * ANIM_RATE_GLIDE;
         }
-        s_dmapOffX += ((tx - baseCx) - s_dmapOffX) * 0.12f;
-        s_dmapOffZ += ((tz - baseCz) - s_dmapOffZ) * 0.12f;
+        s_dmapOffX += ((tx - baseCx) - s_dmapOffX) * ANIM_RATE_GLIDE;
+        s_dmapOffZ += ((tz - baseCz) - s_dmapOffZ) * ANIM_RATE_GLIDE;
     }
 
     // Keep the render window on the dungeon: the clamp converges to the

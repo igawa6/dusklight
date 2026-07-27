@@ -10,6 +10,7 @@ UserSettings g_userSettings = {
         .enableVsync {"video.enableVsync", true},
         .lockAspectRatio {"video.lockAspectRatio", false},
         .enableFpsOverlay {"game.enableFpsOverlay", false},
+        .showPipelineProgress {"video.showPipelineProgress", false},
         // Companion by default: dual-screen is this fork's headline setup,
         // and the overlay falls back to a main-screen corner on its own when
         // no companion display exists (ui/overlay.cpp).
@@ -241,6 +242,7 @@ void registerSettings() {
     Register(g_userSettings.video.enableVsync);
     Register(g_userSettings.video.lockAspectRatio);
     Register(g_userSettings.video.enableFpsOverlay);
+    Register(g_userSettings.video.showPipelineProgress);
     Register(g_userSettings.video.fpsOverlayCorner);
     Register(g_userSettings.video.maxFrameRate);
     Register(g_userSettings.video.rememberWindowSize);

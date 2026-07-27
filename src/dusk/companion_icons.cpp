@@ -103,7 +103,7 @@ void drawItemIcon(int slot, u8 itemNo, f32 x, f32 y, f32 size, u8 alpha) {
     const f32 dx = x + (size - w) * 0.5f;
     const f32 dy = y + (size - h) * 0.5f;
     for (int i = 0; i < layers && i < 2; i++) {
-        s_itemPic[slot][i]->setAlpha(alpha);
+        s_itemPic[slot][i]->setAlpha(mulDrawAlpha(alpha));
         s_itemPic[slot][i]->draw(dx, dy, w, h, false, false, false);
     }
     // The map texture cache tracks s_iconPic only; these draws do not touch it.
@@ -138,7 +138,9 @@ void drawItemIconSilhouette(int slot, u8 itemNo, f32 x, f32 y, f32 size, u32 rgb
         // Alpha must follow the texture (black a=0, white a=FF), or the
         // flat tint fills the whole quad instead of the icon's shape.
         pic->setBlackWhite(JUtility::TColor(rgba & 0xFFFFFF00u), JUtility::TColor(rgba | 0xFFu));
+        pic->setAlpha(mulDrawAlpha(0xFF));
         pic->draw(dx, dy, w, h, false, false, false);
+        pic->setAlpha(0xFF);
         pic->setBlackWhite(black, white);
     }
     dComIfGp_getCurrentGrafPort()->setup2D();

@@ -147,6 +147,12 @@ void queueHaptic(int haptic);
 bool warpUnlocked();
 bool warpAllowed();
 
+// Whether Midna is with Link and can actually be called. Before she joins,
+// her button has nothing behind it, so the companion leaves the slot EMPTY
+// rather than showing a dead portrait — the same treatment the transform
+// button gets before the shadow crystal.
+bool midnaAvailable();
+
 // Set by the touch pass; promoted by beginFrameCompanionInput().
 void requestWarpToggle();
 // True while the field map is already showing its portals.
@@ -362,11 +368,12 @@ extern f32 s_pressAnim[6];
 // reverse-pinch so the eye finds where the item went. Decays in
 // beginFrameCompanionInput.
 extern f32 s_popAnim[4];
-extern bool s_inSceneChange;
 extern f32 s_readerZoomT;
 extern bool s_readerZoomClosing;
 extern f32 s_readerZoomFrom[4];
 bool readerZoomStep(f32* io_x0, f32* io_y0, f32* io_x1, f32* io_y1);
+f32 readerZoomProgress();
+bool readerZoomActive();
 void readerZoomOpenFrom(f32 x0, f32 y0, f32 x1, f32 y1);
 // Drag-ghost feel. s_ghostPop: pickup pop (ghost starts 15% large, eases
 // down; set to 1 when a drag engages). s_ghostFly*: after release, the
@@ -399,8 +406,6 @@ extern int s_ghostFlySlot;
 // scaled by it and handleTouch swallows input above 0.5 — during events the
 // companion has nothing actionable, and a glowing dashboard next to a
 // cutscene is a distraction.
-extern f32 s_eventDim;
-extern f32 s_dimHold;
 
 // I/II slot binding = the REAL savedata select-item indices 2/3 (the Wii
 // version already reserved them), so bindings persist with the game save and
@@ -487,6 +492,50 @@ extern std::atomic<bool> s_downOnContent;
 // Fills o_pages (>= LEFT_BOX_PAGES entries) with the available page IDs in
 // display order and returns the count. Shared by the draw and the swipe so
 // they can't disagree about what is on screen.
+void drawBattery(f32 x, f32 y);
+bool drawMeterBar(f32 x0, f32 x1, f32 cy, f32 barH, bool allowOil);
+constexpr f32 CLUSTER_BTN = 38.0f;
+void publishEquipDropRect(int dropIdx, f32 x, f32 y, f32 btn = CLUSTER_BTN);
+bool drawFpsReadout(f32 x, f32 baselineY);
+
+extern f32 s_dropBtnPos[2][2];
+extern std::atomic<int> s_batteryPct;
+extern std::atomic<bool> s_batteryCharging;
+
+// --- Shared + Cinematic widgets, companion_hud.cpp ---
+const char* tabName(int page);
+f32 drawOilGauge(f32 rightX, f32 cy);
+void drawHeartsRow(f32 x0, f32 x1);
+void drawDungeonIcons(f32 x, f32 y);
+void drawEquipTargets();
+u8 resolveBItem(bool menuOpen);
+void drawButtonAmmoChip(int ammo, f32 x, f32 y);
+void fetchMenuPromptWords();
+void mapPromptWords(int winStatus, const char** o_a, const char** o_b);
+void drawMidnaButton(dMeter2Draw_c* md, f32 zx, f32 zy);
+void drawItemCluster(f32 x1, f32 y0);
+f32 tabRaise(int i_page, bool i_active);
+void drawBottomFlourish(f32 x0, f32 y1);
+void drawTabs(f32 x0, f32 x1, f32 h);
+void drawBackdrop(f32 w, f32 h);
+void drawTopBar(dMeter2Draw_c* md, f32 w, f32 x1);
+void drawVesselOfLight(dMeter2Draw_c* md, f32 x1, f32 h);
+void drawWindowOrnaments(f32 x0, f32 y0, f32 x1, f32 y1);
+void drawContentWindow(f32 wx0, f32 wx1, f32 cy0, f32 cy1);
+f32 drawDpadGlyph(dMeter2Draw_c* md, f32 x1, f32 bottomY);
+bool drawTransformPlate(f32 bx, f32 by, f32 bw, f32 bh);
+f32 drawTransformButton(f32 x1, f32 bottomY);
+f32 drawStatusCorner(f32 x1, f32 bottomY);
+void drawComboChoice();
+void drawDragGhost();
+
+// --- Functional ("3DS style") layout, companion_functional.cpp ---
+void drawFunctionalTopBar(f32 w);
+void drawFunctionalItemButtons(dMeter2Draw_c* md, f32 colX, f32 y0, f32 y1);
+void drawFunctionalLeftColumn(dMeter2Draw_c* md, f32 colX, f32 y0, f32 y1);
+void drawFunctionalCorners(dMeter2Draw_c* md, f32 w, f32 h);
+bool leftVesselAvailable();
+bool leftDungeonAvailable();
 int leftBoxPages(int* o_pages);
 // Current region name ("Hyrule Field" / "Lakebed Temple") — the map screen's
 // own spot name, cached per stage + room. Shared by the map name plate and
@@ -648,8 +697,40 @@ extern bool s_dmapResetReq;
 // there) are dimmed and publish no rect.
 // s_dmapFloorAvail: bit (floorNo + 5) set when the floor has content.
 extern bool s_dmapFloorPickOpen;
-extern f32 s_dmapFloorRects[13][4];  // full floor range (-5..7)
-extern int s_dmapFloorVals[13];
+extern f32 s_dmapFloorPickT;
+// The game's dungeon floors span B5..7F, so every floor-indexed array and
+// every row-count clamp is bounded by this — NOT by the unrelated 13 above.
+// --- Animation curves ---
+//
+// Every companion animation is one of two shapes: an APPROACH toward a target
+// (x += (target - x) * rate) or a DECAY toward zero (x *= rate), stepped once
+// per render frame. These used to be eight ad-hoc literals scattered across
+// six files, so widgets that should have matched — the reader zoom and the
+// collect zoom, the floor picker and the page transition — drifted apart by a
+// few hundredths for no reason. The values below are the medians of what they
+// replaced, so the feel is close, but now two widgets that open the same way
+// open at the same speed.
+//
+// Pick by INTENT, not by number: a pop-up opens FAST, a dismissal decays FAST
+// (gone before the eye comes back), a press tail decays SOFT (felt rather than
+// seen), a continuous follow GLIDEs.
+constexpr f32 ANIM_RATE_SNAP = 0.50f;     // button press attack: must land under the finger
+constexpr f32 ANIM_RATE_FAST = 0.30f;     // pop-ups opening: reader/collect zoom, floor picker, ghost fly, map reset
+constexpr f32 ANIM_RATE_SETTLED = 0.20f;  // long travel that should read as motion: the page transition
+constexpr f32 ANIM_RATE_GLIDE = 0.12f;    // continuous follow rather than a discrete open: tab raise, dmap follow
+
+constexpr f32 ANIM_DECAY_FAST = 0.70f;    // dismissals: zoom close, picker close, pan settle
+constexpr f32 ANIM_DECAY_SOFT = 0.80f;    // tails meant to be felt: press pop, ghost pop, floor fade
+
+// Snap thresholds for values normalised to 0..1 — past these the animation is
+// finished and the value is pinned. (Do NOT use them on quantities in other
+// units; tabRaise's 0..8 raise has its own.)
+constexpr f32 ANIM_DONE = 0.97f;
+constexpr f32 ANIM_ZERO = 0.03f;
+
+constexpr int DMAP_FLOOR_COUNT = 13;
+extern f32 s_dmapFloorRects[DMAP_FLOOR_COUNT][4];
+extern int s_dmapFloorVals[DMAP_FLOOR_COUNT];
 extern int s_dmapFloorRectCount;
 extern u16 s_dmapFloorAvail;
 // Boss floor for the floor-plate marker (DMAP_FLOOR_FOLLOW when hidden:
@@ -681,8 +762,22 @@ J2DPicture* createPicture(const ResTIMG* timg);
 // Drop the dungeon-map blit picture (its ResTIMG is about to die).
 void invalidateDmapPicture();
 void fillRect(f32 x, f32 y, f32 x2, f32 y2, GXColor color);
+
+// Fade a whole block of drawing without covering it: every primitive
+// multiplies its alpha by this. Used for the page transition and the
+// mail/skill pop-ups, so the window's backdrop, border and ornaments show
+// through unchanged instead of being painted over. ALWAYS restore to 1.0f.
+extern f32 s_drawAlpha;
+// Scale an alpha by s_drawAlpha. Needed by the draw paths that own their own
+// J2DPicture (the live map render, the item icons) instead of going through
+// the primitives in companion_gfx — without this they stay fully opaque and
+// pop rather than fade.
+u8 mulDrawAlpha(u8 a);
+GXColor mulDrawAlpha(GXColor c);
 // Chamfered rectangle: 45-degree corner cuts of size ch on the corners
 // selected by cornerMask (1 = TL, 2 = TR, 4 = BR, 8 = BL; 0xF = all).
+void fillChamferVGrad(f32 x0, f32 y0, f32 x1, f32 y1, f32 ch, GXColor top, GXColor bot,
+    int cornerMask);
 void fillChamferRect(f32 x0, f32 y0, f32 x1, f32 y1, f32 ch, GXColor color, int cornerMask);
 // Flat-color annulus (equip drop-target highlight on the round X/Y buttons).
 void drawRing(f32 cx, f32 cy, f32 radius, f32 thickness, GXColor color);
@@ -702,6 +797,16 @@ void drawChamferFrame(f32 x0, f32 y0, f32 x1, f32 y1, f32 ch, f32 t, GXColor col
 void drawText(f32 x, f32 y, f32 size, u32 rgba, const char* fmt, ...);
 f32 measureText(f32 size, const char* text);
 void drawTextCentered(f32 cx, f32 y, f32 size, u32 rgba, const char* text);
+void toUpperLatin1(char* s);
+const char* localizedWord(u32 msgId, const char* english, bool upper = false);
+const char* archiveText(u32 msgId, const char* fallback, bool upper = false);
+// UI label: English keeps the dashboard's wording, others take the archive.
+const char* archiveLabel(u32 msgId, const char* english, bool upper = false);
+f32 fittedTextSize(f32 size, f32 minSize, f32 maxW, const char* text);
+void drawTextEllipsized(f32 x, f32 y, f32 size, f32 maxW, u32 rgba, const char* text);
+int fitPrefix(f32 size, f32 maxW, const char* text);
+void drawTextFittedCentered(f32 cx, f32 y, f32 size, f32 minSize, f32 maxW, u32 rgba,
+    const char* text);
 void drawTimg(const ResTIMG* timg, f32 x, f32 y, f32 w, f32 h, u8 alpha);
 void drawTimgRotated(const ResTIMG* timg, f32 cx, f32 cy, f32 size, f32 angleDeg, u8 alpha);
 // Rotated draw with an explicit w x h box (for art stored sideways).
@@ -781,10 +886,12 @@ const char* dmapFloorName(int floorNo);
 // draws Floor's rightward pop-up list at (px, py).
 void drawWarpTab(f32 x0, f32 y0, f32 x1, f32 y1, bool active);
 void drawFloorTab(f32 x0, f32 y0, f32 x1, f32 y1, bool active);
-// px/py: left edge and, by default, the top of the list. With
-// centerOnCurrent the list is shifted so the VIEWED floor's row centres
-// on py instead, clamped into [clampY0, clampY1].
-void drawFloorOverlay(f32 px, f32 py, bool centerOnCurrent = false, f32 clampY0 = 0.0f,
+// (tx0,ty0,tx1,ty1) is the CONTEXT TAB's rect; the list drops from its
+// bottom edge, clamped into [clampY0, clampY1].
+int dmapFloorCount();
+void drawFloorColumn(f32 tx0, f32 ty0, f32 tx1, f32 ty1, f32 clampY0, f32 clampY1,
+    f32 canvasH);
+void drawFloorOverlay(f32 tx0, f32 ty0, f32 tx1, f32 ty1, f32 clampY0 = 0.0f,
     f32 clampY1 = 0.0f);
 const ResTIMG* dmapLinkIconTimg();
 void drawInventoryContent(f32 x0, f32 y0, f32 x1, f32 y1);

@@ -72,24 +72,54 @@ enum class Region : u8 {
     Korea,
 };
 
+// A disc ID can have SEVERAL good dumps: the GameCube game id (6 chars) does
+// not include the disc revision, and the retail discs were revised. One hash
+// per id therefore rejected every dump but the one that happened to be listed,
+// which is what "hash mismatch on a perfectly good ISO" reports come from.
+constexpr size_t kMaxDiscHashes = 4;
+
 struct KnownDisc {
     std::string_view id;
     Platform platform;
     Region region;
     bool supported = false;
-    XXH128_hash_t hash{};
+    size_t hashCount = 0;
+    std::array<XXH128_hash_t, kMaxDiscHashes> hashes{};
 
     constexpr KnownDisc(std::string_view id, Platform platform, Region region)
         : id(id), platform(platform), region(region) {}
     constexpr KnownDisc(
         std::string_view id, Platform platform, Region region, const std::string_view hash)
-        : id(id), platform(platform), region(region), supported(true), hash(parse_xxh128(hash)) {}
+        : id(id), platform(platform), region(region), supported(true), hashCount(1) {
+        hashes[0] = parse_xxh128(hash);
+    }
+    constexpr KnownDisc(std::string_view id, Platform platform, Region region,
+        std::initializer_list<std::string_view> hashList)
+        : id(id), platform(platform), region(region), supported(true) {
+        for (const auto& h : hashList) {
+            if (hashCount < kMaxDiscHashes) {
+                hashes[hashCount++] = parse_xxh128(h);
+            }
+        }
+    }
+
+    constexpr bool matches(const XXH128_hash_t& h) const {
+        for (size_t i = 0; i < hashCount; i++) {
+            if (hashes[i].high64 == h.high64 && hashes[i].low64 == h.low64) {
+                return true;
+            }
+        }
+        return false;
+    }
 };
 
+// To whitelist another good dump, add its hash to the braced list for that id.
+// A mismatch logs the computed hash at WARNING ("disc hash not recognised"),
+// so a report from an affected player carries the value to paste in.
 constexpr auto KNOWN_DISCS = std::to_array<KnownDisc>({
-    {"GZ2E01", Platform::GameCube, Region::NorthAmerica, "14e886f08e548a000afde98a3195e788"},
+    {"GZ2E01", Platform::GameCube, Region::NorthAmerica, {"14e886f08e548a000afde98a3195e788"}},
     {"GZ2J01", Platform::GameCube, Region::Japan},
-    {"GZ2P01", Platform::GameCube, Region::Europe, "9ef597588b0035ca9e91b333fa9a8a7e"},
+    {"GZ2P01", Platform::GameCube, Region::Europe, {"9ef597588b0035ca9e91b333fa9a8a7e"}},
     {"RZDE01", Platform::Wii, Region::NorthAmerica},
     {"RZDJ01", Platform::Wii, Region::Japan},
     {"RZDK01", Platform::Wii, Region::Korea},
@@ -179,7 +209,13 @@ ValidationError verify_disc(NodHandle* disc, VerificationStatus& status) {
     }
 
     const auto hash = XXH3_128bits_digest(hashState.get());
-    if (!XXH128_isEqual(hash, status.knownDisc->hash)) {
+    if (!status.knownDisc->matches(hash)) {
+        // Logged so an unrecognised-but-good dump is actionable: the player
+        // can report this line and the hash gets added to KNOWN_DISCS above.
+        // Verification is advisory — a mismatch does not block launch.
+        DuskLog.warn("Disc hash not recognised for {}: {:016x}{:016x} "
+                     "(this dump is not on the known-good list; the game will still run)",
+            status.knownDisc->id, hash.high64, hash.low64);
         return ValidationError::HashMismatch;
     }
     return ValidationError::Success;

@@ -828,6 +828,14 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
                 pane.add_rml(
                     "<br/>Display the current framerate in a corner of the screen while playing. Companion shows it on the second screen next to the battery.");
             });
+        config_bool_select(leftPane, rightPane, getSettings().video.showPipelineProgress,
+            {
+                .key = "Show Pipeline Progress",
+                .helpText =
+                    "Shows a small \"Building N pipelines\" bar while shaders are compiled.<br/>"
+                    "Turning it off only hides the bar — the pipelines are still built, and the "
+                    "brief hitching while they are is unchanged.",
+            });
         config_bool_select(leftPane, rightPane, getSettings().video.rememberWindowSize,
             {
                 .key = "Remember Window Size",

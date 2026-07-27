@@ -6,6 +6,7 @@
 
 #include "dusk/companion.h"
 #include "dusk/companion_internal.h"
+#include "dusk/companion_strings.h"
 #include "dusk/dualscreen.h"
 
 #include "d/d_com_inf_game.h"
@@ -13,6 +14,7 @@
 #include "d/d_menu_collect.h"
 #include "d/d_meter2_info.h"
 #include "d/d_msg_out_font.h"
+#include "dusk/version.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -252,18 +254,19 @@ void drawScentAndShadowRow(f32 x0, f32 x1, f32 rowY, f32 rowH) {
     } else if (const ResTIMG* dim = collectIconTimg(3)) {
         drawTimg(dim, x0 + 10.0f, iy, icon, icon, 55);
     }
-    drawText(x0 + 10.0f + icon + 6.0f, rowY + rowH * 0.5f + 5.0f, 14.0f, TEXT_MAIN, "%s",
-        scentName);
+    const f32 scentX = x0 + 10.0f + icon + 6.0f;
+    drawTextEllipsized(scentX, rowY + rowH * 0.5f + 5.0f, 14.0f,
+        (x0 + half) - 6.0f - scentX, TEXT_MAIN, scentName);
 
     // Fused Shadows / Mirror Shards panel: name above the meter.
     const f32 fx0 = x0 + half + gap;
     drawMenuBox(fx0, rowY, x1, rowY + rowH, CELL_RGBA);
     const u8 maskMdl = dMenu_Collect3D_c::getMaskMdlVisible();
-    const char* fsLabel = "Fused Shadows";
+    const char* fsLabel = localizedWord(0x05AA, "Fused Shadows");
     int fsHave = 0;
     int fsTotal = 3;
     if (maskMdl == 2) {
-        fsLabel = "Mirror Shards";
+        fsLabel = localizedWord(0x020A, "Mirror Shards");
         fsHave = dMenu_Collect3D_c::getMirrorNum();
         fsTotal = 4;
     } else if (maskMdl == 1) {
@@ -281,12 +284,10 @@ void drawScentAndShadowRow(f32 x0, f32 x1, f32 rowY, f32 rowH) {
         snprintf(fsCount, sizeof(fsCount), "-");
     }
     const f32 countX = x1 - 10.0f - measureText(13.0f, fsCount);
-    f32 labelTs = 13.0f;
-    if (fx0 + 10.0f + measureText(labelTs, fsLabel) > countX - 8.0f) {
-        labelTs = 11.0f;
-    }
-    drawText(fx0 + 10.0f, rowY + 19.0f, labelTs, maskMdl != 0 ? TEXT_MAIN : TEXT_DIM, "%s",
-        fsLabel);
+    const f32 labelMax = (countX - 8.0f) - (fx0 + 10.0f);
+    const f32 labelTs = fittedTextSize(13.0f, 10.0f, labelMax, fsLabel);
+    drawTextEllipsized(fx0 + 10.0f, rowY + 19.0f, labelTs, labelMax,
+        maskMdl != 0 ? TEXT_MAIN : TEXT_DIM, fsLabel);
     drawText(countX, rowY + 19.0f, 13.0f, maskMdl != 0 ? TEXT_ACCENT : TEXT_DIM, "%s",
         fsCount);
     const f32 bx0 = fx0 + 10.0f;
@@ -330,11 +331,13 @@ void drawCollectOverview(f32 x0, f32 y0, f32 x1, f32 y1) {
 
 f32 drawSectionHeader(f32 x0, f32 y0, f32 x1, f32 iconSize, f32 titleSize, const char* title,
     bool detail);
+void sectionTitle(u32 msgId, const char* fallback, char* out, int cap, int have, int total);
+const char* readerSectionName(int tab);
 
 void drawCollectBugs(f32 x0, f32 y0, f32 x1) {
     const f32 tIcon = 26.0f;
-    char title[40];
-    snprintf(title, sizeof(title), "Golden Bugs  %d/24", countBugs());
+    char title[64];
+    sectionTitle(0x5BA, "Golden Bugs", title, sizeof(title), countBugs(), 24);
     const f32 iconX = drawSectionHeader(x0, y0, x1, tIcon, 15.0f, title, false);
     drawItemIcon(ICON_SLOT_BUG0, dItemNo_M_BEETLE_e, iconX, y0 + 2.0f, tIcon);
     y0 += tIcon + 14.0f;
@@ -355,8 +358,8 @@ void drawCollectBugs(f32 x0, f32 y0, f32 x1) {
 
 void drawCollectFish(f32 x0, f32 y0, f32 x1) {
     const f32 rodIcon = 26.0f;
-    char title[40];
-    snprintf(title, sizeof(title), "Fish Journal  %d/6", countFishSpecies());
+    char title[64];
+    sectionTitle(0x5A1, "Fish Journal", title, sizeof(title), countFishSpecies(), 6);
     const f32 iconX = drawSectionHeader(x0, y0, x1, rodIcon, 15.0f, title, false);
     if (const ResTIMG* t = collectIconTimg(0)) {
         drawTimg(t, iconX, y0 + 2.0f, rodIcon, rodIcon, 0xFF);
@@ -364,25 +367,39 @@ void drawCollectFish(f32 x0, f32 y0, f32 x1) {
         drawItemIcon(ICON_SLOT_ROD, dItemNo_FISHING_ROD_1_e, iconX, y0 + 2.0f, rodIcon,
             dComIfGs_isItemFirstBit(dItemNo_FISHING_ROD_1_e) ? 0xFF : 55);
     }
-    static const char* l_fishNames[] = {"Greengill", "Hyrule Bass", "Hylian Pike", "Ordon Catfish",
-        "Reekfish", "Hylian Loach"};
+    // Species names from the game's own message archive, so they follow the
+    // language. Order is the SAVE-DATA index (the one getFishNum takes) and is
+    // copied from d_menu_fishing.cpp's name_id[] — which pairs name_id[i] with
+    // getFishNum(i). The old hardcoded table had a different order and so
+    // mislabelled indices 0, 1 and 5.
+    static const u16 l_fishMsg[6] = {0x59E, 0x59D, 0x59B, 0x599, 0x59A, 0x59C};
     // Table: Species | Caught | Record.
     const f32 availW = x1 - x0;
     const f32 colName = x0 + 10.0f;
     const f32 colCaught = x0 + availW * 0.58f;
     const f32 colRecord = x0 + availW * 0.80f;
     const f32 headY = y0 + rodIcon + 28.0f;
-    drawText(colName, headY, 13.0f, TEXT_DIM, "Species");
-    drawText(colCaught, headY, 13.0f, TEXT_DIM, "Caught");
-    drawText(colRecord, headY, 13.0f, TEXT_DIM, "Record");
+    drawText(colName, headY, 13.0f, TEXT_DIM, "%s", txt(STR_SPECIES));
+    drawText(colCaught, headY, 13.0f, TEXT_DIM, "%s",
+        archiveLabel(0x5A0, "Caught"));  // DE/FR/... = "No. Caught"
+    drawText(colRecord, headY, 13.0f, TEXT_DIM, "%s",
+        archiveLabel(0x59F, "Record"));  // DE/FR/... = "Largest"
+    // The game reports the record in inches for English and centimetres for
+    // every other language (d_menu_fishing.cpp:152); match it.
+    const bool inches = dusk::version::isRegionPal() &&
+        dComIfGs_getPalLanguage() == dSv_player_config_c::LANGUAGE_ENGLISH;
     for (int i = 0; i < 6; i++) {
         const f32 fy = headY + 26.0f + i * 26.0f;
         const u16 num = dComIfGs_getFishNum(i);
         const u32 col = num > 0 ? TEXT_MAIN : TEXT_DIM;
-        drawText(colName, fy, 15.0f, col, "%s", l_fishNames[i]);
+        // Clipped to the column: the localized names run much longer than the
+        // English ones ("Ombre chevalier" vs "Greengill").
+        drawTextEllipsized(colName, fy, 15.0f, colCaught - 8.0f - colName, col,
+            archiveText(l_fishMsg[i], "-"));
         if (num > 0) {
+            const s32 size = dComIfGs_getFishSize(i);
             drawText(colCaught, fy, 15.0f, col, "%d", num);
-            drawText(colRecord, fy, 15.0f, col, "%d", dComIfGs_getFishSize(i));
+            drawText(colRecord, fy, 15.0f, col, "%d", inches ? (s32)(size / 2.54f) : size);
         } else {
             drawText(colCaught, fy, 15.0f, col, "-");
             drawText(colRecord, fy, 15.0f, col, "-");
@@ -403,6 +420,16 @@ bool skillLearned(int i) {
 }
 
 void pushReaderRect(f32 x0, f32 y0, f32 x1, f32 y1, int id) {
+    // Nothing is tappable while a detail is travelling. The list is still
+    // DRAWN underneath (it pops down), so without this its rows publish live
+    // rects: a tap where another row happens to sit mid-animation re-targeted
+    // the reader and re-popped it from the shrunken underlay geometry. It also
+    // stops the underlay's rows eating the 12-rect budget and silently
+    // dropping the detail's own "< Back". The page transition guards the same
+    // way via s_pageSliding.
+    if (readerZoomActive()) {
+        return;
+    }
     if (s_readerRectCount >= 12) {
         return;
     }
@@ -420,22 +447,63 @@ void pushReaderRect(f32 x0, f32 y0, f32 x1, f32 y1, int id) {
 // entry list (id -4). List views carry no header button: the left-column
 // context tab is the way home, and rows are opened by tapping them.
 // Returns the icon's left edge; the caller draws its own icon art there.
+// "<localized section name>  <have>/<total>". The count is appended rather
+// than interpolated: the game's own title strings are bare nouns, and number
+// placement varies by language, so a trailing count is the safe form.
+// Falls back to the English literal if the archive has no entry (NTSC discs
+// still return the English text, so this only guards a failed lookup).
+void sectionTitle(u32 msgId, const char* fallback, char* out, int cap, int have, int total) {
+    snprintf(out, cap, "%s  %d/%d", archiveText(msgId, fallback), have, total);
+}
+
+// Section identity shown in a reader's header (tab 3 = skills, 4 = mail).
+const char* readerSectionName(int tab) {
+    if (tab == 3) {
+        return archiveText(0x6A4, "Hidden Skills");
+    }
+    // 0x4D6 is a "Letter <n>/<n>" reader caption driven by
+    // setMessageCountNumber and does not fit a section label; 0x04C8
+    // ("Letters") is the plain noun the game's own letter screen uses.
+    return localizedWord(0x04C8, "Mail");
+}
+
 f32 drawSectionHeader(f32 x0, f32 y0, f32 x1, f32 iconSize, f32 titleSize, const char* title,
     bool detail) {
+    // "< Back" plate geometry, shared by the plate itself and by the title's
+    // left limit below.
+    constexpr f32 BACK_PLATE_X = 2.0f;
+    constexpr f32 BACK_PLATE_W = 78.0f;
     if (detail) {
         const f32 bh = iconSize >= 24.0f ? 26.0f : 22.0f;
-        constexpr f32 BW = 78.0f;
         // Selected-plate style (light parchment + dark ink), matching the
         // active context tab — it is the primary action in a detail view.
-        drawTabPlate(x0 + 2.0f, y0 + 1.0f, BW, bh, true);
-        drawTextCentered(x0 + 2.0f + BW * 0.5f, y0 + 1.0f + bh * 0.5f + 5.0f, 13.0f,
-            TEXT_TAB_ACTIVE, "< Back");
-        pushReaderRect(x0 + 2.0f, y0 + 1.0f, x0 + 2.0f + BW, y0 + 1.0f + bh, -4);
+        drawTabPlate(x0 + BACK_PLATE_X, y0 + 1.0f, BACK_PLATE_W, bh, true);
+
+        char back[48];
+        snprintf(back, sizeof(back), "< %s",
+            localizedWord(0x0054, "Back"));
+        drawTextFittedCentered(x0 + BACK_PLATE_X + BACK_PLATE_W * 0.5f,
+            y0 + 1.0f + bh * 0.5f + 5.0f, 13.0f, 8.0f, BACK_PLATE_W - 8.0f, TEXT_TAB_ACTIVE, back);
+        pushReaderRect(x0 + BACK_PLATE_X, y0 + 1.0f, x0 + BACK_PLATE_X + BACK_PLATE_W,
+            y0 + 1.0f + bh, -4);
     }
     const f32 iconX = x1 - 6.0f - iconSize;
-    const f32 tw = measureText(titleSize, title);
-    drawText(iconX - 8.0f - tw, y0 + (iconSize >= 24.0f ? 20.0f : 15.0f), titleSize, TEXT_DIM,
-        "%s", title);
+    // Right-aligned, growing leftward — so it has to stop before the "< Back"
+    // plate in a detail view, and before the window edge otherwise. German
+    // section names ("Verborgene F\xE4higkeiten  3/7") overrun both.
+    // Derived from the Back plate, not hand-tuned to match it: the two were
+    // 78 and 88 in separate scopes, so widening the plate would have slid the
+    // right-aligned title silently underneath it.
+    const f32 leftLimit = x0 + (detail ? BACK_PLATE_X + BACK_PLATE_W + 8.0f : 6.0f);
+    const f32 titleMax = (iconX - 8.0f) - leftLimit;
+    const f32 ts = fittedTextSize(titleSize, titleSize - 3.0f, titleMax, title);
+    const f32 tw = measureText(ts, title);
+    const f32 titleY = y0 + (iconSize >= 24.0f ? 20.0f : 15.0f);
+    if (tw > titleMax) {
+        drawTextEllipsized(leftLimit, titleY, ts, titleMax, TEXT_DIM, title);
+    } else {
+        drawText(iconX - 8.0f - tw, titleY, ts, TEXT_DIM, "%s", title);
+    }
     return iconX;
 }
 
@@ -720,9 +788,18 @@ void wrapBody(const char* body, f32 width, f32 ts) {
 
 // Ordinal labels for the skills rows and reader header.
 const char* skillOrdinal(int i) {
-    static const char* l_ord[7] = {"Skill One", "Skill Two", "Skill Three", "Skill Four",
-        "Skill Five", "Skill Six", "Skill Seven"};
-    return l_ord[i];
+    // The game's own ordinals ("Skill One"..."Last Skill"), msg 1701 + i — same
+    // order as l_skillName, verified against d_menu_skill.cpp:634.
+    static const char* const l_fallback[7] = {"Skill One", "Skill Two", "Skill Three",
+        "Skill Four", "Skill Five", "Skill Six", "Last Skill"};
+    if (i < 0 || i >= 7) {
+        return "";
+    }
+    // The old version latched `loaded = true` before fetching and returned the
+    // buffer raw, so a single draw before the archive was resident left all
+    // seven labels blank for the rest of the session. archiveText falls back to
+    // real text instead of an empty string.
+    return archiveText(1701 + i, l_fallback[i]);
 }
 
 void ensureReaderContent(int tab, f32 width) {
@@ -777,7 +854,7 @@ void drawReaderDetail(int tab, f32 x0, f32 y0, f32 x1, f32 y1) {
     // section identity sits on the right so it never fights the shortcut.
     const f32 hIcon = 20.0f;
     const f32 iconX =
-        drawSectionHeader(x0, y0, x1, hIcon, 12.0f, tab == 3 ? "Hidden Skills" : "Mail", true);
+        drawSectionHeader(x0, y0, x1, hIcon, 12.0f, readerSectionName(tab), true);
     if (tab == 3) {
         drawScrollIcon(iconX, y0, hIcon, 0xFF);
     } else if (const ResTIMG* t = collectIconTimg(2)) {
@@ -819,26 +896,59 @@ void drawReaderDetail(int tab, f32 x0, f32 y0, f32 x1, f32 y1) {
 
 // Skills tab: all seven techniques, three columns — scroll icon, ordinal,
 // technique name (??? until learned). Tap a learned row to read it.
+// The list itself. Split from drawSkillsContent so it can be drawn UNDERNEATH a
+// detail that is still travelling — see below.
+void drawSkillsList(f32 x0, f32 y0, f32 x1, f32 y1);
+
+// Composes list + detail. While the detail is travelling the list stays
+// underneath and POPS DOWN — fading and easing back slightly — so the view
+// being replaced animates out instead of vanishing the instant a row is
+// tapped, and the window is never left empty mid-animation.
 void drawSkillsContent(f32 x0, f32 y0, f32 x1, f32 y1) {
     if (s_readerSel >= 0) {
+        if (readerZoomActive()) {
+            const f32 t = readerZoomProgress();
+            const f32 shrink = 0.06f * t;
+            const f32 ox = (x1 - x0) * shrink * 0.5f;
+            const f32 oy = (y1 - y0) * shrink * 0.5f;
+            // Multiply, never assign: this can run INSIDE a page transition
+            // that is already fading the whole page. Assigning stomped that
+            // outer fade, so the outgoing page stayed opaque and then snapped.
+            const f32 prevA = s_drawAlpha;
+            s_drawAlpha = prevA * (1.0f - t);
+            drawSkillsList(x0 + ox, y0 + oy, x1 - ox, y1 - oy);
+            s_drawAlpha = prevA;
+        }
         drawReaderDetail(3, x0, y0, x1, y1);
         return;
     }
+    drawSkillsList(x0, y0, x1, y1);
+}
+
+void drawSkillsList(f32 x0, f32 y0, f32 x1, f32 y1) {
     // Section header, matching the bugs/fish pages.
     const f32 hIcon = 26.0f;
-    char title[40];
-    snprintf(title, sizeof(title), "Hidden Skills  %d/7", countSkills());
+    char title[64];
+    sectionTitle(0x6A4, "Hidden Skills", title, sizeof(title), countSkills(), 7);
     const f32 iconX = drawSectionHeader(x0, y0, x1, hIcon, 15.0f, title, false);
     drawScrollIcon(iconX, y0 + 2.0f, hIcon, 0xFF);
     y0 += hIcon + 14.0f;
     static char names[7][64];
     static bool namesLoaded = false;
     if (!namesLoaded) {
-        namesLoaded = true;
+        // Latch only once every name actually came back. Setting the flag
+        // BEFORE the fetch meant a single draw before the archive was resident
+        // left all seven technique names blank for the rest of the session —
+        // the same trap skillOrdinal above was rewritten to avoid.
+        bool all = true;
         for (int i = 0; i < 7; i++) {
             names[i][0] = 0;
             dMeter2Info_getStringFull(l_skillName[i], names[i], sizeof(names[0]));
+            if (names[i][0] == 0) {
+                all = false;
+            }
         }
+        namesLoaded = all;
     }
     const f32 rowH = 44.0f;
     const f32 gap = 8.0f;
@@ -858,10 +968,14 @@ void drawSkillsContent(f32 x0, f32 y0, f32 x1, f32 y1) {
         drawMenuBox(x0, ry, rx1, ry + rowH, i == s_collectSel ? 0x5A4A2AFFu : CELL_RGBA);
         const bool got = skillLearned(i);
         drawScrollIcon(x0 + 12.0f, ry + (rowH - 30.0f) * 0.5f, 30.0f, got ? 0xFF : 55);
-        drawText(x0 + 54.0f, ry + rowH * 0.5f + 5.0f, 15.0f, got ? TEXT_MAIN : TEXT_DIM, "%s",
-            skillOrdinal(i));
+        // Two fixed columns: the ordinal, then the technique name.
+        constexpr f32 ORD_X = 54.0f;
+        constexpr f32 NAME_X = 210.0f;
+        drawTextEllipsized(x0 + ORD_X, ry + rowH * 0.5f + 5.0f, 15.0f,
+            (NAME_X - ORD_X) - 6.0f, got ? TEXT_MAIN : TEXT_DIM, skillOrdinal(i));
         if (got) {
-            drawText(x0 + 210.0f, ry + rowH * 0.5f + 5.0f, 15.0f, TEXT_ACCENT, "%s", names[i]);
+            drawTextEllipsized(x0 + NAME_X, ry + rowH * 0.5f + 5.0f, 15.0f,
+                (rx1 - 34.0f) - (x0 + NAME_X), TEXT_ACCENT, names[i]);
             drawText(rx1 - 26.0f, ry + rowH * 0.5f + 5.0f, 15.0f, TEXT_DIM, ">");
             // Publish only the visible part: rows scrolled past the viewport
             // edge must not be tappable through the sub-tab strip / margins.
@@ -871,7 +985,7 @@ void drawSkillsContent(f32 x0, f32 y0, f32 x1, f32 y1) {
                 pushReaderRect(x0, vy0, rx1, vy1, i);
             }
         } else {
-            drawText(x0 + 210.0f, ry + rowH * 0.5f + 5.0f, 15.0f, TEXT_DIM, "???");
+            drawText(x0 + NAME_X, ry + rowH * 0.5f + 5.0f, 15.0f, TEXT_DIM, "???");
         }
     }
     if (s_nativeW != 0) {
@@ -904,15 +1018,43 @@ int sortedLetters(int* o_idxs) {
 
 // Mail tab: three columns — letter icon, subject, sender. Newest first,
 // scrolls by drag. Tap to read.
+// The list itself. Split from drawLettersContent so it can be drawn UNDERNEATH a
+// detail that is still travelling — see below.
+void drawLettersList(f32 x0, f32 y0, f32 x1, f32 y1);
+
+// Composes list + detail. While the detail is travelling the list stays
+// underneath and POPS DOWN — fading and easing back slightly — so the view
+// being replaced animates out instead of vanishing the instant a row is
+// tapped, and the window is never left empty mid-animation.
 void drawLettersContent(f32 x0, f32 y0, f32 x1, f32 y1) {
     if (s_readerSel >= 0) {
+        if (readerZoomActive()) {
+            const f32 t = readerZoomProgress();
+            const f32 shrink = 0.06f * t;
+            const f32 ox = (x1 - x0) * shrink * 0.5f;
+            const f32 oy = (y1 - y0) * shrink * 0.5f;
+            // Multiply, never assign: this can run INSIDE a page transition
+            // that is already fading the whole page. Assigning stomped that
+            // outer fade, so the outgoing page stayed opaque and then snapped.
+            const f32 prevA = s_drawAlpha;
+            s_drawAlpha = prevA * (1.0f - t);
+            drawLettersList(x0 + ox, y0 + oy, x1 - ox, y1 - oy);
+            s_drawAlpha = prevA;
+        }
         drawReaderDetail(4, x0, y0, x1, y1);
         return;
     }
+    drawLettersList(x0, y0, x1, y1);
+}
+
+void drawLettersList(f32 x0, f32 y0, f32 x1, f32 y1) {
     // Section header, matching the bugs/fish pages.
     const f32 hIcon = 26.0f;
-    char title[40];
-    snprintf(title, sizeof(title), "Mail  %d", (int)dMeter2Info_getRecieveLetterNum());
+    char title[64];
+    {
+        snprintf(title, sizeof(title), "%s  %d", readerSectionName(4),
+            (int)dMeter2Info_getRecieveLetterNum());
+    }
     const f32 iconX = drawSectionHeader(x0, y0, x1, hIcon, 15.0f, title, false);
     if (const ResTIMG* t = collectIconTimg(2)) {
         drawTimg(t, iconX, y0 + 2.0f, hIcon, hIcon, 0xFF);
@@ -922,7 +1064,7 @@ void drawLettersContent(f32 x0, f32 y0, f32 x1, f32 y1) {
     const int n = sortedLetters(idxs);
     if (n == 0) {
         drawTextCentered((x0 + x1) * 0.5f, (y0 + y1) * 0.5f, 15.0f, TEXT_DIM,
-            "No letters yet.");
+            txt(STR_NO_LETTERS));
         return;
     }
     const f32 rowH = 40.0f;
@@ -968,12 +1110,24 @@ void drawLettersContent(f32 x0, f32 y0, f32 x1, f32 y1) {
         if (mailIcon != NULL) {
             drawTimg(mailIcon, x0 + 12.0f, ry + (rowH - 28.0f) * 0.5f, 28.0f, 28.0f, 0xFF);
         }
-        drawText(x0 + 52.0f, ry + rowH * 0.5f + 5.0f, 14.0f, TEXT_MAIN, "%s", subj[li]);
+        // Sender right-aligned, subject taking the rest. The sender is capped
+        // at 40% of the text lane: unclamped, a long localized name drove the
+        // subject's width negative and the subject disappeared from the row.
+        const f32 textX = x0 + 52.0f;
+        const f32 laneW = (rx1 - 30.0f) - textX;
+        f32 senderW = 0.0f;
         if (from[li][0] != 0) {
-            const f32 fw = measureText(13.0f, from[li]);
-            drawText(rx1 - fw - 30.0f, ry + rowH * 0.5f + 5.0f, 13.0f, TEXT_DIM, "%s",
-                from[li]);
+            senderW = measureText(13.0f, from[li]);
+            const f32 senderMax = laneW * 0.40f;
+            if (senderW > senderMax) {
+                senderW = senderMax;
+            }
+            drawTextEllipsized(rx1 - 30.0f - senderW, ry + rowH * 0.5f + 5.0f, 13.0f, senderW,
+                TEXT_DIM, from[li]);
+            senderW += 12.0f;
         }
+        drawTextEllipsized(textX, ry + rowH * 0.5f + 5.0f, 14.0f, laneW - senderW, TEXT_MAIN,
+            subj[li]);
         drawText(rx1 - 20.0f, ry + rowH * 0.5f + 5.0f, 15.0f, TEXT_DIM, ">");
         // Publish only the visible part (see the skills rows).
         const f32 vy0 = ry > y0 ? ry : y0;
@@ -991,31 +1145,41 @@ void drawLettersContent(f32 x0, f32 y0, f32 x1, f32 y1) {
 
 }  // namespace
 
-// Scent icon slot + display name. Scent item numbers have no entry in
-// zel_00.bmg (the 0x165+itemNo lookup lands on unrelated text), so the
-// names are fixed strings like the other companion labels. External: the
-// wolf form's slot I corner readout uses it too.
+// Scent icon slot + display name. External: the wolf form's slot I corner
+// readout uses it too.
 const char* resolveScent(u8 scent, int* o_iconSlot) {
     *o_iconSlot = -1;
+    // The scents ARE ordinary items, so their names live in the message
+    // archive at 0x165 + itemNo like any other — verified on the PAL disc
+    // ("Medicine Scent" / "Geruch von Medizin").
+    int slot = -1;
+    u8 nameItem = scent;
     switch (scent) {
     case dItemNo_SMELL_MEDICINE_e:
-        *o_iconSlot = 3;
-        return "Medicine";
+        slot = 3;
+        break;
     case dItemNo_SMELL_CHILDREN_e:
-        *o_iconSlot = 4;
-        return "Youths'";
+        slot = 4;
+        break;
     case dItemNo_SMELL_FISH_e:
-        *o_iconSlot = 5;
-        return "Reekfish";
+        slot = 5;
+        break;
     case dItemNo_SMELL_YELIA_POUCH_e:
     case dItemNo_SMELL_PUMPKIN_e:
-        *o_iconSlot = 6;
-        return "Ilia's";
+        slot = 6;
+        // Both pumpkin and pouch are Ilia's trail; the pouch carries the name.
+        nameItem = dItemNo_SMELL_YELIA_POUCH_e;
+        break;
     case dItemNo_SMELL_POH_e:
-        *o_iconSlot = 7;
-        return "Poe";
+        slot = 7;
+        break;
+    default:
+        return "-";
     }
-    return "-";
+    *o_iconSlot = slot;
+    // Interned per message ID, so this is one archive scan per scent for the
+    // whole session — it sits on the wolf HUD's per-frame path.
+    return archiveText(0x165 + nameItem, "-");
 }
 
 // Reader body helpers shared with the ITEMS page's item-info view: fill the
@@ -1062,8 +1226,8 @@ void drawCollectionContent(f32 x0, f32 y0, f32 x1, f32 y1) {
     // window (render-rate ease). While shrinking, the overview waits under
     // it; the tab flips back to 0 when the box lands on the cell.
     if (s_collectZoomClosing) {
-        s_collectZoomT *= 0.70f;
-        if (s_collectZoomT < 0.06f) {
+        s_collectZoomT *= ANIM_DECAY_FAST;
+        if (s_collectZoomT < ANIM_ZERO) {
             s_collectZoomClosing = false;
             s_collectZoomT = 1.0f;
             s_collectTab.store(0);
@@ -1071,29 +1235,36 @@ void drawCollectionContent(f32 x0, f32 y0, f32 x1, f32 y1) {
             return;
         }
     } else if (s_collectZoomT < 1.0f) {
-        s_collectZoomT += (1.0f - s_collectZoomT) * 0.30f;
-        if (s_collectZoomT > 0.97f) {
+        s_collectZoomT += (1.0f - s_collectZoomT) * ANIM_RATE_FAST;
+        if (s_collectZoomT > ANIM_DONE) {
             s_collectZoomT = 1.0f;
         }
     }
+    const f32 outerA = s_drawAlpha;
     f32 ax0 = x0, ay0 = y0, ax1 = x1, ay1 = y1;
     const bool zooming = s_collectZoomT < 1.0f && s_collectZoomFrom[2] > s_collectZoomFrom[0];
     if (zooming) {
-        // The overview sits underneath while the box travels, so the grow
-        // visibly comes out of (and returns into) the tapped cell.
-        drawCollectOverview(x0, y0 + 4.0f, x1, y1);
+        // The overview sits underneath while the section travels, so the grow
+        // visibly comes out of (and returns into) the tapped cell — and it
+        // POPS DOWN as it goes: it shrinks slightly and fades, instead of
+        // sitting there at full strength while something grows over it.
+        const f32 prevA = s_drawAlpha;
+        const f32 outT = 1.0f - s_collectZoomT;
+        const f32 shrink = 0.06f * s_collectZoomT;  // 0 -> 6% in
+        const f32 ow = (x1 - x0) * shrink * 0.5f;
+        const f32 oh = (y1 - y0) * shrink * 0.5f;
+        s_drawAlpha = prevA * (outT < 0.0f ? 0.0f : outT);
+        drawCollectOverview(x0 + ow, y0 + 4.0f + oh, x1 - ow, y1 - oh);
+        s_drawAlpha = prevA;
         const f32 t = s_collectZoomT;
         ax0 = s_collectZoomFrom[0] + (x0 - s_collectZoomFrom[0]) * t;
         ay0 = s_collectZoomFrom[1] + (y0 - s_collectZoomFrom[1]) * t;
         ax1 = s_collectZoomFrom[2] + (x1 - s_collectZoomFrom[2]) * t;
         ay1 = s_collectZoomFrom[3] + (y1 - s_collectZoomFrom[3]) * t;
-        // The growing box itself; content joins once there is room for it.
-        // Plain panel, NOT the item-cell plate — that art stretched over a
-        // whole growing window reads wrong (same call as the readers).
-        drawDetailBox(ax0, ay0, ax1, ay1);
-        if (s_collectZoomT < 0.35f) {
-            return;
-        }
+        // No panel fill while it travels — that extra background sliding over
+        // the overview is exactly what this transition should not add. The
+        // section FADES in over the overview instead.
+        s_drawAlpha = prevA * t;
     }
     switch (view) {
     case 1:
@@ -1109,6 +1280,7 @@ void drawCollectionContent(f32 x0, f32 y0, f32 x1, f32 y1) {
         drawLettersContent(ax0, ay0 + 4.0f, ax1, ay1);
         break;
     }
+    s_drawAlpha = outerA;
 }
 
 }  // namespace dusk::companion

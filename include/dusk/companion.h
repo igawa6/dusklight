@@ -9,6 +9,18 @@ bool hudReady();
 void setNativeCanvas(unsigned width, unsigned height, float scale);
 void applyNativeViewport();
 
+// How dark the second screen should be this frame, 0 (lit) to 1 (black):
+// the transition/load ramp and the cutscene fade, whichever is deeper.
+// Ticked by beginFrameCompanionInput() — the GAME frame loop, which keeps
+// running while the HUD is torn down and no dashboard is drawn. dualscreen
+// publishes it to the aux window, which applies it to the blit, so the fade
+// keeps advancing over a picture frozen on its last frame.
+float currentDim();
+
+// Drop the dim to lit immediately (no ramp). For the boot / quit-to-title
+// splash, which owns the panel and has no fade of its own.
+void resetDim();
+
 // Draw the integrated second-screen dashboard (status strips + current page)
 // into the active capture pass. Canvas coordinates are pixels.
 void drawDashboard(float width, float height);

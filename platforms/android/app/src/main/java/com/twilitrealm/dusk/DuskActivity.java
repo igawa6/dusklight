@@ -13,6 +13,7 @@ import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
@@ -54,12 +55,17 @@ public class DuskActivity extends SDLActivity {
     private static native void nativeCompanionPinch(float factor);
     private static native void nativeDualScreenAvailable(boolean available);
     private static native void nativeBatteryStatus(int percent, boolean charging);
+    private static native void nativeCompanionScreenshot(String path);
 
     private DisplayManager auxDisplayManager;
     private DisplayManager.DisplayListener auxDisplayListener;
     private BroadcastReceiver auxBatteryReceiver;
+    private BroadcastReceiver screenshotReceiver;
     private AuxPresentation auxPresentation;
     private String lastDisplayScan;
+    // Display the companion last presented on; preferred on every re-pick so an
+    // attached TV cannot steal it across a pause/resume. -1 = none yet.
+    private int lastAuxDisplayId = -1;
 
     private static String[] splitArgs(String raw) {
         List<String> out = new ArrayList<>();
@@ -115,6 +121,58 @@ public class DuskActivity extends SDLActivity {
         hideSystemBars();
         initAuxDisplay();
         initBatteryMonitor();
+        initScreenshotReceiver();
+    }
+
+    // Verification aid: dump what the companion screen is presenting.
+    //   adb shell am broadcast -a dev.twilitrealm.dusk.DUMP
+    //   adb shell am broadcast -a dev.twilitrealm.dusk.DUMP --es name fr-map.png
+    //   adb pull <externalFilesDir>/companion-screenshot.png
+    // The path comes from Java because getExternalFilesDir() is the only
+    // location adb can reach on an unrooted device.
+    //
+    // DEBUG BUILDS ONLY. The receiver has to be exported for `adb` to reach it,
+    // which means any installed app could trigger it — and the extra below is a
+    // filename that reaches a plain fopen() in native code. It is a development
+    // tool, so it does not ship.
+    private void initScreenshotReceiver() {
+        // Debuggable APKs only. BuildConfig is not generated for this module,
+        // and this is the more direct signal anyway: it asks whether THIS apk
+        // was built debuggable rather than which gradle variant produced it.
+        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) == 0) {
+            return;
+        }
+        screenshotReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                java.io.File dir = getExternalFilesDir(null);
+                if (dir == null) {
+                    Log.w(TAG, "Screenshot: no external files dir");
+                    return;
+                }
+                // Basename only. getAbsolutePath() does NOT normalise "..", so
+                // an unchecked extra could walk out of the files dir and have
+                // the native writer truncate an arbitrary file with PNG bytes.
+                String name = intent.getStringExtra("name");
+                if (name == null || name.isEmpty() || name.indexOf('/') >= 0
+                    || name.indexOf('\\') >= 0 || name.contains("..")) {
+                    name = "companion-screenshot.png";
+                }
+                String path = new java.io.File(dir, name).getAbsolutePath();
+                try {
+                    nativeCompanionScreenshot(path);
+                    Log.i(TAG, "Screenshot requested -> " + path);
+                } catch (UnsatisfiedLinkError e) {
+                    Log.w(TAG, "nativeCompanionScreenshot missing", e);
+                }
+            }
+        };
+        IntentFilter filter = new IntentFilter("dev.twilitrealm.dusk.DUMP");
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(screenshotReceiver, filter, Context.RECEIVER_EXPORTED);
+        } else {
+            registerReceiver(screenshotReceiver, filter);
+        }
     }
 
     @Override
@@ -151,6 +209,10 @@ public class DuskActivity extends SDLActivity {
         if (auxBatteryReceiver != null) {
             unregisterReceiver(auxBatteryReceiver);
             auxBatteryReceiver = null;
+        }
+        if (screenshotReceiver != null) {
+            unregisterReceiver(screenshotReceiver);
+            screenshotReceiver = null;
         }
         if (auxDisplayManager != null && auxDisplayListener != null) {
             auxDisplayManager.unregisterDisplayListener(auxDisplayListener);
@@ -195,10 +257,25 @@ public class DuskActivity extends SDLActivity {
 
             @Override
             public void onDisplayRemoved(int displayId) {
+                if (displayId == lastAuxDisplayId) {
+                    // Forget it, or the preference would keep pointing at a
+                    // panel that is gone and block a valid fallback.
+                    lastAuxDisplayId = -1;
+                }
                 if (auxPresentation != null &&
                     auxPresentation.getDisplay().getDisplayId() == displayId)
                 {
                     dismissAux();
+                    // The bottom panel may be gone for good (dock mode) or
+                    // just re-enumerating; re-pick so a surviving companion
+                    // panel is used instead of dropping to single-screen.
+                    //
+                    // Safe while paused only because this whole branch is
+                    // guarded by auxPresentation != null, and onPause already
+                    // nulled it — so a paused activity can never be dragged
+                    // into showing a Presentation (that is the window-leak
+                    // crash onPause exists to avoid). Keep that guard.
+                    showAuxPresentation();
                 }
             }
 
@@ -236,11 +313,25 @@ public class DuskActivity extends SDLActivity {
         final int selfId = getActivityDisplayId();
         Display[] displays =
             auxDisplayManager.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION);
+        // Plugging in a TV/monitor adds a SECOND candidate, and dismissAux +
+        // showAuxPresentation re-pick on every pause/resume — so "first match
+        // wins" could migrate the dashboard onto the television mid-session,
+        // leaving the built-in bottom panel showing the launcher.
+        //   1. Stay on the panel we were already using, if it is still there.
+        //   2. Otherwise take the LOWEST display id: built-in panels are
+        //      enumerated before hot-plugged external ones.
         Display chosen = null;
         for (Display d : displays) {
-            if (d.getDisplayId() != selfId) {
+            final int id = d.getDisplayId();
+            if (id == selfId) {
+                continue;
+            }
+            if (id == lastAuxDisplayId) {
                 chosen = d;
                 break;
+            }
+            if (chosen == null || id < chosen.getDisplayId()) {
+                chosen = d;
             }
         }
         // One line listing every candidate — dual-screen handhelds differ
@@ -291,6 +382,7 @@ public class DuskActivity extends SDLActivity {
                 try {
                     auxPresentation = new AuxPresentation(this, target);
                     auxPresentation.show();
+                    lastAuxDisplayId = target.getDisplayId();
                     Log.i(TAG, "Aux presentation shown on display " + target.getDisplayId());
                 } catch (Exception e) {
                     Log.w(TAG, "Failed to show aux presentation", e);
@@ -299,6 +391,62 @@ public class DuskActivity extends SDLActivity {
             }
         }
         reportDualScreenAvailable();
+    }
+
+    // The companion surface, hosted by the Presentation below.
+    private static SurfaceView createCompanionSurfaceView(Context context) {
+        SurfaceView surfaceView = new SurfaceView(context);
+        // Render the bottom screen at 8:7 in 1080p (native landscape).
+        surfaceView.getHolder().setFixedSize(1240, 1080);
+        surfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
+            @Override
+            public void surfaceCreated(SurfaceHolder holder) {}
+
+            @Override
+            public void surfaceChanged(SurfaceHolder holder, int format, int width,
+                int height)
+            {
+                nativeAuxSurfaceChanged(holder.getSurface(), width, height);
+            }
+
+            @Override
+            public void surfaceDestroyed(SurfaceHolder holder) {
+                nativeAuxSurfaceChanged(null, 0, 0);
+            }
+        });
+        // Pinch (two fingers) zooms the companion map; while a pinch is
+        // active, the single-finger stream is cancelled so it can't
+        // register taps or drags.
+        final android.view.ScaleGestureDetector scaleDetector =
+            new android.view.ScaleGestureDetector(context,
+                new android.view.ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                    @Override
+                    public boolean onScale(android.view.ScaleGestureDetector d) {
+                        nativeCompanionPinch(d.getScaleFactor());
+                        return true;
+                    }
+                });
+        surfaceView.setOnTouchListener((view, event) -> {
+            scaleDetector.onTouchEvent(event);
+            if (event.getPointerCount() > 1 || scaleDetector.isInProgress()) {
+                nativeCompanionTouchEvent(3, 0.0f, 0.0f);
+                return true;
+            }
+            final int action = event.getActionMasked();
+            if (view.getWidth() > 0 && view.getHeight() > 0 &&
+                (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE ||
+                 action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL))
+            {
+                // 0 = down, 1 = move, 2 = up (cancel maps to up).
+                final int phase = action == MotionEvent.ACTION_DOWN ? 0
+                    : action == MotionEvent.ACTION_MOVE ? 1 : 2;
+                nativeCompanionTouchEvent(phase, event.getX() / view.getWidth(),
+                    event.getY() / view.getHeight());
+                return true;
+            }
+            return false;
+        });
+        return surfaceView;
     }
 
     private static final class AuxPresentation extends Presentation {
@@ -319,58 +467,7 @@ public class DuskActivity extends SDLActivity {
             // stops receiving it. Touches still arrive without focus.
             getWindow().addFlags(
                 android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
-            SurfaceView surfaceView = new SurfaceView(getContext());
-            // Render the bottom screen at 8:7 in 1080p (native landscape).
-            surfaceView.getHolder().setFixedSize(1240, 1080);
-            surfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
-                @Override
-                public void surfaceCreated(SurfaceHolder holder) {}
-
-                @Override
-                public void surfaceChanged(SurfaceHolder holder, int format, int width,
-                    int height)
-                {
-                    nativeAuxSurfaceChanged(holder.getSurface(), width, height);
-                }
-
-                @Override
-                public void surfaceDestroyed(SurfaceHolder holder) {
-                    nativeAuxSurfaceChanged(null, 0, 0);
-                }
-            });
-            // Pinch (two fingers) zooms the companion map; while a pinch is
-            // active, the single-finger stream is cancelled so it can't
-            // register taps or drags.
-            final android.view.ScaleGestureDetector scaleDetector =
-                new android.view.ScaleGestureDetector(getContext(),
-                    new android.view.ScaleGestureDetector.SimpleOnScaleGestureListener() {
-                        @Override
-                        public boolean onScale(android.view.ScaleGestureDetector d) {
-                            nativeCompanionPinch(d.getScaleFactor());
-                            return true;
-                        }
-                    });
-            surfaceView.setOnTouchListener((view, event) -> {
-                scaleDetector.onTouchEvent(event);
-                if (event.getPointerCount() > 1 || scaleDetector.isInProgress()) {
-                    nativeCompanionTouchEvent(3, 0.0f, 0.0f);
-                    return true;
-                }
-                final int action = event.getActionMasked();
-                if (view.getWidth() > 0 && view.getHeight() > 0 &&
-                    (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE ||
-                     action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL))
-                {
-                    // 0 = down, 1 = move, 2 = up (cancel maps to up).
-                    final int phase = action == MotionEvent.ACTION_DOWN ? 0
-                        : action == MotionEvent.ACTION_MOVE ? 1 : 2;
-                    nativeCompanionTouchEvent(phase, event.getX() / view.getWidth(),
-                        event.getY() / view.getHeight());
-                    return true;
-                }
-                return false;
-            });
-            setContentView(surfaceView);
+            setContentView(createCompanionSurfaceView(getContext()));
         }
     }
 

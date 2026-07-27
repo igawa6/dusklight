@@ -50,4 +50,28 @@ extern "C" JNIEXPORT void JNICALL Java_dev_twilitrealm_dusk_DuskActivity_nativeB
     dusk::companion::setBatteryStatus(percent, charging != JNI_FALSE);
 }
 
+#if DUSK_COMPANION_CAPTURE
+// Verification aid: dump what the second screen is presenting to a PNG.
+//   adb shell am broadcast -a dev.twilitrealm.dusk.DUMP
+// Java supplies the path because getExternalFilesDir() is the only location
+// adb can pull from on an unrooted device.
+extern "C" JNIEXPORT void JNICALL Java_dev_twilitrealm_dusk_DuskActivity_nativeCompanionScreenshot(
+    JNIEnv* env, jclass, jstring path)
+{
+    if (path == nullptr) {
+        dusk::dualscreen::requestScreenshot(nullptr);
+        return;
+    }
+    const char* chars = env->GetStringUTFChars(path, nullptr);
+    if (chars == nullptr) {  // OOM
+        dusk::dualscreen::requestScreenshot(nullptr);
+        return;
+    }
+    dusk::dualscreen::requestScreenshot(chars);
+    env->ReleaseStringUTFChars(path, chars);
+}
+
+
+#endif  // DUSK_COMPANION_CAPTURE
+
 #endif
