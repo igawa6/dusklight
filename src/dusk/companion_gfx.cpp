@@ -559,6 +559,36 @@ void drawText(f32 x, f32 y, f32 size, u32 rgba, const char* fmt, ...) {
     dComIfGp_getCurrentGrafPort()->setup2D();
 }
 
+// NOT CURRENTLY USED — see the guide reader, which reverted to plain drawText.
+//
+// On device this produced "draw vertex data overrun: need 596000 bytes at pos
+// 34239, have 225861". 596000 bytes for a 4-vertex quad is ~149KB per vertex,
+// which is not a vertex count problem: it means the vertex FORMAT in effect
+// when the glyph drew was not the one the font assumes. Passing a context
+// makes drawChar_scale skip its own pushDrawState(), so the format becomes
+// this code's responsibility for the whole span — and something between the
+// begin and the glyphs is still changing it. Desktop did not reproduce it.
+//
+// Re-enabling needs on-device verification, not desktop: the two behave
+// differently here.
+//
+// Batched text draw: begin once, draw many lines, end once.
+//
+// The font's PC path keeps every glyph in one joined texture, and
+// JUTResFont::loadImage rebinds it per glyph unless a FontDrawContext says it
+// is already bound. drawString_size_scale takes no context, so drawText pays
+// one GXLoadTexObj per glyph — measured at 1600 binds for one screen of prose
+// against a whole-frame baseline of 836.
+//
+// The setup MUST be hoisted, not done per line. setGX() and setup2D()
+// reconfigure GX state and invalidate the binding, so calling them between
+// lines while the latch still claims the font is resident desyncs the command
+// FIFO outright (observed: vertex data parsed as an opcode). That is why this
+// is a begin/end pair rather than a drop-in replacement for drawText.
+//
+// The per-glyph GXBegin is untouched — inherent to drawChar_scale — so this
+// halves the added GX traffic rather than eliminating it.
+
 // Exact pixel width of a string at the given size (matches drawText's
 // width scale), using the font's own metrics — the per-char estimate was
 // off for proportional glyphs, mis-centering words like "Attack"/"Enter".

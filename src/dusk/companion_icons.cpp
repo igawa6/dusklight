@@ -32,6 +32,34 @@ alignas(32) u8 s_iconBuf2[ICON_SLOT_COUNT][ICON_BUF_SIZE];
 J2DPicture* s_itemPic[ICON_SLOT_COUNT][2];
 int s_iconLayers[ICON_SLOT_COUNT];
 
+// Two entries in the game's own item_resource table point at leftover
+// early-development art instead of the shipped 48px icons:
+//
+//   Ordon Sword  (0x28) -> 0x70 TT_KOKIRINOKEN_S3_TC  ("Kokiri Sword")
+//   Wooden Shield(0x2A) -> 0x74 TTDELUNOTATE_S3_TC    ("Deku Shield")
+//
+// Both are Ocarina of Time names carrying the _S3_TC suffix the other beta
+// assets use, and both sit next to the correct icon in the same archive
+// (0x72 TT_SWORD_48, 0x73 TT_WOOD_SHIELD_48) which nothing in the game
+// references. Retail never shows the bad art because nothing there resolves
+// these two items through getTexture() — the pause equipment screen uses its
+// own authored panes — so the companion's gear boxes are the first code to
+// take this path and the first to hit it.
+//
+// Corrected here rather than in the table: item_resource is the disc's data,
+// and readItemTexture already accepts a texture override for exactly this.
+// Returns -1 when the table entry is fine.
+int iconTextureOverride(u8 itemNo) {
+    switch (itemNo) {
+    case dItemNo_SWORD_e:
+        return 0x72;  // TT_SWORD_48
+    case dItemNo_WOOD_SHIELD_e:
+        return 0x73;  // TT_WOOD_SHIELD_48
+    default:
+        return -1;
+    }
+}
+
 int updateItemPics(int slot, u8 itemNo) {
     if (itemNo == dItemNo_NONE_e || dComIfGp_getItemIconArchive() == NULL) {
         return 0;
@@ -47,7 +75,9 @@ int updateItemPics(int slot, u8 itemNo) {
     }
     if (s_itemPic[slot][0] == NULL) {
         // Seed the pictures with any valid TIMG; readItemTexture swaps them.
-        const s16 texIdx = dItem_data::getTexture(itemNo);
+        const int override = iconTextureOverride(itemNo);
+        const s16 texIdx =
+            override >= 0 ? (s16)override : dItem_data::getTexture(itemNo);
         if (texIdx < 0 ||
             JKRReadIdxResource(s_iconBuf[slot], ICON_BUF_SIZE, texIdx,
                 dComIfGp_getItemIconArchive()) == 0)
@@ -61,7 +91,8 @@ int updateItemPics(int slot, u8 itemNo) {
         }
     }
     const int layers = dMeter2Info_readItemTexture(itemNo, s_iconBuf[slot],
-        s_itemPic[slot][0], s_iconBuf2[slot], s_itemPic[slot][1], NULL, NULL, NULL, NULL, -1);
+        s_itemPic[slot][0], s_iconBuf2[slot], s_itemPic[slot][1], NULL, NULL, NULL, NULL,
+        iconTextureOverride(itemNo));
     s_iconItem[slot] = cacheKey;
     s_iconValid[slot] = true;
     s_iconLayers[slot] = layers;

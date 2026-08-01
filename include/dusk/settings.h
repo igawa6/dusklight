@@ -306,6 +306,9 @@ struct UserSettings {
         ConfigVar<bool> removeQuestMapMarkers;
         ConfigVar<bool> showInputViewer;
         ConfigVar<bool> showInputViewerGyro;
+
+        // Guide reader (second screen).
+        ConfigVar<bool> guideEnabled;
     } game;
 
     struct {

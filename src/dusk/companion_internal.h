@@ -8,7 +8,7 @@
 //   companion_gfx.cpp     low-level drawing primitives + pane compositing
 //   companion_icons.cpp   item/collect icon caches (all static buffers)
 //   companion_touch.cpp   touch input, drag & drop, equip actions
-//   companion_pages.cpp   MAP / ITEMS / QUEST page content
+//   companion_pages.cpp   MAP / ITEMS page content
 //   companion_collect.cpp COLLECT page content
 //   companion_dmap.cpp    live dungeon-map renderer (menu-map reuse)
 //   companion.cpp         dashboard composition, public API, and the
@@ -28,6 +28,9 @@
 class J2DPicture;
 class J2DPane;
 struct ResTIMG;
+// Defined in JUTFont.h (PC builds only); forward-declared here so the header
+// does not have to pull the whole font stack in.
+struct FontDrawContext;
 class dMeter2Draw_c;
 
 namespace dusk::companion {
@@ -39,7 +42,7 @@ enum Page {
     PAGE_MAP,
     PAGE_INVENTORY,
     PAGE_COLLECTION,
-    PAGE_QUEST,
+    PAGE_GUIDE,
     PAGE_COUNT,
 };
 
@@ -190,6 +193,15 @@ inline bool isSaneTimg(const ResTIMG* timg) {
     case GX_TF_C14X2:
     case GX_TF_CMPR:
         return true;
+    // PC-only linear formats. Guide images are decoded from PNG at import and
+    // wrapped as GX_TF_RGBA8_PC (guide/image.cpp) because it takes linear data
+    // straight to the GPU — the GameCube RGBA8 layout is 4x4-tiled and this
+    // tree has no linear->GX tiler. Rejecting them here would make every
+    // fabricated texture invisible.
+    case GX_TF_R8_PC:
+    case GX_TF_RG8_PC:
+    case GX_TF_RGBA8_PC:
+        return true;
     default:
         return false;
     }
@@ -275,7 +287,6 @@ constexpr f32 CTAB_H = 40.0f;  // sub-tab strip height (plate = CTAB_H - 4)
 
 extern std::atomic<int> s_page;
 extern std::atomic<int> s_collectTab;
-extern std::atomic<int> s_questTab;
 
 // Gear tap-to-equip boxes on the COLLECT overview: 0-1 swords, 2-3 shields,
 // 4-6 clothes. Geometry refreshed each frame the overview draws.
@@ -424,14 +435,15 @@ extern f32 s_dropBtnSize;
 
 // Main tab strip geometry, published by the draw so the touch pass never
 // recomputes it. The visible tab set differs per layout (Functional drops
-// QUEST), so page ids are published alongside the rects.
+// GUIDE), so page ids are published alongside the rects.
 constexpr int TAB_RECT_MAX = PAGE_COUNT;
 extern f32 s_tabRects[TAB_RECT_MAX][4];
 extern int s_tabRectPage[TAB_RECT_MAX];
 extern int s_tabRectCount;
 
 // Pages the current layout shows, in tab order. Returns the count and fills
-// o_pages. Functional drops QUEST and centres MAP, per the reference layout.
+// o_pages. Functional drops GUIDE and centres MAP, per the reference layout —
+// it reaches the guide from the left pane instead.
 int visiblePages(int* o_pages);
 
 // Content window rect {x0, y0, x1, y1}, published by drawContentWindow. The
@@ -475,10 +487,11 @@ void drawCinematicContextTab(f32 x0, f32 y0, f32 x1, f32 y1);
 // Functional bottom-left zone: a three-page carousel, swiped horizontally.
 // Page 0 is context-sensitive (dungeon items, or the Vessel of Light during a
 // tears quest); 1 and 2 are always available.
-constexpr int LEFT_BOX_PAGES = 3;  // upper bound; the live list can be shorter
+constexpr int LEFT_BOX_PAGES = 4;  // upper bound; the live list can be shorter
 constexpr int LEFT_BOX_CONTEXT = 0;
 constexpr int LEFT_BOX_PROGRESS = 1;
 constexpr int LEFT_BOX_PLACE = 2;
+constexpr int LEFT_BOX_GUIDE = 3;
 // s_leftBoxPage holds a page ID, not an index — the available set changes as
 // you walk in and out of dungeons, so an index would silently mean something
 // different from one room to the next.
@@ -501,6 +514,22 @@ bool drawFpsReadout(f32 x, f32 baselineY);
 extern f32 s_dropBtnPos[2][2];
 extern std::atomic<int> s_batteryPct;
 extern std::atomic<bool> s_batteryCharging;
+
+
+// --- Guide reader overlay, companion_guide.cpp ---
+// An overlay over the content window rather than a Page: see the note at the
+// top of companion_guide.cpp for why a Page is not viable here.
+void drawGuideOverlay(f32 x0, f32 y0, f32 x1, f32 y1);
+bool handleGuideTouch(f32 tx, f32 ty);
+bool guideIsOpen();
+void guideOpen();
+void guideClose();
+void guideBack();
+void guideRowTap(int row);
+// True once at least one guide is saved — gates the left-column Guide page.
+bool guideAvailable();
+void drawLeftGuideBox(f32 x1, f32 y0, f32 y1);
+extern f32 s_scrollGuide;
 
 // --- Shared + Cinematic widgets, companion_hud.cpp ---
 const char* tabName(int page);
@@ -563,7 +592,6 @@ extern int s_readerTapCand;
 extern int s_readerRectCount;
 extern f32 s_readerRects[12][4];
 extern int s_readerRectIds[12];
-extern f32 s_scrollQuest;
 extern f32 s_scrollSkills;
 extern f32 s_scrollMail;
 extern f32 s_scrollBody;
@@ -895,7 +923,6 @@ void drawFloorOverlay(f32 tx0, f32 ty0, f32 tx1, f32 ty1, f32 clampY0 = 0.0f,
     f32 clampY1 = 0.0f);
 const ResTIMG* dmapLinkIconTimg();
 void drawInventoryContent(f32 x0, f32 y0, f32 x1, f32 y1);
-void drawQuestContent(f32 x0, f32 y0, f32 x1, f32 y1);
 void drawCollectionContent(f32 x0, f32 y0, f32 x1, f32 y1);
 
 }  // namespace dusk::companion

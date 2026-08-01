@@ -1,4 +1,4 @@
-// Companion dashboard: MAP / ITEMS / QUEST page content. The COLLECT page
+// Companion dashboard: MAP / ITEMS page content. The COLLECT page
 // lives in companion_collect.cpp.
 
 #include "dusk/companion.h"
@@ -670,81 +670,10 @@ void drawInventoryCaption(f32 x0, f32 x1, f32 y1) {
     }
 }
 
-// QUEST page: Dusklight achievements. Snapshot cached and refreshed twice
-// a second.
-const std::vector<dusk::Achievement>& achievementSnapshot() {
-    static std::vector<dusk::Achievement> s_ach;
-    static int refresh = 0;
-    if (refresh-- <= 0) {
-        refresh = 30;
-        s_ach = dusk::AchievementSystem::get().getAchievements();
-    }
-    return s_ach;
-}
 
-const char* l_catNames[5] = {"Challenge", "Collect", "Minigame", "Misc", "Glitched"};
 
-void countByCategory(const std::vector<dusk::Achievement>& ach, int unlocked[5], int total[5]) {
-    for (const dusk::Achievement& a : ach) {
-        const int c = (int)a.category;
-        if (c >= 0 && c < 5) {
-            total[c]++;
-            if (a.unlocked) {
-                unlocked[c]++;
-            }
-        }
-    }
-}
 
-// Category sub-tab strip with per-category unlocked counts.
-void drawQuestTabs(f32 x0, f32 y0, f32 tabW, int active, const int unlocked[5],
-    const int total[5]) {
-    for (int i = 0; i < 5; i++) {
-        const f32 x = x0 + i * (tabW + 2.0f);
-        drawTabPlate(x, y0, tabW, 40.0f, i == active);
-        drawTextCentered(x + tabW * 0.5f, y0 + 16.0f, 12.0f,
-            i == active ? TEXT_TAB_ACTIVE : TEXT_DIM, l_catNames[i]);
-        char cnt[16];
-        snprintf(cnt, sizeof(cnt), "%d/%d", unlocked[i], total[i]);
-        drawTextCentered(x + tabW * 0.5f, y0 + 34.0f, 12.0f,
-            i == active ? TEXT_TAB_ACTIVE : TEXT_DIM, cnt);
-    }
-}
 
-// Word-wrap a description onto up to two 11px lines within wrapW.
-void drawWrappedDescription(const char* text, f32 x, f32 ry, f32 wrapW) {
-    const char* p = text != NULL ? text : "";
-    if (*p == 0) {
-        return;
-    }
-    // First line: as much as fits, broken at the last space unless a single
-    // word fills the line on its own.
-    int cut = fitPrefix(11.0f, wrapW, p);
-    if ((size_t)cut > 111) {
-        cut = 111;
-    }
-    if (p[cut] != 0) {
-        for (int i = cut - 1; i > 0; i--) {
-            if (p[i] == ' ') {
-                cut = i;
-                break;
-            }
-        }
-    }
-    char line[112];
-    snprintf(line, sizeof(line), "%.*s", cut, p);
-    drawText(x, ry, 11.0f, TEXT_DIM, "%s", line);
-    p += cut;
-    while (*p == ' ') {
-        p++;
-    }
-    // Second and last line: draw the REMAINING text ellipsized, so a cut is
-    // visible rather than silent. Localized descriptions run longer than the
-    // English these two lines were sized for.
-    if (*p != 0) {
-        drawTextEllipsized(x, ry + 14.0f, 11.0f, wrapW, TEXT_DIM, p);
-    }
-}
 
 }  // namespace
 
@@ -1333,6 +1262,7 @@ void drawMapCaption(f32 x0, f32 y1) {
 }  // namespace
 
 void drawMapContent(f32 x0, f32 y0, f32 x1, f32 y1) {
+
     // In dungeons the live floor map replaces the minimap crop.
     if (s_dmapAvailable) {
         if (drawDungeonMapContent(x0, y0, x1, y1)) {
@@ -1501,68 +1431,6 @@ void drawInventoryContent(f32 x0, f32 y0, f32 x1, f32 y1) {
     // reader view (drawItemInfo) is unchanged.
 }
 
-// QUEST page: Dusklight's achievements, 5 category sub-tabs, drag-scrolled.
-void drawQuestContent(f32 x0, f32 y0, f32 x1, f32 y1) {
-    const std::vector<dusk::Achievement>& ach = achievementSnapshot();
-    const int active = s_questTab.load();
-    int unlocked[5] = {};
-    int total[5] = {};
-    countByCategory(ach, unlocked, total);
-    // Tab strip inset from the window edges like the COLLECT sub-tabs.
-    const f32 qx0 = x0 + 12.0f;
-    const f32 qx1 = x1 - 12.0f;
-    const f32 tabW = (qx1 - qx0 - 2.0f * 4.0f) / 5.0f;
-    drawQuestTabs(qx0, y0, tabW, active, unlocked, total);
-
-    // Entry table for the active category. Columns: name | progress/status,
-    // description word-wrapped beneath. Drag-scrolls (clamped here).
-    const f32 listTop = y0 + 48.0f;
-    const f32 rowH = 58.0f;
-    const f32 colStatus = x1 - 62.0f;
-    drawText(x0 + 4.0f, listTop + 12.0f, 12.0f, TEXT_DIM, "Achievement");
-    drawText(colStatus, listTop + 12.0f, 12.0f, TEXT_DIM, "Status");
-    const f32 tableTop = listTop + 20.0f;
-    const f32 listBottom = y1 - 6.0f;
-    const f32 viewH = listBottom - tableTop;
-    const int catCount = total[active];
-    const f32 contentH = (f32)catCount * rowH;
-    const f32 maxScroll = clampListScroll(&s_scrollQuest, contentH, viewH);
-    constexpr u32 TEXT_DONE = 0xB4D890FF;
-    // Rows stop short of the right edge so the scroll hint has its own lane.
-    const f32 rx1 = x1 - 12.0f;
-    const f32 wrapW = colStatus - x0 - 30.0f;
-    if (s_nativeW != 0) {
-        GXSetScissorRender((u32)(x0 * s_pixelScale), (u32)(tableTop * s_pixelScale),
-            (u32)((x1 - x0) * s_pixelScale) + 1, (u32)(viewH * s_pixelScale) + 1);
-    }
-    int idx = 0;
-    for (const dusk::Achievement& a : ach) {
-        if ((int)a.category != active) {
-            continue;
-        }
-        const f32 ry = tableTop + (f32)idx * rowH - s_scrollQuest;
-        idx++;
-        if (ry < tableTop - rowH || ry > listBottom) {
-            continue;
-        }
-        // Boxed rows like the skills/mail lists.
-        drawMenuBox(x0, ry + 2.0f, rx1, ry + rowH - 4.0f, 0x22201DFFu);
-        drawText(x0 + 14.0f, ry + 19.0f, 14.0f, a.unlocked ? TEXT_DONE : TEXT_MAIN,
-            "%s", a.name);
-        if (a.unlocked) {
-            drawText(colStatus, ry + 19.0f, 13.0f, TEXT_DONE, "Done");
-        } else if (a.isCounter) {
-            drawText(colStatus, ry + 19.0f, 13.0f, TEXT_DIM, "%d/%d", a.progress, a.goal);
-        } else {
-            drawText(colStatus, ry + 19.0f, 13.0f, TEXT_DIM, "-");
-        }
-        drawWrappedDescription(a.description, x0 + 20.0f, ry + 34.0f, wrapW);
-    }
-    if (s_nativeW != 0) {
-        applyWinClip();
-    }
-    drawListScrollHint(x1, tableTop, listBottom, s_scrollQuest, maxScroll, viewH, contentH);
-}
 
 // Destroy the dungeon-map picture outright. Called when the renderer that
 // owns its ResTIMG is torn down: re-pointing it later is not enough, because

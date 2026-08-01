@@ -28,8 +28,9 @@ aurora::Module Log{"dusk::data"};
 
 constexpr auto kLocationDescriptorName = "data_location.json";
 
-constexpr std::array<std::string_view, 4> kUserDataDirectories = {
+constexpr std::array<std::string_view, 5> kUserDataDirectories = {
     "texture_replacements",
+    "guides",
     "USA",
     "EUR",
     "JAP",

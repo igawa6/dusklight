@@ -528,6 +528,9 @@ void drawLeftInfoBox(dMeter2Draw_c* md, f32 x1, f32 y0, f32 y1) {
     case LEFT_BOX_PLACE:
         drawLeftPlaceBox(cx1, y0 + boxOff, y1 + boxOff);
         break;
+    case LEFT_BOX_GUIDE:
+        drawLeftGuideBox(cx1, y0 + boxOff, y1 + boxOff);
+        break;
     default:
         // Dungeon items and the tears quest can't both be running — the tears
         // areas are fields, not dungeons — so the order is a preference, not

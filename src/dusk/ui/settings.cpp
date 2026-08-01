@@ -11,6 +11,11 @@
 #include "dusk/dualscreen.h"
 #include "dusk/hotkeys.h"
 #include "dusk/data.hpp"
+#include <SDL3/SDL_misc.h>
+
+#include "dusk/guide/browser.hpp"
+#include "dusk/guide/fetch.hpp"
+#include "dusk/guide/store.hpp"
 #include "dusk/file_select.hpp"
 #include "dusk/imgui/ImGuiEngine.hpp"
 #include "dusk/io.hpp"
@@ -52,6 +57,14 @@
 
 namespace dusk::ui {
 namespace {
+
+// Last outcome of a guide download/import, shown under the buttons. File-local
+// because the settings pane is rebuilt on every open and must not lose it.
+std::string sGuideStatus;
+// Cached guide count; -1 means "re-read the index". Never read the index from
+// a per-frame callback without this.
+int sGuideCount = -1;
+
 
 constexpr std::array kLanguageNames = {
     "English",
@@ -1240,6 +1253,90 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
             "Scales the size of the gameplay HUD (hearts, buttons, mini-map, etc.). Does not affect dialog boxes or menus.",
             50, 200, 5,
             [] { return getSettings().game.minimalHUD.getValue(); });
+        leftPane.register_control(
+            leftPane.add_select_button({
+                .key = "Guide Reader",
+                .getValue =
+                    [] {
+                        // Also the poll point for the background download.
+                        // There is no frame hook in the settings pane, and
+                        // getValue IS called every frame while the row is
+                        // visible, so draining the task here is what keeps the
+                        // status line live without inventing a second loop.
+                        static unsigned sSeenImportGen = 0;
+                        const unsigned gen = dusk::guide::import_generation();
+                        if (gen != sSeenImportGen) {
+                            sSeenImportGen = gen;
+                            const int imported = dusk::guide::last_import_count();
+                            sGuideCount = -1;
+                            sGuideStatus = imported == 0
+                                ? "No new pages found in guides/import."
+                                : fmt::format("Imported {} page(s).", imported);
+                        }
+                        if (!getSettings().game.guideEnabled.getValue()) {
+                            return Rml::String{"Off"};
+                        }
+                        // Count is cached: getValue runs EVERY frame the row
+                        // is visible, and load_index() parses JSON off disk.
+                        // Only the actions that can change it invalidate it.
+                        if (sGuideCount < 0) {
+                            sGuideCount = (int)dusk::guide::load_index().entries.size();
+                        }
+                        return sGuideCount == 0
+                            ? Rml::String{"On (no guides)"}
+                            : Rml::String{fmt::format("On ({} saved)", sGuideCount)};
+                    },
+                .isModified = [] { return false; },
+            }),
+            rightPane, [](Pane& pane) {
+                pane.clear();
+                pane.add_text(
+                    "Reads a walkthrough on the second screen. Swipe out the "
+                    "left pane and tap the Guide icon; the HUD and the item "
+                    "buttons keep working while it is up.");
+                pane.add_button({.text = "On",
+                                    .isSelected = [] {
+                                        return getSettings().game.guideEnabled.getValue();
+                                    }})
+                    .on_pressed([] {
+                        mDoAud_seStartMenu(kSoundItemChange);
+                        getSettings().game.guideEnabled.setValue(true);
+                        config::save();
+                    });
+                pane.add_button({.text = "Off",
+                                    .isSelected = [] {
+                                        return !getSettings().game.guideEnabled.getValue();
+                                    }})
+                    .on_pressed([] {
+                        mDoAud_seStartMenu(kSoundItemChange);
+                        getSettings().game.guideEnabled.setValue(false);
+                        config::save();
+                    });
+
+                // The primary path. A WebView is a real browser, so the sites
+                // that answer a plain HTTP client with 403 serve it normally —
+                // and the user never has to find a folder or move a file.
+                if (dusk::guide::browser_available()) {
+                    pane.add_rml("<br/><b>Save a guide from the web</b> — opens "
+                                 "zeldadungeon.net, then press <b>Save whole guide</b>. "
+                                 "It downloads every chapter for offline reading.");
+                    pane.add_button("Save from zeldadungeon.net").on_pressed([] {
+                        mDoAud_seStartMenu(kSoundClick);
+                        if (!dusk::guide::open_browser(dusk::guide::kDefaultGuideUrl)) {
+                            sGuideStatus = "Could not open the browser.";
+                        }
+                    });
+                }
+                // Deliberately just this. A URL field, a direct download and a
+                // manual import folder all existed here and all were removed:
+                // none of them work against the site this is built around,
+                // which answers a plain HTTP client with 403. The browser is
+                // the only thing that can read it, so it is the only offer.
+                if (!sGuideStatus.empty()) {
+                    pane.add_rml("<br/>" + sGuideStatus);
+                }
+            });
+
         leftPane.register_control(
             leftPane.add_select_button({
                 // Short key: the row prints the key on the left and the live

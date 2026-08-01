@@ -1450,8 +1450,14 @@ set(DUSK_FILES
         src/dusk/companion_internal.h
         src/dusk/companion_strings.h
         src/dusk/companion_strings.cpp
+        src/dusk/guide/convert.cpp
+        src/dusk/guide/store.cpp
+        src/dusk/guide/fetch.cpp
+        src/dusk/guide/image.cpp
+        src/dusk/guide/browser.cpp
+        src/dusk/companion_guide.cpp
         src/dusk/companion_hud.cpp
-    src/dusk/companion_functional.cpp
+        src/dusk/companion_functional.cpp
         src/dusk/companion_gfx.cpp
         src/dusk/companion_icons.cpp
         src/dusk/companion_touch.cpp

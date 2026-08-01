@@ -34,13 +34,15 @@
 #include "d/d_menu_dmap_map.h"
 #include "d/d_menu_fmap2D.h"
 
+#include <cstdio>
+
 namespace dusk::companion {
 
 // English fallbacks; tabName() prefers the game's own localized screen
 // titles (verified on the PAL disc: 0x3E0 "Field Map", 0x3E8 "Item
-// Selection", 0x3E1 "Collection"). QUEST is a Dusklight page with no game
+// Selection", 0x3E1 "Collection"). GUIDE is a Dusklight page with no game
 // equivalent, so it stays English until a translation table exists.
-const char* l_tabNames[PAGE_COUNT] = {"MAP", "ITEMS", "COLLECTION", "QUEST"};
+const char* l_tabNames[PAGE_COUNT] = {"MAP", "ITEMS", "COLLECTION", "GUIDE"};
 
 const char* tabName(int page) {
     // 0x0062/0x0061 are the game's OWN short uppercase "MAP"/"ITEMS";
@@ -519,7 +521,9 @@ void drawTabs(f32 x0, f32 x1, f32 h) {
     }
     for (int i = 0; i < count; i++) {
         const f32 x = x0 + i * (tabW + GAP);
-        const bool active = pages[i] == page;
+        // The guide is its own context window: while it is up none of the
+        // page tabs is the thing being shown, so none of them is selected.
+        const bool active = pages[i] == page && !guideIsOpen();
         f32 ty0 = top + 4.0f;
         // Functional runs the plates to the screen edge (see the bed above);
         // Cinematic keeps its floating look.
@@ -743,6 +747,10 @@ void drawWindowOrnaments(f32 x0, f32 y0, f32 x1, f32 y1) {
 // uses the Link-display box's own mottled background (TT_YAKUSHIMA) with a
 // thin frame line, like the collection screen.
 void drawContentWindow(f32 wx0, f32 wx1, f32 cy0, f32 cy1) {
+
+
+
+
     // Published for the touch pass: page hit-tests inset off these edges the
     // same way the page draws below do.
     s_contentRect[0] = wx0;
@@ -812,8 +820,16 @@ void drawContentWindow(f32 wx0, f32 wx1, f32 cy0, f32 cy1) {
         case PAGE_INVENTORY:
             drawInventoryContent(x0 + 4.0f, y0 + 8.0f, x1 - 2.0f, y1 - 8.0f);
             break;
-        case PAGE_QUEST:
-            drawQuestContent(x0 + 4.0f, y0 + 8.0f, x1 - 2.0f, y1 - 8.0f);
+        case PAGE_GUIDE:
+            // No content of its own: the reader is drawn as an overlay over
+            // this window further down (drawGuideOverlay), so the page only
+            // has to guarantee it is open. Gated on the slide because
+            // drawPage runs for BOTH pages mid-transition, and reopening the
+            // one being slid away from would fight the tab that just closed
+            // it.
+            if (!s_pageSliding && s_page.load() == PAGE_GUIDE) {
+                guideOpen();
+            }
             break;
         case PAGE_COLLECTION:
             drawCollectionContent(x0 + 4.0f, y0 + 8.0f, x1 - 2.0f, y1 - 8.0f);
@@ -857,7 +873,7 @@ void drawContentWindow(f32 wx0, f32 wx1, f32 cy0, f32 cy1) {
     s_drawAlpha = 1.0f;
     // Cinematic draws its context action here, over the page content but
     // inside the window scissor (no-op in Functional, which uses the left
-    // column). QUEST self-skips (no context action).
+    // column). GUIDE self-skips (no context action).
     drawCinematicContextTab(wx0 + 4.0f, cy0 + 4.0f, wx1 - 4.0f, cy1 - 4.0f);
     s_winClip[2] = 0;
     GXSetScissorRender(0, 0, s_nativeW, s_nativeH);
@@ -872,6 +888,11 @@ void drawContentWindow(f32 wx0, f32 wx1, f32 cy0, f32 cy1) {
     // the frame underneath was revealed and the whole border appeared to
     // animate. On top it simply stays put.
     drawWindowOrnaments(wx0, cy0, wx1, cy1);
+    // Guide LAST, so it covers the ornaments rather than being covered by
+    // them: its buttons and text sit in the window's corners, exactly where
+    // the flourishes are, and a flourish painted over the < > buttons looked
+    // like damage. The frame is deliberately behind the reader.
+    drawGuideOverlay(wx0 + 4.0f, cy0 + 4.0f, wx1 - 4.0f, cy1 - 4.0f);
 }
 
 // D-pad cross HUD above the FPS/battery corner: the game's pad is assembled

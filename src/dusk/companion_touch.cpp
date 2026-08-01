@@ -420,32 +420,6 @@ int dropTargetAt(f32 tx, f32 ty) {
     return -1;
 }
 
-// QUEST page: category sub-tab taps (the list itself drag-scrolls).
-// Returns true when the tap was consumed.
-bool handleQuestTouch(f32 tx, f32 ty) {
-    // Insets match what drawContentWindow hands the page draw.
-    const f32 cy0 = s_contentRect[1];
-    const f32 sx0 = s_contentRect[0] + 4.0f;
-    const f32 sx1 = s_contentRect[2] - 2.0f;
-    if (tx < sx0 || tx > sx1) {
-        return false;
-    }
-    if (ty >= cy0 + 8.0f && ty <= cy0 + 48.0f) {
-        const f32 qx0 = sx0 + 12.0f;
-        const f32 qx1 = sx1 - 12.0f;
-        const f32 qtabW = (qx1 - qx0 - 8.0f) / 5.0f;
-        for (int i = 0; i < 5; i++) {
-            const f32 x = qx0 + i * (qtabW + 2.0f);
-            if (tx >= x && tx <= x + qtabW) {
-                s_questTab.store(i);
-                s_scrollQuest = 0.0f;
-                return true;
-            }
-        }
-        return false;
-    }
-    return false;
-}
 
 // COLLECT page: sub-tab strip, then overview gear-box tap-to-equip.
 // Returns true when the tap was consumed.
@@ -626,6 +600,28 @@ void handleTouch(f32 w, f32 h) {
         return;
     }
 
+    // The left column's Guide page opens the reader — but NOT from here.
+    // Opening on press stole every vertical swipe, so the column could no
+    // longer be paged. The open is deferred to release, next to the swipe
+    // test, so a drag pages the column and only a still press opens.
+    if (!guideIsOpen() && guideAvailable() &&
+        s_leftBoxPage.load() == LEFT_BOX_GUIDE && s_leftBoxRect[2] > s_leftBoxRect[0] &&
+        tx >= s_leftBoxRect[0] && tx <= s_leftBoxRect[2] && ty >= s_leftBoxRect[1] &&
+        ty <= s_leftBoxRect[3])
+    {
+        return;  // consumed; the release decides swipe vs open
+    }
+    // The reader is modal only over the CONTENT WINDOW: corner buttons, slots,
+    // X/Y and the tab strip are all tested above this point and stay live, so
+    // the HUD keeps working while a guide is open.
+    if (guideIsOpen() && s_contentRect[2] > s_contentRect[0] &&
+        tx >= s_contentRect[0] && tx <= s_contentRect[2] &&
+        ty >= s_contentRect[1] && ty <= s_contentRect[3])
+    {
+        handleGuideTouch(tx, ty);
+        return;
+    }
+
     constexpr f32 CORNER_GRACE = 12.0f;
     if (s_transformBtnRect[2] > s_transformBtnRect[0] &&
         tx >= s_transformBtnRect[0] - CORNER_GRACE &&
@@ -738,6 +734,13 @@ void handleTouch(f32 w, f32 h) {
             queueSound(Z2SE_SY_CURSOR_CANCEL, HAPTIC_LIGHT);
             break;
         case CTX_BACK:
+            if (guideIsOpen()) {
+                // The reader owns the window, so its Back steps out of a
+                // section first and closes the reader second.
+                guideBack();
+                queueSound(Z2SE_SY_CURSOR_CANCEL, HAPTIC_LIGHT);
+                break;
+            }
             // ITEMS info reader — COLLECT navigates via CTX_HOME plus the
             // reader header's own Back. Shrinks back into its cell;
             // drawItemInfo clears the slot when the animation lands.
@@ -758,6 +761,14 @@ void handleTouch(f32 w, f32 h) {
             ty <= s_tabRects[i][3])
         {
             // Silent when the tap lands on the page already showing.
+            // Picking a page means "show me that", so the reader gets out of
+            // the way — otherwise the tab lights up behind a covered window.
+            // The GUIDE tab is the exception: there the reader IS the page.
+            if (s_tabRectPage[i] == PAGE_GUIDE) {
+                guideOpen();
+            } else if (guideIsOpen()) {
+                guideClose();
+            }
             if (s_page.exchange(s_tabRectPage[i]) != s_tabRectPage[i]) {
                 queueSound(Z2SE_SY_MENU_CHANGE_WINDOW, HAPTIC_LIGHT);
             }
@@ -780,9 +791,7 @@ void handleTouch(f32 w, f32 h) {
             // until the transition lands.
             return;
         }
-        if (s_page.load() == PAGE_QUEST) {
-            handleQuestTouch(tx, ty);
-        } else if (s_page.load() == PAGE_COLLECTION) {
+        if (s_page.load() == PAGE_COLLECTION) {
             handleCollectTouch(tx, ty);
         } else if (s_page.load() == PAGE_MAP) {
             // Warp and Floor are the left-column context tab now (handled
@@ -838,18 +847,26 @@ void processDragTouch(f32 w, f32 h) {
     const uint32_t packed = s_touchPos.load();
     const f32 tx = (f32)(packed >> 16) / 65535.0f * w;
     const f32 ty = (f32)(packed & 0xFFFF) / 65535.0f * h;
-    const bool onItemsPage = s_page.load() == PAGE_INVENTORY && s_invGeomValid;
+    const bool onItemsPage = s_page.load() == PAGE_INVENTORY && s_invGeomValid &&
+        !guideIsOpen();  // the reader covers the grid: a scroll must not equip
     // Panning the map requires the gesture to have STARTED over the map
     // itself. Without that, a swipe anywhere on the companion — the dungeon
     // icon box, the side columns — dragged the map with it.
-    const bool onMapPage = s_page.load() == PAGE_MAP && s_downOnContent && !s_pageSliding;
-    // Scrollable list under the finger: quest table, skills/mail lists and
+    // The guide owns the content window while it is up, so the map must not
+    // pan, drag or pinch underneath it — that was the reader "sliding the map
+    // around" as you scrolled.
+    const bool onMapPage = s_page.load() == PAGE_MAP && s_downOnContent &&
+        !s_pageSliding && !guideIsOpen();
+    // Scrollable list under the finger: the guide reader, skills/mail lists and
     // the open reader body. Vertical drags feed its scroll offset; the
     // draws clamp it.
     f32* scrollVar = NULL;
-    if (s_page.load() == PAGE_QUEST) {
-        scrollVar = &s_scrollQuest;
-    } else if (s_page.load() == PAGE_COLLECTION) {
+    // Only when the drag STARTED inside the content window. Swiping the left
+    // column or the tab strip is not a scroll of the reader.
+    if (guideIsOpen() && s_downOnContent) {
+        scrollVar = &s_scrollGuide;
+    } else
+    if (s_page.load() == PAGE_COLLECTION) {
         const int ctab = s_collectTab.load();
         if (ctab == 3 || ctab == 4) {
             scrollVar = s_readerSel >= 0 ? &s_scrollBody
@@ -970,6 +987,14 @@ void processDragTouch(f32 w, f32 h) {
             const int step = sdy < 0.0f ? 1 : count - 1;
             s_leftBoxPage.store(pages[(idx + step) % count]);
             queueSound(Z2SE_SY_CURSOR_FLOOR, HAPTIC_LIGHT);
+        } else if (!guideIsOpen() && guideAvailable() &&
+            s_leftBoxPage.load() == LEFT_BOX_GUIDE &&
+            s_leftBoxRect[2] > s_leftBoxRect[0] && tx >= s_leftBoxRect[0] &&
+            tx <= s_leftBoxRect[2] && ty >= s_leftBoxRect[1] && ty <= s_leftBoxRect[3])
+        {
+            // Not a swipe and it ended on the Guide page: open the reader.
+            guideOpen();
+            queueSound(Z2SE_SY_CURSOR_OK, HAPTIC_LIGHT);
         }
         s_dragging = false;
         s_dragSlot = -1;
@@ -980,6 +1005,15 @@ void processDragTouch(f32 w, f32 h) {
     // slop (otherwise the gesture was a scroll). Tapping a row OPENS that
     // entry outright — the context tab is the way home, not the way in, so
     // there is no select-then-confirm step here.
+    if (s_readerTapCand >= 0 && guideIsOpen()) {
+        // Same deferred path the collect rows use: the tap only lands if the
+        // finger stayed inside the slop, so dragging the list scrolls it
+        // instead of opening whatever was under the finger when it went down.
+        guideRowTap(s_readerTapCand);
+        s_readerTapCand = -1;
+        s_dragging = false;
+        return;
+    }
     if (s_readerTapCand >= 0) {
         s_readerSel = s_readerTapCand;
         s_scrollBody = 0.0f;

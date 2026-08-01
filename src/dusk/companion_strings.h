@@ -14,6 +14,12 @@ namespace dusk::companion {
 enum StringId {
     STR_RESET,
     STR_SPECIES,
+    STR_GUIDE,
+    STR_GUIDE_LIST,
+    STR_GUIDE_INTRO,
+    STR_GUIDE_EMPTY,
+    STR_GUIDE_HOWTO,
+    STR_GUIDE_IMPORTING,
     STR_SCENT,
     STR_WARP,
     STR_NO_MAP,

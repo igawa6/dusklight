@@ -43,7 +43,6 @@ namespace dusk::companion {
 
 std::atomic<int> s_page{PAGE_MAP};
 std::atomic<int> s_collectTab{0};
-std::atomic<int> s_questTab{0};
 
 f32 s_gearBoxX[7];
 f32 s_gearBoxY[7];
@@ -197,7 +196,6 @@ int s_readerTapCand = -1;
 int s_readerRectCount = 0;
 f32 s_readerRects[12][4];
 int s_readerRectIds[12];
-f32 s_scrollQuest = 0.0f;
 f32 s_scrollSkills = 0.0f;
 f32 s_scrollMail = 0.0f;
 f32 s_scrollBody = 0.0f;
@@ -358,6 +356,8 @@ void publishEquipDropRect(int dropIdx, f32 x, f32 y, f32 btn) {
 // Battery glyph at (x, y) with the percentage to its RIGHT on the same row.
 void drawBattery(f32 x, f32 y) {
     const int pct = s_batteryPct.load();
+    // No tap rect any more: the guide is opened from the left column's Guide
+    // page, so the battery is just a readout again.
     if (pct < 0) {
         return;
     }
@@ -420,6 +420,11 @@ int leftBoxPages(int* o_pages) {
     }
     o_pages[n++] = LEFT_BOX_PLACE;
     o_pages[n++] = LEFT_BOX_PROGRESS;
+    // Only once something is actually saved: an empty page you can swipe to
+    // is worse than no page at all.
+    if (guideAvailable()) {
+        o_pages[n++] = LEFT_BOX_GUIDE;
+    }
     return n;
 }
 
@@ -523,9 +528,11 @@ void drawContextTab(f32 x0, f32 y0, f32 x1, f32 y1) {
         break;
     }
     case CTX_BACK: {
+        // In the guide this steps out to the section list, and calling it
+        // "Back" collides with the < > buttons at the top of the reader.
         drawTextFittedCentered((x0 + x1) * 0.5f, (y0 + y1) * 0.5f + 5.0f, 13.0f, 8.0f,
             (x1 - x0) - 10.0f, TEXT_TAB_ACTIVE,
-            localizedWord(0x0054, "Back"));
+            guideIsOpen() ? txt(STR_GUIDE_LIST) : localizedWord(0x0054, "Back"));
         break;
     }
     default:
@@ -613,7 +620,8 @@ void update() {
 
 int visiblePages(int* o_pages) {
     // Functional mirrors the reference layout: three tabs with the map in the
-    // middle. QUEST has no tab there — achievements stay a Cinematic feature.
+    // middle. GUIDE has no tab there — Functional opens the reader from the
+    // left pane instead.
     if (dualscreen::mainHudRestored()) {
         o_pages[0] = PAGE_COLLECTION;
         o_pages[1] = PAGE_MAP;
@@ -688,6 +696,9 @@ void touchEvent(int action, float u, float v) {
 }
 
 void pinchZoom(float factor) {
+    if (guideIsOpen()) {
+        return;  // the reader has the window; a pinch must not reach the map
+    }
     // Same rule as the pan: the gesture has to have started over the map.
     if (s_downOnContent && factor > 0.2f && factor < 5.0f) {
         s_mapPinchDeltaMilli.fetch_add((int)((factor - 1.0f) * 1000.0f));
@@ -1266,6 +1277,18 @@ bool warpAllowed() {
 int contextTabAction(bool* o_clickable) {
     bool clickable = false;
     int action = CTX_NONE;
+    // The guide is a context window, so its Back belongs on the context tab
+    // rather than as a second button inside the reader. Checked before the
+    // page switch because the reader is on top of whatever page is behind it.
+    // Functional only. In Cinematic the reader covers the whole content window
+    // and this tab is drawn beneath it, so its Back could never be seen or
+    // pressed — that layout carries its own List button inside the panel.
+    if (guideIsOpen() && dusk::dualscreen::mainHudRestored()) {
+        if (o_clickable != NULL) {
+            *o_clickable = true;
+        }
+        return CTX_BACK;
+    }
     switch (s_page.load()) {
     case PAGE_MAP:
         if (s_dmapAvailable) {
@@ -1568,7 +1591,7 @@ void drawDashboard(float w, float h) {
         s_equipMsgFrames--;
     }
     // The visible tab set is layout-dependent: entering Functional while
-    // sitting on QUEST would otherwise leave a page showing with no tab and
+    // sitting on GUIDE would otherwise leave a page showing with no tab and
     // no way back to it.
     int pages[TAB_RECT_MAX];
     const int pageCount = visiblePages(pages);

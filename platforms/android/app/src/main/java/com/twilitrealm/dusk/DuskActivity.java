@@ -119,6 +119,7 @@ public class DuskActivity extends SDLActivity {
         // app and tears down both surfaces, which is our main crash source.
         getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         hideSystemBars();
+        installStickyImmersive();
         initAuxDisplay();
         initBatteryMonitor();
         initScreenshotReceiver();
@@ -206,6 +207,8 @@ public class DuskActivity extends SDLActivity {
 
     @Override
     protected void onDestroy() {
+        // Static overlay state must not outlive us; see shutdown().
+        DuskGuideBrowser.shutdown();
         if (auxBatteryReceiver != null) {
             unregisterReceiver(auxBatteryReceiver);
             auxBatteryReceiver = null;
@@ -467,6 +470,10 @@ public class DuskActivity extends SDLActivity {
             // stops receiving it. Touches still arrive without focus.
             getWindow().addFlags(
                 android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
+            // The Presentation is a separate Window on the second display and
+            // was never told to hide its bars, so the gesture pill sat on top
+            // of the companion. FLAG_NOT_FOCUSABLE above does not affect this.
+            applyImmersive(getWindow());
             setContentView(createCompanionSurfaceView(getContext()));
         }
     }
@@ -497,8 +504,60 @@ public class DuskActivity extends SDLActivity {
         }
     }
 
+    /**
+     * Re-hides the bars a moment after anything brings them back.
+     *
+     * <p>SDLActivity already has this idea (rehideSystemUi +
+     * onSystemUiVisibilityChange) but both halves are dead at targetSdk 30+:
+     * setSystemUiVisibility is a no-op and the visibility callback no longer
+     * fires. So nothing re-hid the bars once they appeared, and
+     * hideSystemBars() only runs on create/resume/focus-change -- a transient
+     * bar does not change focus. That is the gesture pill turning up mid-play.
+     *
+     * <p>Delayed by 2s, matching SDL's original, so it does not fight the
+     * deliberate swipe-to-reveal.
+     */
+    private final Runnable reHideBars = () -> applyImmersive(getWindow());
+
+    private void installStickyImmersive() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return;  // SDL's own path still works below R
+        }
+        final View decor = getWindow().getDecorView();
+        decor.setOnApplyWindowInsetsListener((v, insets) -> {
+            if (insets.isVisible(WindowInsets.Type.systemBars())) {
+                v.removeCallbacks(reHideBars);
+                v.postDelayed(reHideBars, 2000);
+            }
+            // Chain preserved: SDL lays its surface out from these insets.
+            return v.onApplyWindowInsets(insets);
+        });
+    }
+
     private void hideSystemBars() {
-        Window window = getWindow();
+        applyImmersive(getWindow());
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            ActionBar actionBar = getActionBar();
+            if (actionBar != null) {
+                actionBar.hide();
+            }
+        }
+    }
+
+    /**
+     * Hides the status and navigation bars on any window.
+     *
+     * <p>Static and Window-taking because there are three of them: this
+     * Activity, the Presentation on the second screen, and the guide overlay's
+     * restore path. The Presentation has its own Window and never hid its bars
+     * at all, and the guide used only the pre-R {@code setSystemUiVisibility}
+     * flags -- which do nothing at targetSdk 30+, so the gesture pill stayed up
+     * after the overlay closed. Both routed here now.
+     */
+    static void applyImmersive(Window window) {
+        if (window == null) {
+            return;
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.setDecorFitsSystemWindows(false);
             WindowInsetsController ctrl = window.getDecorView().getWindowInsetsController();
@@ -516,10 +575,6 @@ public class DuskActivity extends SDLActivity {
                 View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION |
                 View.SYSTEM_UI_FLAG_LAYOUT_STABLE;
             decorView.setSystemUiVisibility(uiOptions);
-            ActionBar actionBar = getActionBar();
-            if (actionBar != null) {
-                actionBar.hide();
-            }
         }
     }
 

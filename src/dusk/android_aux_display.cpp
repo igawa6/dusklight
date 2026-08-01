@@ -1,10 +1,14 @@
 #if defined(TARGET_ANDROID) || defined(__ANDROID__) || defined(ANDROID)
 
 #include "dusk/companion.h"
+#include "dusk/guide/fetch.hpp"
+#include "dusk/guide/store.hpp"
 #include "dusk/dualscreen.h"
 
 #include <android/native_window_jni.h>
 #include <jni.h>
+
+#include <string>
 
 #include <aurora/aux_window.hpp>
 
@@ -29,6 +33,37 @@ extern "C" JNIEXPORT void JNICALL Java_dev_twilitrealm_dusk_DuskActivity_nativeC
     JNIEnv*, jclass, jint action, jfloat u, jfloat v)
 {
     dusk::companion::touchEvent(action, u, v);
+}
+
+// The guide store's location is decided natively (it follows a custom data
+// folder now, and only falls back to app-specific external storage when the
+// data folder is at its default). DuskGuideBrowser used to hard-code the
+// fallback with a comment saying it "must match guides_root()" — which stopped
+// being true the moment the data folder became configurable, so pages saved
+// from the browser landed somewhere the importer never looked. Asking is the
+// only version of this that cannot drift.
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_twilitrealm_dusk_DuskGuideBrowser_nativeGuidesRoot(JNIEnv* env, jclass)
+{
+    std::string path;
+    try {
+        path = dusk::guide::guides_root().string();
+    } catch (...) {
+        path.clear();
+    }
+    return env->NewStringUTF(path.c_str());
+}
+
+// Kicked when the browser finishes saving. Without it, pages saved after the
+// store stopped being empty were never picked up: begin_import() was reachable
+// only while the catalogue had nothing in it, so a 24-page crawl that imported
+// its first few mid-crawl left the remaining ~17 sitting in import/ until the
+// converter version happened to change. Idempotent — no-ops while an import is
+// already running, and the scan itself is on a worker.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_twilitrealm_dusk_DuskGuideBrowser_nativeGuidesImport(JNIEnv*, jclass)
+{
+    dusk::guide::begin_import();
 }
 
 extern "C" JNIEXPORT void JNICALL Java_dev_twilitrealm_dusk_DuskActivity_nativeCompanionPinch(

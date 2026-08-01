@@ -165,7 +165,8 @@ UserSettings g_userSettings = {
         .recordingMode {"game.recordingMode", false},
         .removeQuestMapMarkers {"game.removeQuestMapMarkers", false},
         .showInputViewer {"game.showInputViewer", false},
-        .showInputViewerGyro {"game.showInputViewerGyro", false}
+        .showInputViewerGyro {"game.showInputViewerGyro", false},
+        .guideEnabled {"game.guideEnabled", true},
     },
 
     .backend = {
@@ -294,6 +295,7 @@ void registerSettings() {
     Register(g_userSettings.game.hudScale);
     Register(g_userSettings.game.dualScreen);
     Register(g_userSettings.game.dualScreenHudMode);
+    Register(g_userSettings.game.guideEnabled);
     Register(g_userSettings.game.dualScreenDisplay);
     Register(g_userSettings.game.dualScreenPosX);
     Register(g_userSettings.game.dualScreenPosY);

@@ -34,6 +34,20 @@ const char* const l_strings[STR_COUNT][5] = {
      "Esp\xE8" "ce",
      "Especie",
      "Specie"},
+    // STR_GUIDE
+    {"Guide", "Guide", "Guide", "Gu\xED" "a", "Guida"},
+    // STR_GUIDE_LIST
+    {"List", "Liste", "Liste", "Lista", "Elenco"},
+    // STR_GUIDE_INTRO
+    {"Overview", "\xDC" "bersicht", "Vue d'ensemble", "Resumen", "Panoramica"},
+    // STR_GUIDE_EMPTY
+    {"No Guide", "Kein Guide", "Aucun guide", "Sin gu\xED" "a", "Nessuna guida"},
+    // STR_GUIDE_HOWTO
+    {"Put a saved web page in the guides/import folder",
+        "Seite in guides/import ablegen", "Placez une page dans guides/import",
+        "Coloca una p\xE1" "gina en guides/import", "Metti una pagina in guides/import"},
+    // STR_GUIDE_IMPORTING
+    {"Importing...", "Importiere...", "Importation...", "Importando...", "Importazione..."},
     // STR_SCENT
     {"Scent",
      "Geruch",
