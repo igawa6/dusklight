@@ -42,6 +42,15 @@ void requestScreenshot(const char* path);
 // main screen.
 void setDisplayAvailable(bool available);
 
+// Android: copy the Swap Screens setting into SharedPreferences, where
+// DuskLauncherActivity can read it. The launcher has to choose a display
+// BEFORE the native library exists, so it cannot ask the config — and having
+// Java parse config.json instead would duplicate the data-folder path logic,
+// which is exactly the drift that once sent saved guide pages somewhere the
+// importer never looked. One-way mirror; config.json stays authoritative.
+// No-op off Android.
+void publishSwapPreference(bool swapped);
+
 // True when the HUD actually lives on the second screen this frame: the
 // setting is on AND a physical second display exists. Game-side gates must
 // use this (never the raw setting) so single-screen devices keep their HUD.

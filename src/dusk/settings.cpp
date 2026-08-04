@@ -68,6 +68,7 @@ UserSettings g_userSettings = {
         .menuScalingMode {"game.menuScalingMode", MenuScaling::Wii},
         .dualScreen {"game.dualScreen", true},
         .dualScreenHudMode {"game.dualScreenHudMode", kDualHudFunctional},
+        .dualScreenSwap {"game.dualScreenSwap", false},
         .dualScreenDisplay {"game.dualScreenDisplay", -1},
         .dualScreenPosX {"game.dualScreenPosX", -1},
         .dualScreenPosY {"game.dualScreenPosY", -1},
@@ -295,6 +296,7 @@ void registerSettings() {
     Register(g_userSettings.game.hudScale);
     Register(g_userSettings.game.dualScreen);
     Register(g_userSettings.game.dualScreenHudMode);
+    Register(g_userSettings.game.dualScreenSwap);
     Register(g_userSettings.game.guideEnabled);
     Register(g_userSettings.game.dualScreenDisplay);
     Register(g_userSettings.game.dualScreenPosX);

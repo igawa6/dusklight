@@ -36,6 +36,33 @@
             </intent-filter>
         </provider>
 
+        <!-- The entry point is a stub that decides which physical panel the game
+             opens on ("Swap Screens") and immediately hands off to DuskActivity.
+             A window's display is fixed when it is created, so the choice has to
+             be made by something that is not the game window itself.
+             Translucent so the hand-off is invisible. -->
+        <activity
+            android:name="dev.twilitrealm.dusk.DuskLauncherActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Companion screen while swapped. Its own task, because ours is
+             pinned to the display the game was launched on. -->
+        <activity
+            android:name="dev.twilitrealm.dusk.DuskCompanionActivity"
+            android:configChanges="layoutDirection|locale|grammaticalGender|fontScale|fontWeightAdjustment|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|density|keyboard|keyboardHidden|navigation"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:label="@string/app_name" />
+
         <activity
             android:name="dev.twilitrealm.dusk.DuskActivity"
             android:alwaysRetainTaskState="true"
@@ -44,10 +71,9 @@
             android:label="@string/app_name"
             android:launchMode="singleInstance"
             android:preferMinimalPostProcessing="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
+            <!-- No MAIN/LAUNCHER: DuskLauncherActivity above owns that, so it
+                 can pick the display before this window exists. Still exported
+                 and still startable by name (adb, dusk_args). -->
             <intent-filter>
                 <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
             </intent-filter>

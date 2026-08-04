@@ -313,6 +313,151 @@ std::string slugify(const std::string& title) {
 
 // --- the scanner ------------------------------------------------------------
 
+
+// One attribute's value out of a tag's attribute text. Shared by the image
+// reader and the furniture filter below.
+std::string tag_attr(const std::string& attrs, const char* key) {
+    const std::string k = std::string(key) + "=";
+    std::size_t p = 0;
+    for (;;) {
+        p = attrs.find(k, p);
+        if (p == std::string::npos) {
+            return {};
+        }
+        const bool atStart = p == 0 || std::isspace((unsigned char)attrs[p - 1]);
+        p += k.size();
+        if (!atStart || p >= attrs.size()) {
+            continue;
+        }
+        const char q = attrs[p];
+        if (q == '"' || q == '\'') {
+            const std::size_t e = attrs.find(q, p + 1);
+            return e == std::string::npos ? std::string() : attrs.substr(p + 1, e - p - 1);
+        }
+        std::size_t e = p;
+        while (e < attrs.size() && !std::isspace((unsigned char)attrs[e])) {
+            e++;
+        }
+        return attrs.substr(p, e - p);
+    }
+}
+
+// Content that ends at its first close tag: HTML does not let these nest, and
+// their text is not markup, so scanning for nested opens would be wrong.
+bool is_raw_text_element(const std::string& name) {
+    return name == "script" || name == "style" || name == "noscript" || name == "template";
+}
+
+// Index just past the end of the element whose opening tag ended at `i`.
+//
+// Counts nested tags of the same name. The old code took the first matching
+// close tag, which is right for <script> but wrong for a <div> wrapper: an ad
+// block containing any nested div ended the skip early and let the rest of the
+// ad through as prose.
+std::size_t skip_element(const std::string& html, std::size_t i, const std::string& name) {
+    if (is_raw_text_element(name)) {
+        const std::size_t e = html.find("</" + name, i);
+        if (e == std::string::npos) {
+            return html.size();
+        }
+        const std::size_t gt = html.find('>', e);
+        return gt == std::string::npos ? html.size() : gt + 1;
+    }
+    int depth = 1;
+    while (i < html.size() && depth > 0) {
+        const std::size_t lt = html.find('<', i);
+        if (lt == std::string::npos) {
+            return html.size();
+        }
+        const std::size_t gt = html.find('>', lt);
+        if (gt == std::string::npos) {
+            return html.size();
+        }
+        std::size_t k = lt + 1;
+        const bool closing = k < html.size() && html[k] == '/';
+        if (closing) {
+            k++;
+        }
+        std::string tn;
+        while (k < gt && !std::isspace((unsigned char)html[k]) && html[k] != '/') {
+            tn.push_back((char)std::tolower((unsigned char)html[k]));
+            k++;
+        }
+        if (tn == name) {
+            if (closing) {
+                depth--;
+            } else if (html[gt - 1] != '/') {
+                depth++;
+            }
+        }
+        i = gt + 1;
+    }
+    return i;
+}
+
+// Whether an element is page furniture rather than guide prose, judged by its
+// class and id.
+//
+// Tag names alone cannot tell an advert from a paragraph: both are divs. Users
+// running an ad blocker never saw this, because the blocker removed the markup
+// before the page was ever saved — everyone else got adverts, share buttons and
+// comment threads converted into guide text alongside the walkthrough.
+//
+// Matched on whole class tokens where the word is short enough to appear inside
+// real words ("ad" is in "shadow", "loaded", "ready"), and on substrings only
+// for words distinctive enough to be safe.
+bool is_furniture(const std::string& attrs) {
+    std::string v = tag_attr(attrs, "class") + " " + tag_attr(attrs, "id") + " " +
+        tag_attr(attrs, "role") + " " + tag_attr(attrs, "aria-label");
+    for (char& c : v) {
+        c = (char)std::tolower((unsigned char)c);
+        if (c == '_') {
+            c = '-';
+        }
+    }
+    // Distinctive enough that a substring match cannot collide with prose.
+    static const char* const kSubstrings[] = {
+        "advert", "adsbygoogle", "ad-slot", "ad-unit", "ad-container", "ad-wrapper",
+        "sponsor", "promoted", "taboola", "outbrain", "doubleclick",
+        "sharedaddy", "addtoany", "share-buttons", "social-share", "sharing",
+        "comment", "disqus", "livefyre",
+        "related-post", "relatedposts", "jp-relatedposts", "morefrom",
+        "newsletter", "subscribe", "signup",
+        "breadcrumb", "pagination", "site-footer", "site-header",
+        "cookie", "consent", "gdpr", "popup", "modal", "lightbox",
+        "sidebar", "widget-area", "menu-toggle", "skip-link",
+    };
+    for (const char* needle : kSubstrings) {
+        if (v.find(needle) != std::string::npos) {
+            return true;
+        }
+    }
+    // Short and ambiguous: only a whole class token counts.
+    static const char* const kTokens[] = {
+        "ad", "ads", "adbox", "banner", "promo", "nav", "menu", "social", "share",
+    };
+    std::size_t p = 0;
+    while (p < v.size()) {
+        while (p < v.size() && std::isspace((unsigned char)v[p])) {
+            p++;
+        }
+        std::size_t e = p;
+        while (e < v.size() && !std::isspace((unsigned char)v[e])) {
+            e++;
+        }
+        if (e > p) {
+            const std::string tok = v.substr(p, e - p);
+            for (const char* t : kTokens) {
+                if (tok == t) {
+                    return true;
+                }
+            }
+        }
+        p = e;
+    }
+    return false;
+}
+
 Document convert_html(const std::string& html, const std::string& sourceUrl) {
     Document doc;
     doc.sourceUrl = sourceUrl;
@@ -441,11 +586,19 @@ Document convert_html(const std::string& html, const std::string& sourceUrl) {
         // what keeps the scanner tolerant — no need to understand their markup.
         if (!closing &&
             (name == "script" || name == "style" || name == "head" || name == "nav" ||
-                name == "footer" || name == "aside" || name == "noscript" || name == "svg"))
+                name == "footer" || name == "aside" || name == "noscript" || name == "svg" ||
+                name == "iframe" || name == "form" || name == "button" || name == "select" ||
+                name == "textarea" || name == "template" || name == "dialog" || name == "ins"))
         {
-            const std::string endTag = "</" + name;
-            const std::size_t e = html.find(endTag, i);
-            i = e == std::string::npos ? html.size() : e;
+            i = skip_element(html, i, name);
+            continue;
+        }
+        // Same treatment for anything the page marks as furniture. Self-closing
+        // tags own no subtree, so there is nothing to skip past.
+        if (!closing && is_furniture(attrs)) {
+            if (html[close - 1] != '/') {
+                i = skip_element(html, i, name);
+            }
             continue;
         }
 
@@ -510,39 +663,13 @@ Document convert_html(const std::string& html, const std::string& sourceUrl) {
         if (name == "img" && !closing) {
             // Images are their own block; alt text is kept so a skipped or
             // undecodable image still says what it was.
-            auto attr = [&](const char* key) -> std::string {
-                const std::string k = std::string(key) + "=";
-                std::size_t p = 0;
-                for (;;) {
-                    p = attrs.find(k, p);
-                    if (p == std::string::npos) {
-                        return {};
-                    }
-                    const bool atStart = p == 0 || std::isspace((unsigned char)attrs[p - 1]);
-                    p += k.size();
-                    if (!atStart || p >= attrs.size()) {
-                        continue;
-                    }
-                    const char q = attrs[p];
-                    if (q == '"' || q == '\'') {
-                        const std::size_t e = attrs.find(q, p + 1);
-                        return e == std::string::npos ? std::string()
-                                                      : attrs.substr(p + 1, e - p - 1);
-                    }
-                    std::size_t e = p;
-                    while (e < attrs.size() && !std::isspace((unsigned char)attrs[e])) {
-                        e++;
-                    }
-                    return attrs.substr(p, e - p);
-                }
-            };
-            const std::string src = attr("src");
+            const std::string src = tag_attr(attrs, "src");
             if (!src.empty()) {
                 flush();
                 Node n;
                 n.kind = NodeKind::Image;
                 n.ref = src;
-                n.text = collapse_ws(utf8_to_latin1(decode_entities(attr("alt"))));
+                n.text = collapse_ws(utf8_to_latin1(decode_entities(tag_attr(attrs, "alt"))));
                 cur.nodes.push_back(std::move(n));
             }
             continue;

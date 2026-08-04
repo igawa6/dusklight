@@ -556,7 +556,13 @@ struct CellDef {
     int slot;
     u8 gx, gy, group;
 };
-const CellDef l_invCells[24] = {
+// 23, not 24: the table was declared [24] with 23 initializers, so the last
+// entry was value-initialized to {slot 0, gx 0, gy 0} and redrew the first
+// cell on top of itself every frame — invisible, but it also published a
+// duplicate hit rect for slot 0 into s_invCells.
+constexpr int INV_CELLS = 23;
+
+constexpr CellDef l_invCells[INV_CELLS] = {
     // Tools 5x2 (group 0)
     {0, 0, 0, 0}, {1, 1, 0, 0}, {2, 2, 0, 0}, {3, 3, 0, 0}, {4, 4, 0, 0},
     {5, 0, 1, 0}, {6, 1, 1, 0}, {8, 2, 1, 0}, {9, 3, 1, 0}, {10, 4, 1, 0},
@@ -568,6 +574,63 @@ const CellDef l_invCells[24] = {
     {18, 0, 3, 3}, {19, 1, 3, 3}, {21, 0, 4, 3}, {22, 1, 4, 3},
     {11, 2, 3, 1}, {12, 3, 3, 1}, {13, 2, 4, 1}, {14, 3, 4, 1},
 };
+
+// 16:9 and wider: 6 columns x 4 rows. Every group stays a solid rectangle —
+// the extra column is paid for by the bottles, which leave their 2x2 block
+// and become the full-height right-hand strip. Losing a row is what makes the
+// cells bigger; six narrower columns alone would have made them smaller.
+//   gx 0-4, gy 0-1 : tools        gx 5, gy 0-3 : bottles
+//   gx 0-2, gy 2   : bombs        gx 3-4, gy 2 : rod / slingshot
+//   gx 0-3, gy 3   : quest        gx 4,  gy 3  : empty
+constexpr CellDef l_invCellsWide[INV_CELLS] = {
+    {0, 0, 0, 0}, {1, 1, 0, 0}, {2, 2, 0, 0}, {3, 3, 0, 0}, {4, 4, 0, 0},
+    {5, 0, 1, 0}, {6, 1, 1, 0}, {8, 2, 1, 0}, {9, 3, 1, 0}, {10, 4, 1, 0},
+    {15, 0, 2, 2}, {16, 1, 2, 2}, {17, 2, 2, 2},
+    {20, 3, 2, 4}, {23, 4, 2, 4},
+    {18, 0, 3, 3}, {19, 1, 3, 3}, {21, 2, 3, 3}, {22, 3, 3, 3},
+    {11, 5, 0, 1}, {12, 5, 1, 1}, {13, 5, 2, 1}, {14, 5, 3, 1},
+};
+// The two layouts must stay interchangeable. They are separate tables, so a
+// later edit to one could quietly drop an item, duplicate a cell or run off the
+// grid in that layout only — and it would look like a missing item in the game,
+// not a wrong number in a table. Checked here instead, at compile time.
+constexpr bool inv_tables_hold_same_slots() {
+    for (const CellDef& a : l_invCells) {
+        bool found = false;
+        for (const CellDef& b : l_invCellsWide) {
+            if (a.slot == b.slot) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            return false;
+        }
+    }
+    return true;
+}
+
+constexpr bool inv_table_is_sane(const CellDef (&cells)[INV_CELLS], u8 cols, u8 rows) {
+    for (std::size_t i = 0; i < INV_CELLS; i++) {
+        if (cells[i].gx >= cols || cells[i].gy >= rows) {
+            return false;  // outside the grid it is drawn into
+        }
+        for (std::size_t j = i + 1; j < INV_CELLS; j++) {
+            if (cells[i].gx == cells[j].gx && cells[i].gy == cells[j].gy) {
+                return false;  // two items stacked in one cell
+            }
+            if (cells[i].slot == cells[j].slot) {
+                return false;  // one item drawn twice
+            }
+        }
+    }
+    return true;
+}
+
+static_assert(inv_tables_hold_same_slots(), "ITEMS layouts disagree on which slots exist");
+static_assert(inv_table_is_sane(l_invCells, 5, 5), "5x5 ITEMS table is malformed");
+static_assert(inv_table_is_sane(l_invCellsWide, 6, 4), "6x4 ITEMS table is malformed");
+
 const GXColor l_groupTint[5] = {
     {45, 41, 33, 255},   // tools (stone brown)
     {38, 44, 40, 255},   // bottles (moss green)
@@ -579,21 +642,36 @@ const GXColor l_groupTint[5] = {
 constexpr f32 INV_CAPTION_H = 26.0f;
 constexpr f32 INV_GROUP_GAP = 8.0f;
 
-// Grid metrics for the ITEMS page, fit to the content box.
+// Grid metrics for the ITEMS page, fit to the content box. `wide` is carried
+// here rather than re-tested per cell so the geometry and the cell table can
+// never disagree if the canvas is resized mid-frame.
 struct InvGrid {
     f32 cell, originX, originY, pad, icon;
+    bool wide;
 };
 
+// The companion is 8:7 on a bottom panel but takes the main screen's shape
+// when the screens are swapped. On a 16:9 canvas the 5x5 grid is limited by
+// HEIGHT, so it sat small and centred with a third of the width unused; 6x4
+// spends that width on a shorter grid with bigger cells.
+bool invWideLayout() {
+    return s_canvasH > 0.0f && s_canvasW / s_canvasH >= 1.7f;
+}
+
 InvGrid computeInvGrid(f32 x0, f32 y0, f32 x1, f32 y1) {
+    const bool wide = invWideLayout();
+    const f32 cols = wide ? 6.0f : 5.0f;
+    const f32 rows = wide ? 4.0f : 5.0f;
     const f32 availW = x1 - x0;
     const f32 availH = y1 - y0 - INV_CAPTION_H;
-    f32 cell = availW / 5.0f;
-    if (cell * 5.0f + INV_GROUP_GAP * 2.0f > availH) {
-        cell = (availH - INV_GROUP_GAP * 2.0f) / 5.0f;
+    f32 cell = availW / cols;
+    if (cell * rows + INV_GROUP_GAP * 2.0f > availH) {
+        cell = (availH - INV_GROUP_GAP * 2.0f) / rows;
     }
-    const f32 gridW = cell * 5.0f;
-    const f32 gridH = cell * 5.0f + INV_GROUP_GAP * 2.0f;
+    const f32 gridW = cell * cols;
+    const f32 gridH = cell * rows + INV_GROUP_GAP * 2.0f;
     InvGrid g;
+    g.wide = wide;
     g.cell = cell;
     g.originX = x0 + (availW - gridW) * 0.5f;
     g.originY = y0 + (availH - gridH) * 0.5f;
@@ -606,7 +684,7 @@ InvGrid computeInvGrid(f32 x0, f32 y0, f32 x1, f32 y1) {
 // Publishes the cell rect into s_invCells[i] for the touch hit tests.
 void drawInvCell(const InvGrid& g, int i) {
     constexpr GXColor COL_CELL_SEL = {236, 208, 84, 255};
-    const CellDef& d = l_invCells[i];
+    const CellDef& d = (g.wide ? l_invCellsWide : l_invCells)[i];
     const f32 cx = g.originX + d.gx * g.cell;
     const f32 cy = g.originY + d.gy * g.cell + (d.gy >= 2 ? INV_GROUP_GAP : 0.0f) +
         (d.gy >= 3 ? INV_GROUP_GAP : 0.0f);
@@ -1062,7 +1140,13 @@ void drawMiniMapContent(f32 x0, f32 y0, f32 x1, f32 y1) {
     // texture keeps filling the map area while covering up to ~3x the world.
     const f32 zoomIn = s_mapZoom > 1.0f ? s_mapZoom : 1.0f;
     s_mapRenderScale = s_mapZoom < 1.0f ? 1.0f / s_mapZoom : 1.0f;
-    const f32 fitScale = availW / texW > availH / texH ? availW / texW : availH / texH;
+    // Contain-fit, matching the dungeon map above. This used to take the LARGER
+    // ratio — filling the window and cropping whatever overflowed. On the 8:7
+    // bottom panel that cost almost nothing, because the map texture is roughly
+    // square and so is the window. On a 16:9 companion (screens swapped) the
+    // width ratio is far larger, so the map was scaled to fill the width and
+    // the top and bottom of the area were cut off.
+    const f32 fitScale = availW / texW < availH / texH ? availW / texW : availH / texH;
     const f32 scale = fitScale * zoomIn;
     const f32 drawW = texW * scale;
     const f32 drawH = texH * scale;
@@ -1410,7 +1494,7 @@ void drawInventoryContent(f32 x0, f32 y0, f32 x1, f32 y1) {
             const f32 prevA = s_drawAlpha;
             s_drawAlpha = prevA * (1.0f - t);
             const InvGrid under = computeInvGrid(x0 + ox, y0 + oy, x1 - ox, y1 - oy);
-            for (int i = 0; i < 24; i++) {
+            for (int i = 0; i < INV_CELLS; i++) {
                 drawInvCell(under, i);
             }
             s_drawAlpha = prevA;
@@ -1422,8 +1506,8 @@ void drawInventoryContent(f32 x0, f32 y0, f32 x1, f32 y1) {
     const InvGrid grid = computeInvGrid(x0, y0, x1, y1);
     s_invGeomValid = true;
     s_invCell = grid.cell;
-    s_invCellCount = 24;
-    for (int i = 0; i < 24; i++) {
+    s_invCellCount = INV_CELLS;
+    for (int i = 0; i < INV_CELLS; i++) {
         drawInvCell(grid, i);
     }
     drawInventoryCaption(x0, x1, y1);

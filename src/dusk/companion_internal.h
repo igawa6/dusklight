@@ -310,6 +310,13 @@ extern int s_selSlot;
 extern int s_equipMsgFrames;
 extern char s_equipMsg[64];
 
+// The dashboard canvas in logical units, published each frame by
+// drawDashboard. Its aspect follows the panel the companion is shown on —
+// 8:7 on a bottom screen, the main screen's shape when the screens are
+// swapped — so layouts that reflow by width read it from here.
+extern f32 s_canvasW;
+extern f32 s_canvasH;
+
 // ITEMS page geometry, written by the page draw, read by touch hit tests.
 extern bool s_invGeomValid;
 extern f32 s_invCell;

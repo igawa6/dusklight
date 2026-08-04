@@ -5,6 +5,7 @@
 #include "dusk/guide/store.hpp"
 #include "dusk/dualscreen.h"
 
+#include <SDL3/SDL_system.h>
 #include <android/native_window_jni.h>
 #include <jni.h>
 
@@ -34,6 +35,40 @@ extern "C" JNIEXPORT void JNICALL Java_dev_twilitrealm_dusk_DuskActivity_nativeC
 {
     dusk::companion::touchEvent(action, u, v);
 }
+
+// Native -> Java, the only call in this file that goes that way. The launcher
+// activity runs before this library is loaded, so the swap choice has to be
+// waiting for it in SharedPreferences rather than in the config it cannot read.
+namespace dusk::dualscreen {
+
+void publishSwapPreference(bool swapped)
+{
+    auto* env = static_cast<JNIEnv*>(SDL_GetAndroidJNIEnv());
+    auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
+    if (env == nullptr || activity == nullptr) {
+        return;
+    }
+    // SDL hands back a LOCAL reference; leaking one per call would exhaust the
+    // local frame, and this runs again on every toggle.
+    jclass cls = env->GetObjectClass(activity);
+    jmethodID method = cls != nullptr
+        ? env->GetMethodID(cls, "publishSwapPreference", "(Z)V")
+        : nullptr;
+    if (method != nullptr) {
+        env->CallVoidMethod(activity, method, swapped ? JNI_TRUE : JNI_FALSE);
+    }
+    // A missing method leaves a pending NoSuchMethodError that would abort at
+    // the next JNI call — clear it and carry on unswapped rather than crash.
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+    }
+    if (cls != nullptr) {
+        env->DeleteLocalRef(cls);
+    }
+    env->DeleteLocalRef(activity);
+}
+
+}  // namespace dusk::dualscreen
 
 // The guide store's location is decided natively (it follows a custom data
 // folder now, and only falls back to app-specific external storage when the

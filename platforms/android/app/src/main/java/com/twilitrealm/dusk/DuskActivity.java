@@ -2,6 +2,7 @@ package dev.twilitrealm.dusk;
 
 import android.app.ActionBar;
 import android.app.Activity;
+import android.app.ActivityOptions;
 import android.app.Presentation;
 import android.content.BroadcastReceiver;
 import android.content.IntentFilter;
@@ -18,6 +19,7 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.os.Environment;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
@@ -45,6 +47,13 @@ public class DuskActivity extends SDLActivity {
     private static final int MANAGE_STORAGE_REQUEST_CODE = 0x4456;
     private static final String EXTERNAL_STORAGE_AUTHORITY =
         "com.android.externalstorage.documents";
+    /**
+     * Companion render buffer for a bottom panel: 8:7 at 1080p, the AYN Thor's
+     * native landscape size. Used directly by the Presentation, and as the
+     * fallback in DuskCompanionActivity when a panel will not report its size.
+     */
+    static final int COMPANION_PANEL_W = 1240;
+    static final int COMPANION_PANEL_H = 1080;
 
     private long folderDialogUserdata = 0;
     private boolean awaitingManageStoragePermission = false;
@@ -57,11 +66,22 @@ public class DuskActivity extends SDLActivity {
     private static native void nativeBatteryStatus(int percent, boolean charging);
     private static native void nativeCompanionScreenshot(String path);
 
+    // The live game activity, for the companion activity and the native swap
+    // publisher to reach. Volatile: written on the UI thread, read from the
+    // game thread's JNI callbacks.
+    static volatile DuskActivity instance;
+
     private DisplayManager auxDisplayManager;
     private DisplayManager.DisplayListener auxDisplayListener;
     private BroadcastReceiver auxBatteryReceiver;
     private BroadcastReceiver screenshotReceiver;
     private AuxPresentation auxPresentation;
+    // When startActivity() for the companion was issued, or 0 when none is
+    // outstanding. A timestamp rather than a flag so a launch that never lands
+    // can expire — see companionLaunchPending(). Written on the UI thread, read
+    // there too: the companion's onCreate runs on the same main looper, as both
+    // live in this process.
+    private long companionLaunchPendingAt;
     private String lastDisplayScan;
     // Display the companion last presented on; preferred on every re-pick so an
     // attached TV cannot steal it across a pause/resume. -1 = none yet.
@@ -115,6 +135,7 @@ public class DuskActivity extends SDLActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        instance = this;
         // Never let the device sleep mid-game: an idle screen-off pauses the
         // app and tears down both surfaces, which is our main crash source.
         getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -181,7 +202,14 @@ public class DuskActivity extends SDLActivity {
         // A Presentation must not outlive a paused activity (window leak
         // crash); dismissing here also detaches the aux surface in a
         // controlled order before Android kills it.
-        dismissAux();
+        //
+        // The PRESENTATION only. The swapped companion is a separate activity
+        // on another display, and on devices without multi-resume, bringing it
+        // up is itself what pauses us — so finishing it here would tear down
+        // the companion, resume, start it again, pause again, forever. It has
+        // no window-leak problem to avoid either: that hazard is specific to a
+        // Presentation attached to this activity's window.
+        dismissAuxPresentation();
         super.onPause();
     }
 
@@ -190,11 +218,15 @@ public class DuskActivity extends SDLActivity {
         // System overlays (OLED burn-in protection, screen savers) may
         // trigger onStop without onPause — dismiss defensively. The
         // Presentation is re-shown in onResume via showAuxPresentation.
+        //
+        // onStop, unlike onPause, means the user really has left: an activity
+        // showing on another display is not stopped. So this is the right place
+        // to take the companion activity down with us.
         dismissAux();
         super.onStop();
     }
 
-    private void dismissAux() {
+    private void dismissAuxPresentation() {
         if (auxPresentation != null) {
             auxPresentation.dismiss();
             auxPresentation = null;
@@ -203,6 +235,49 @@ public class DuskActivity extends SDLActivity {
             // spend them hiding the main HUD for a companion that is gone.
             reportDualScreenAvailable();
         }
+    }
+
+    /**
+     * How long a companion launch may stay outstanding before we assume it is
+     * never arriving and allow another attempt.
+     *
+     * Without an expiry, a launch the system accepts and then silently drops
+     * leaves the pending flag set forever: showAuxPresentation() refuses to
+     * retry, native has already been told there is no second screen, and the
+     * player gets no companion for the rest of the session with nothing in the
+     * log to say why. The Thor has already shown one firmware quirk in this
+     * area, so this is not hypothetical.
+     */
+    private static final long COMPANION_LAUNCH_TIMEOUT_MS = 5000L;
+
+    /** True while a companion launch is outstanding and still plausibly alive. */
+    private boolean companionLaunchPending() {
+        if (companionLaunchPendingAt == 0) {
+            return false;
+        }
+        if (SystemClock.uptimeMillis() - companionLaunchPendingAt < COMPANION_LAUNCH_TIMEOUT_MS) {
+            return true;
+        }
+        Log.w(TAG, "Companion launch never landed; allowing another attempt");
+        companionLaunchPendingAt = 0;
+        return false;
+    }
+
+    private void dismissAux() {
+        dismissAuxPresentation();
+        // Swapped, the companion is an activity in its own task, so Android
+        // will not tear it down with ours — it has to be finished explicitly,
+        // or it survives as a stray window on the main screen.
+        companionLaunchPendingAt = 0;
+        DuskCompanionActivity companion = DuskCompanionActivity.instance;
+        if (companion != null) {
+            DuskCompanionActivity.instance = null;
+            companion.finish();
+        }
+        // One report, at the end: dismissAuxPresentation() already made one, and
+        // this path's whole contract is that native agrees with reality when it
+        // returns — easier to keep true with a single exit than two.
+        reportDualScreenAvailable();
     }
 
     @Override
@@ -222,7 +297,22 @@ public class DuskActivity extends SDLActivity {
             auxDisplayListener = null;
         }
         dismissAux();
+        if (instance == this) {
+            instance = null;
+        }
         super.onDestroy();
+    }
+
+    /**
+     * Called from native whenever the Swap Screens setting changes, and once at
+     * startup to reconcile. DuskLauncherActivity reads this on the next start to
+     * decide which panel to open the game on — it runs before the native library
+     * is loaded, so it cannot ask the config directly.
+     *
+     * Public and named for JNI: android_aux_display.cpp looks it up by name.
+     */
+    public void publishSwapPreference(boolean swap) {
+        DuskLauncherActivity.setSwapPreference(this, swap);
     }
 
     // Dual-screen devices (e.g. AYN Thor) expose the second panel as a
@@ -309,13 +399,56 @@ public class DuskActivity extends SDLActivity {
     // DISPLAY_CATEGORY_PRESENTATION can include the activity's own display
     // when the game was launched onto a non-default panel; presenting there
     // covers the game window and leaves the game screen black.
+    /** "1080x1920@60" — enough to tell a real panel from a virtual one. */
+    private static String describeDisplay(Display d) {
+        if (d == null) {
+            return "?";
+        }
+        try {
+            android.graphics.Point size = new android.graphics.Point();
+            d.getRealSize(size);
+            return size.x + "x" + size.y + "@" + Math.round(d.getRefreshRate());
+        } catch (Throwable t) {
+            return "?";
+        }
+    }
+
+    private Display getActivityDisplay() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                return getDisplay();
+            }
+        } catch (Throwable t) {
+            // fall through
+        }
+        return null;
+    }
+
+    /**
+     * True when DuskLauncherActivity opened the game on a non-default panel
+     * ("Swap Screens"), so the companion belongs on the main screen instead.
+     *
+     * Derived from where this window actually IS, not from the preference: if
+     * the firmware refused the swapped launch, the launcher falls back to a
+     * normal one, and the preference would then claim a swap that never
+     * happened.
+     */
+    private boolean isSwappedLayout() {
+        return getActivityDisplayId() != Display.DEFAULT_DISPLAY;
+    }
+
     private Display pickAuxDisplay() {
         if (auxDisplayManager == null) {
             return null;
         }
         final int selfId = getActivityDisplayId();
-        Display[] displays =
-            auxDisplayManager.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION);
+        // DISPLAY_CATEGORY_PRESENTATION lists the displays a Presentation may
+        // attach to, and the default display is never among them. Swapped, that
+        // is exactly the display the companion has to go to — so ask for every
+        // display instead, and host it in an activity (see showAuxPresentation).
+        Display[] displays = isSwappedLayout()
+            ? auxDisplayManager.getDisplays()
+            : auxDisplayManager.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION);
         // Plugging in a TV/monitor adds a SECOND candidate, and dismissAux +
         // showAuxPresentation re-pick on every pause/resume — so "first match
         // wins" could migrate the dashboard onto the television mid-session,
@@ -339,16 +472,25 @@ public class DuskActivity extends SDLActivity {
         }
         // One line listing every candidate — dual-screen handhelds differ
         // wildly in how they enumerate their panels, so a bug report needs it.
+        // Size is logged per display because "the wrong screen was chosen" and
+        // "a phantom display was chosen" look identical by id alone. A virtual
+        // or overlay display shows up in DISPLAY_CATEGORY_PRESENTATION exactly
+        // like the physical panel does, and taking the lowest id then sends the
+        // companion somewhere nobody can see -- leaving the real bottom screen
+        // showing the system's own app placeholder.
         StringBuilder sb = new StringBuilder();
         sb.append("Display scan: activity on id=").append(selfId)
-          .append(", presentation candidates=[");
+          .append(" (").append(describeDisplay(getActivityDisplay())).append(")")
+          .append(isSwappedLayout() ? " SWAPPED" : "")
+          .append(", candidates=[");
         for (int i = 0; i < displays.length; i++) {
             if (i > 0) {
                 sb.append(", ");
             }
             sb.append("id=").append(displays[i].getDisplayId())
               .append(" name=").append(displays[i].getName())
-              .append(" flags=0x").append(Integer.toHexString(displays[i].getFlags()));
+              .append(" flags=0x").append(Integer.toHexString(displays[i].getFlags()))
+              .append(" ").append(describeDisplay(displays[i]));
         }
         sb.append("] -> chose ")
           .append(chosen != null ? Integer.toString(chosen.getDisplayId()) : "none");
@@ -367,9 +509,26 @@ public class DuskActivity extends SDLActivity {
     // failed to appear leaves the HUD drawn nowhere at all.
     private void reportDualScreenAvailable() {
         try {
-            nativeDualScreenAvailable(auxPresentation != null);
+            // Either host counts: the Presentation on the second screen, or —
+            // swapped — the companion activity on the main one.
+            nativeDualScreenAvailable(
+                auxPresentation != null || DuskCompanionActivity.instance != null);
         } catch (UnsatisfiedLinkError e) {
             Log.w(TAG, "nativeDualScreenAvailable missing", e);
+        }
+    }
+
+    /**
+     * The companion activity appears and disappears asynchronously — it is a
+     * separate task on a separate display, so it does not exist yet when
+     * startActivity() returns, and reporting availability there would always
+     * report "none". It tells us instead, from its own onCreate/onDestroy.
+     */
+    static void onCompanionActivityChanged() {
+        DuskActivity self = instance;
+        if (self != null) {
+            self.companionLaunchPendingAt = 0;
+            self.reportDualScreenAvailable();
         }
     }
 
@@ -379,9 +538,18 @@ public class DuskActivity extends SDLActivity {
     // from before a pause/dismiss — native then keeps the main-screen HUD
     // hidden for a companion that no longer exists.
     private void showAuxPresentation() {
-        if (auxDisplayManager != null && auxPresentation == null) {
+        if (auxDisplayManager != null && auxPresentation == null &&
+            DuskCompanionActivity.instance == null && !companionLaunchPending())
+        {
             Display target = pickAuxDisplay();
-            if (target != null) {
+            if (target != null && target.getDisplayId() == Display.DEFAULT_DISPLAY) {
+                // Swapped. A Presentation cannot attach to the default display,
+                // so the companion is hosted by an ordinary activity started
+                // there instead — in its own task, since ours is pinned to the
+                // panel the game is on.
+                startCompanionActivity(target.getDisplayId());
+                lastAuxDisplayId = target.getDisplayId();
+            } else if (target != null) {
                 try {
                     auxPresentation = new AuxPresentation(this, target);
                     auxPresentation.show();
@@ -396,11 +564,41 @@ public class DuskActivity extends SDLActivity {
         reportDualScreenAvailable();
     }
 
-    // The companion surface, hosted by the Presentation below.
-    private static SurfaceView createCompanionSurfaceView(Context context) {
+    private void startCompanionActivity(int displayId) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return;  // setLaunchDisplayId is API 26+
+        }
+        Intent intent = new Intent(this, DuskCompanionActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        ActivityOptions options = ActivityOptions.makeBasic();
+        options.setLaunchDisplayId(displayId);
+        try {
+            startActivity(intent, options.toBundle());
+            // instance is not set until the companion's own onCreate runs, so
+            // without this the next showAuxPresentation() — onResume fires one
+            // almost immediately — would see "no companion" and start a second.
+            companionLaunchPendingAt = SystemClock.uptimeMillis();
+            Log.i(TAG, "Companion activity started on display " + displayId);
+        } catch (RuntimeException e) {
+            // Same fallback as the launcher: no companion is survivable, a dead
+            // game is not. reportDualScreenAvailable() (our caller) then tells
+            // native there is no second screen, and the HUD stays on the game.
+            Log.w(TAG, "Companion launch on display " + displayId + " refused", e);
+        }
+    }
+
+    // The companion surface, hosted by the Presentation below — or, when the
+    // game itself has been launched onto the second screen, by
+    // DuskCompanionActivity on the main one.
+    static SurfaceView createCompanionSurfaceView(Context context, int bufW, int bufH) {
         SurfaceView surfaceView = new SurfaceView(context);
-        // Render the bottom screen at 8:7 in 1080p (native landscape).
-        surfaceView.getHolder().setFixedSize(1240, 1080);
+        // The buffer's shape decides the companion's shape: computeAuxCanvas()
+        // derives the dashboard's logical canvas from the surface aspect, and
+        // the layout is width-parametric (side columns pinned to the edges, the
+        // content window taking whatever is left). So this is where "the
+        // companion is 8:7" is actually decided — pass the host panel's own
+        // size and the dashboard lays itself out to fit it.
+        surfaceView.getHolder().setFixedSize(bufW, bufH);
         surfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
             @Override
             public void surfaceCreated(SurfaceHolder holder) {}
@@ -471,10 +669,28 @@ public class DuskActivity extends SDLActivity {
             getWindow().addFlags(
                 android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
             // The Presentation is a separate Window on the second display and
-            // was never told to hide its bars, so the gesture pill sat on top
-            // of the companion. FLAG_NOT_FOCUSABLE above does not affect this.
+            // was never told to hide its bars, so the navigation bar sat on top
+            // of the companion.
             applyImmersive(getWindow());
-            setContentView(createCompanionSurfaceView(getContext()));
+            setContentView(
+                createCompanionSurfaceView(getContext(), COMPANION_PANEL_W, COMPANION_PANEL_H));
+            // Take the whole panel, including the strip the navigation bar
+            // would occupy. Hiding the bars stops them being DRAWN but the
+            // content frame is still inset for them, so the companion was laid
+            // out short by the bar's height and a transparent band sat where
+            // the buttons would have been.
+            //
+            // Consumed here rather than on the Activity: SDL needs real insets
+            // on the main window to place its own views, and this Presentation
+            // has exactly one child that is meant to be edge-to-edge.
+            final View auxDecor = getWindow().getDecorView();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                auxDecor.setOnApplyWindowInsetsListener((v, insets) -> WindowInsets.CONSUMED);
+            } else {
+                auxDecor.setOnApplyWindowInsetsListener(
+                    (v, insets) -> insets.consumeSystemWindowInsets());
+            }
+            auxDecor.requestApplyInsets();
         }
     }
 

@@ -753,3 +753,11 @@ foreach (target IN LISTS BINARY_TARGETS)
 endforeach ()
 
 install_bundled_mods()
+
+# Host-side unit tests. Off when cross-compiling (an Android build has no host
+# to run them on), and off unless aurora brought gtest in with it.
+option(DUSK_BUILD_TESTS "Build dusklight host-side unit tests" ON)
+if (DUSK_BUILD_TESTS AND NOT CMAKE_CROSSCOMPILING)
+    enable_testing()
+    add_subdirectory(tests)
+endif ()

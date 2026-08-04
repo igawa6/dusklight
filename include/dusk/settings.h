@@ -211,6 +211,8 @@ struct UserSettings {
         ConfigVar<MenuScaling> menuScalingMode;
         ConfigVar<bool> dualScreen;
         ConfigVar<int> dualScreenHudMode;
+        // Companion on the main screen, game on the second.
+        ConfigVar<bool> dualScreenSwap;
         ConfigVar<int> dualScreenDisplay;
         ConfigVar<int> dualScreenPosX;
         ConfigVar<int> dualScreenPosY;

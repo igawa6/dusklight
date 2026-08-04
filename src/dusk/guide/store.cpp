@@ -67,7 +67,7 @@ constexpr int kIndexVersion = 1;
 // this a converter fix is invisible to anyone who already imported — their
 // .guide files keep whatever the old code produced. On a mismatch every
 // archived source is converted again.
-constexpr int kConverterVersion = 8;  // section-prefixed image names
+constexpr int kConverterVersion = 9;  // drops adverts and page furniture
 
 // Read a whole file. Returns nullopt rather than throwing: every caller here
 // treats "missing or unreadable" as "not present", never as a hard error.

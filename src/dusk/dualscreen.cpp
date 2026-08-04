@@ -53,8 +53,16 @@ bool isEnabled() {
     // The logo scene draws its 2D lists through the same pass; only redirect
     // once actual gameplay is running. Without a physical second display
     // the setting is inert (single-screen devices keep their HUD).
+    // "Gameplay is running" is asked TWO ways on purpose. IsGameLaunched is the
+    // intended signal, but it is set in exactly two places, both inside
+    // prelaunch.cpp — so any route that reaches gameplay without that screen
+    // leaves it false forever, and the second screen then sits on the boot
+    // splash for the whole session while the game plays normally on the main
+    // display. companion::hudReady() is direct evidence: the game's own HUD
+    // meter exists, which it does not during the logo scene, so it cannot
+    // re-introduce the problem the flag was added to avoid.
     return getSettings().game.dualScreen.getValue() && s_displayAvailable &&
-           dusk::IsGameLaunched;
+           (dusk::IsGameLaunched || companion::hudReady());
 }
 
 // The game leaves alpha writes disabled for most 2D drawing, so the capture's
@@ -264,6 +272,45 @@ void beginHudCapture() {
     // the meter still lives (the fade-out), then falls back to the splash.
     s_splash = wanted && (!s_everPresented || s_leftGameplay);
 
+    // Reconcile the Java-side mirror with the config. The settings toggle
+    // publishes on change, so this is only for the cases the toggle never saw:
+    // a first run, or a config.json carried in from another install (a moved
+    // data folder) whose swap value the SharedPreferences file knows nothing
+    // about. Compare-and-skip, so the steady state costs one bool test.
+    {
+        const bool swap = getSettings().game.dualScreenSwap.getValue();
+        static int s_lastPublished = -1;
+        if (s_lastPublished != (swap ? 1 : 0)) {
+            s_lastPublished = swap ? 1 : 0;
+            publishSwapPreference(swap);
+        }
+    }
+
+    // One line whenever the second screen's state changes. "The bottom screen
+    // just shows the logo" is impossible to triage from a description, because
+    // three very different faults look identical from outside:
+    //   displayAvailable=0 -> nothing is presented; the user is seeing the
+    //                         HANDHELD's own app icon, not ours
+    //   launched=0         -> our splash forever (isEnabled needs IsGameLaunched)
+    //   hudReady=0         -> the game's HUD meter does not exist
+    // Logged on change only, so it costs nothing per frame.
+    {
+        const bool ready = companion::hudReady();
+        const int state = (wanted ? 1 : 0) | (enabled ? 2 : 0) | (ready ? 4 : 0) |
+            (s_splash ? 8 : 0) | (s_displayAvailable ? 16 : 0) |
+            (s_everPresented ? 32 : 0) | (s_leftGameplay ? 64 : 0);
+        static int s_lastState = -1;
+        if (state != s_lastState) {
+            s_lastState = state;
+            DuskLog.info("dualscreen: displayAvailable={} setting={} launched={} wanted={} "
+                         "enabled={} hudReady={} splash={} everPresented={} leftGameplay={} swap={}",
+                (bool)s_displayAvailable, getSettings().game.dualScreen.getValue(),
+                (bool)dusk::IsGameLaunched, wanted, enabled, ready, s_splash,
+                (bool)s_everPresented, s_leftGameplay,
+                getSettings().game.dualScreenSwap.getValue());
+        }
+    }
+
     // Low-health hearts pop-in (Cinematic only). Life is 4 units/heart, max
     // is 5 units/heart (drawLife's own divisors). Threshold scales with max
     // hearts, clamped to 1..2; the release point is one full heart higher so
@@ -364,6 +411,14 @@ void endHudCapture() {
 
     prevPort->setPort();  // never NULL — the capture bails out above
 }
+
+#if !defined(TARGET_ANDROID) && !defined(__ANDROID__) && !defined(ANDROID)
+// Swapping which panel each WINDOW opens on is an Android idea; a desktop aux
+// window has no launcher to hand the choice to. Defined here so the call sites
+// need no platform guard of their own — android_aux_display.cpp supplies the
+// real one.
+void publishSwapPreference(bool) {}
+#endif
 
 bool hudOnCompanion() {
     return getSettings().game.dualScreen.getValue() && s_displayAvailable;

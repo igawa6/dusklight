@@ -7,8 +7,10 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
 import android.view.ViewGroup;
+import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
+import android.webkit.WebStorage;
 import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.FrameLayout;
@@ -234,6 +236,27 @@ public final class DuskGuideBrowser {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         WebView web = new WebView(host);
+        // Start every session with an empty cookie jar.
+        //
+        // The WebView shares the app-wide persistent jar, and a crawl loads two
+        // dozen pages, so cookies accumulate across runs with nothing ever
+        // trimming them. Past a certain size the site's own server rejects the
+        // request before it reaches the page:
+        //
+        //     400 Bad Request - Request Header Or Cookie Too Large
+        //
+        // and the user cannot clear it themselves without wiping app data.
+        // Nothing here needs a session to survive — there is no login, and a
+        // fresh jar is exactly the state of a first-ever run, which works.
+        try {
+            CookieManager cookies = CookieManager.getInstance();
+            cookies.removeAllCookies(null);
+            cookies.setAcceptThirdPartyCookies(web, false);  // ads/analytics are the bulk of it
+            cookies.flush();
+            WebStorage.getInstance().deleteAllData();
+        } catch (Throwable t) {
+            Log.e(TAG, "could not clear browser storage", t);
+        }
         web.getSettings().setJavaScriptEnabled(true);
         web.getSettings().setDomStorageEnabled(true);
         web.getSettings().setLoadWithOverviewMode(true);

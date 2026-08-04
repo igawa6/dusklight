@@ -183,13 +183,151 @@ int currentDungeonSection() {
     return n;
 }
 
+// Section-completion flags, for the chapters that are not dungeons.
+//
+// A section counts as DONE when its flag is set, so the marker sits on the
+// first section of the chapter whose flag is NOT yet set. That ordering is the
+// whole design: it needs no per-section exactness, only that the flags fire in
+// the same order the sections are written, and it degrades sensibly for a
+// player who skipped optional content.
+//
+// MUST stay sorted by (chapter, section) — the search below takes the first
+// unset entry it meets. Entries are added only once confirmed; an unmapped
+// chapter simply gets a chapter-level marker, which is what shipped in 2.5.
+// What marks a section complete. Event bits cover the overworld; dungeons are
+// better served by their own items, because the site does NOT order dungeon
+// sections map-compass-key. Forest Temple runs map, three monkeys, boomerang,
+// compass, big key — so counting items held put the marker four sections early.
+enum class SectionSignal : u8 {
+    EventBit,        // value = dSv_event_flag_c::X
+    DungeonMap,      // value unused
+    DungeonCompass,  // value unused
+    DungeonBossKey,  // value unused
+    ItemFirstBit,    // value = dItemNo_X_e
+};
+
+struct SectionFlag {
+    int chapter;
+    int section;
+    SectionSignal kind;
+    u16 value;
+};
+
+bool sectionDone(const SectionFlag& e) {
+    switch (e.kind) {
+    case SectionSignal::EventBit:
+        return dComIfGs_isEventBit(e.value) != 0;
+    case SectionSignal::DungeonMap:
+        return dComIfGs_isDungeonItemMap() != 0;
+    case SectionSignal::DungeonCompass:
+        return dComIfGs_isDungeonItemCompass() != 0;
+    case SectionSignal::DungeonBossKey:
+        return dComIfGs_isDungeonItemBossKey() != 0;
+    case SectionSignal::ItemFirstBit:
+        return dComIfGs_isItemFirstBit((u8)e.value) != 0;
+    default:
+        return false;
+    }
+}
+constexpr SectionFlag kSectionFlags[] = {
+    // Chapter 1 - Ordon Village
+    {1, 1, SectionSignal::EventBit, dSv_event_flag_c::F_0019},  // Spoke with Ilia at the spring
+    {1, 2, SectionSignal::EventBit, dSv_event_flag_c::F_0011},  // Fence jumping complete -- 1.2 covers the
+                                       // fence jump too, not just the herding
+    {1, 3, SectionSignal::EventBit, dSv_event_flag_c::F_0024},  // Spoke with Talo/Malo/Beth
+    {1, 4, SectionSignal::EventBit, dSv_event_flag_c::F_0015},  // Slingshot tutorial ends
+    {1, 5, SectionSignal::EventBit, dSv_event_flag_c::F_0014},  // Sword tutorial ends
+    {1, 6, SectionSignal::EventBit, dSv_event_flag_c::M_095},   // First time meeting Coro (obtain lantern)
+    {1, 7, SectionSignal::EventBit, dSv_event_flag_c::F_0625},  // Saved Talo and a monkey
+    {1, 8, SectionSignal::EventBit, dSv_event_flag_c::F_0630},  // Right after Link is captured (wolf)
+
+    // Chapter 2 - The Twilight. 2.2 stays unmapped ON PURPOSE: the only
+    // candidate, F_0204, fires when you first talk to Midna through the bars,
+    // near the START of the sewers — mapping it would advance the marker to
+    // 2.3 while the player is still down there, which is exactly the running-
+    // ahead this table is built to avoid. Unmapped, the marker holds on 2.2
+    // until Zelda, lagging rather than lying.
+    {2, 1, SectionSignal::EventBit, dSv_event_flag_c::M_009},   // [cutscene 6B] Prison escape
+    {2, 3, SectionSignal::EventBit, dSv_event_flag_c::M_012},   // [cutscene 7] Meet Princess Zelda
+    {2, 4, SectionSignal::EventBit, dSv_event_flag_c::M_013},   // First heard about Twilight gate from Midna
+
+    // Chapter 3 - Faron Woods: Twilight. 3.4 needs no flag: it is the last
+    // section, so once 3.3 completes the marker rests on it anyway.
+    {3, 1, SectionSignal::EventBit, dSv_event_flag_c::F_0055},  // Received Vessel of Light from Faron
+    {3, 2, SectionSignal::EventBit, dSv_event_flag_c::F_0059},  // Conversation after tears complete
+    {3, 3, SectionSignal::EventBit, dSv_event_flag_c::F_0218},  // Bought jar of oil from Coro
+
+    // Chapter 4 - Forest Temple. Mapped by ITEM, not by the ordinal: the site
+    // interleaves four monkey-rescue sections between the map, the boomerang,
+    // the compass and the big key, so counting items held marked the player
+    // several sections early. The unmapped ones (the monkeys, and the boss)
+    // hold the marker at the previous mapped section, which is correct — you
+    // are working through them with no new item to show for it.
+    {4, 1, SectionSignal::DungeonMap, 0},                       // 4.1 Dungeon Map
+    {4, 5, SectionSignal::ItemFirstBit, dItemNo_BOOMERANG_e},   // 4.5 The Gale Boomerang
+    {4, 6, SectionSignal::DungeonCompass, 0},                   // 4.6 The Compass
+    {4, 7, SectionSignal::DungeonBossKey, 0},                   // 4.7 The Big Key
+    {4, 9, SectionSignal::EventBit, dSv_event_flag_c::M_022},   // 4.9 Forest Temple clear
+};
+
+// The section after the last COMPLETED one — not the first unmapped-or-unset
+// entry. The difference is what happens to a section with no flag: several
+// have none (the save simply does not record "found Talo's wooden stick"), and
+// searching for the first unset entry skipped straight past them, marking the
+// next mapped section while the player was still reading the unmapped one.
+// Counting from the last completed section instead makes an unmapped section
+// HOLD the marker until the following mapped one completes, so the marker can
+// only ever lag, never run ahead.
+//
+// 0 when the chapter has no mappings at all, which suppresses the section
+// marker rather than guessing.
+int currentOverworldSection(int chapter) {
+    int lastDone = 0;
+    bool anyMapped = false;
+    for (const SectionFlag& e : kSectionFlags) {
+        if (e.chapter != chapter) {
+            continue;
+        }
+        anyMapped = true;
+        if (sectionDone(e) && e.section > lastDone) {
+            lastDone = e.section;
+        }
+    }
+    return anyMapped ? lastDone + 1 : 0;
+}
+
+// Clamp to a section this guide actually has. Both the ordinal count and
+// "last done + 1" can point past the end — a chapter covered in three sections
+// but holding four dungeon items, or a fully completed chapter — and an
+// out-of-range section would silently drop the marker exactly when the player
+// is furthest along.
+int clampToChapter(int chapter, int section) {
+    if (section == 0) {
+        return 0;
+    }
+    int last = 0;
+    for (const BrowseRow& r : s_browse) {
+        if (r.chapterNo == chapter && r.sectionNo > last) {
+            last = r.sectionNo;
+        }
+    }
+    return (last != 0 && section > last) ? last : section;
+}
+
 // Chapter and section the player is currently in, or 0 for "unknown".
 void currentPosition(int* o_chapter, int* o_section) {
     *o_chapter = currentChapter();
     *o_section = 0;
-    if (*o_chapter != 0 && chapterIsDungeon(*o_chapter)) {
+    if (*o_chapter == 0) {
+        return;
+    }
+    // The table wins wherever it has entries, dungeon or not. The item ordinal
+    // survives only as the fallback for dungeons nobody has mapped yet.
+    *o_section = currentOverworldSection(*o_chapter);
+    if (*o_section == 0 && chapterIsDungeon(*o_chapter)) {
         *o_section = currentDungeonSection();
     }
+    *o_section = clampToChapter(*o_chapter, *o_section);
 }
 
 // The player's own portrait, wolf-aware — the same art the transform button
@@ -850,21 +988,6 @@ void drawGuideBrowseList(f32 x0, f32 y0, f32 x1, f32 y1, f32 bodyX, f32 bodyW, f
     int hereChapter = 0;
     int hereSection = 0;
     currentPosition(&hereChapter, &hereSection);
-    // Clamp to what this guide actually has. The ordinal counts items held,
-    // but a chapter may cover the dungeon in fewer sections than there are
-    // items (Temple of Time is three sections and four markers), and an
-    // ordinal past the end would silently drop the marker.
-    if (hereSection != 0) {
-        int last = 0;
-        for (const BrowseRow& r : s_browse) {
-            if (r.chapterNo == hereChapter && r.sectionNo > last) {
-                last = r.sectionNo;
-            }
-        }
-        if (last != 0 && hereSection > last) {
-            hereSection = last;
-        }
-    }
     s_readerRectCount = 0;
     // Clamped BEFORE the rows are placed. It used to run at the end of this
     // function, so a drag that pushed the scroll past an end had its overscroll

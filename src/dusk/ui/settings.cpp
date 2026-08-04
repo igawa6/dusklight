@@ -1402,6 +1402,31 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
                     "<br/>Enabling moves the FPS counter to the companion screen and turns "
                     "off Minimal HUD.");
             });
+
+        // Directly below the style row, and only while the second screen is in
+        // use — with no second panel there is nowhere for the game to go.
+        //
+        // Android only: the swap is done by launching the game's window onto the
+        // other display, which is why it needs a restart and why there is no
+        // desktop equivalent to offer.
+#if defined(TARGET_ANDROID) || defined(__ANDROID__) || defined(ANDROID)
+        if (dusk::dualscreen::hudOnCompanion()) {
+            config_bool_select(leftPane, rightPane, getSettings().game.dualScreenSwap,
+                {
+                    .key = "Swap Screens",
+                    .helpText =
+                        "Puts the game on the second screen and the companion on the main "
+                        "screen.<br/>Takes effect once Dusklight has been closed and opened "
+                        "again — close it from the recent apps list. The game's window has "
+                        "to be created on the other screen, and a window that is already "
+                        "showing cannot be moved.",
+                    // Written out now rather than at exit: the launcher reads
+                    // this file on the next start, and the app can be killed
+                    // from the task switcher without ever running shutdown.
+                    .onChange = [](bool value) { dusk::dualscreen::publishSwapPreference(value); },
+                });
+        }
+#endif
         addOption("Restore Wii 1.0 Glitches", getSettings().game.restoreWiiGlitches,
             "Restores patched glitches from Wii USA 1.0, the first released version.");
         addOption("Enable Rotating Link Doll", getSettings().game.enableLinkDollRotation,
