@@ -7,6 +7,11 @@
 #include "JSystem/JUtility/JUTFont.h"
 
 #include <cstring>
+#include <atomic>
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <thread>
 #include <vector>
 
 #include "dusk/dualscreen.h"
@@ -415,6 +420,10 @@ u8 s_lineLevel[GUIDE_LINES_MAX];
 // scaled height, so the flow cannot derive advance from kind alone.
 f32 s_lineH[GUIDE_LINES_MAX];
 std::string s_lineRef[GUIDE_LINES_MAX];  // image file, for Image lines
+// Width the image will actually occupy, from the recorded dimensions. The
+// placeholder needs it: a plate spanning the whole body width reads as content,
+// not as "loading".
+f32 s_lineImgW[GUIDE_LINES_MAX];
 // Total wrapped height. Summed once per wrap rather than re-summed over every
 // line on every frame -- it cannot change without a rewrap. See rewrapIfNeeded.
 f32 s_contentH = 0.0f;
@@ -423,7 +432,10 @@ int s_lineCount = 0;
 // Converted-image cache, bounded. Blobs are linear RGBA8 (image.cpp), so a
 // 512x512 image is 1 MiB and an unbounded cache would quietly grow past what
 // the second screen is worth. Evicted whole-entry, oldest first.
+// Outline marking an image slot while its decode runs.
+constexpr GXColor COL_IMG_PENDING = {96, 91, 80, 190};
 constexpr std::size_t IMG_CACHE_BUDGET = 6u * 1024u * 1024u;
+constexpr std::size_t IMG_CACHE_MAX_ENTRIES = 64;
 struct CachedImage {
     // Doc and ref kept APART rather than as one "doc/ref" key. Joining them
     // meant building that string on every imageFor() call -- once per visible
@@ -435,47 +447,161 @@ struct CachedImage {
 };
 std::vector<CachedImage> s_imgCache;
 std::size_t s_imgCacheBytes = 0;
+// Bumped wherever s_imgCache is cleared. A decode in flight captures this at
+// spawn; a result that comes back against a stale epoch is DISCARDED rather
+// than inserted. Without it, a decode started before an import lands returns
+// empty, the import clears the cache, and the drain then writes that empty
+// blob into the FRESH cache -- a permanent "[image]" for the session, which is
+// precisely what the clear exists to prevent.
+unsigned s_imgCacheEpoch = 0;
 
-// Returns the blob for `ref`, loading it on first use. Null when the image was
-// never acquired or failed to convert — the caller then draws the alt text.
-// Budget so a scroll can never stall on a queue of decodes. One per frame is
-// enough to fill a screen in a few frames and is invisible; unbounded was the
-// per-frame re-decode cliff once the cache started evicting.
-int s_decodeBudget = 0;
+// Ready: draw it. Failed: never acquired or undecodable, draw the alt text.
+// Pending: a decode is in flight, draw a placeholder -- NOT the alt text, or
+// every image flashes "[image]" for the few frames its decode takes.
+enum class ImageState { Ready, Pending, Failed };
+struct ImageLookup {
+    ImageState state;
+    const ResTIMG* timg;
+};
 
-const ResTIMG* imageFor(const std::string& ref) {
+// One image decode, off the render thread. Same shape as ImportTask
+// (guide/fetch.cpp) and DiscVerificationTask (ui/prelaunch.cpp): thread started
+// in the ctor BODY so every input is initialised before it can be read, results
+// published by the single release-store on mDone, dtor joins.
+//
+// Two things that look incidental and are not:
+//   - mPath is precomputed by the CALLER, on the game thread. images_dir() goes
+//     through guides_root(), which on Android calls data::is_default_data_path()
+//     and lazily initialises unsynchronised statics (and may read a file). It is
+//     not safe as a worker's first call.
+//   - the blob must stay a plain std::vector. JKRHeap::sCurrentHeap is
+//     thread_local, so on a fresh worker it is null and operator new falls
+//     through to aligned_alloc; freeing later on the game thread walks the heap
+//     roots, finds no owner, and calls free(). That pairing is only correct
+//     while the worker never sets a current heap and never uses JKR_NEW. (It
+//     does mean these blobs now come from malloc rather than a JKRHeap arena —
+//     which is where a decorative cache belongs anyway.)
+class ImageDecodeTask {
+public:
+    ImageDecodeTask(std::string doc, std::string ref, std::filesystem::path path,
+        unsigned epoch)
+        : mDoc(std::move(doc))
+        , mRef(std::move(ref))
+        , mPath(std::move(path))
+        , mEpoch(epoch)
+    {
+        mWorker = std::thread([this] {
+            try {
+                mBlob = dusk::guide::load_timg_blob(mPath);
+            } catch (...) {
+                mBlob.clear();
+            }
+            mDone.store(true, std::memory_order_release);
+        });
+    }
+    ~ImageDecodeTask() {
+        if (mWorker.joinable()) {
+            mWorker.join();
+        }
+    }
+    ImageDecodeTask(const ImageDecodeTask&) = delete;
+    ImageDecodeTask& operator=(const ImageDecodeTask&) = delete;
+
+    bool finished() const { return mDone.load(std::memory_order_acquire); }
+    const std::string& doc() const { return mDoc; }
+    const std::string& ref() const { return mRef; }
+    unsigned epoch() const { return mEpoch; }
+    std::vector<std::uint8_t>& blob() { return mBlob; }
+
+private:
+    std::string mDoc;
+    std::string mRef;
+    std::filesystem::path mPath;
+    unsigned mEpoch;
+    std::vector<std::uint8_t> mBlob;
+    std::atomic<bool> mDone{false};
+    std::thread mWorker;  // last: the ctor body starts it, and it reads the above
+};
+
+// At most ONE decode in flight. Not a compromise: images draw at native size
+// capped at 512 in a ~310-unit viewport, so about one is visible at a time, and
+// each decode already outlasts a frame. The old code was bounded to one decode
+// per frame for the same reason — the difference is that this one does not
+// stall the frame it runs on.
+std::unique_ptr<ImageDecodeTask> s_imgTask;
+
+ImageLookup imageFor(const std::string& ref) {
     if (ref.empty()) {
-        return nullptr;
+        return {ImageState::Failed, nullptr};
     }
     // Keyed on doc AND ref, not ref alone. A multi-chapter walkthrough imports
     // as one guide per chapter from one site, so "image1.jpg" collides
     // constantly and chapter 2 was rendering chapter 1's pictures.
     for (const CachedImage& c : s_imgCache) {
         if (c.ref == ref && c.doc == s_docId) {
-            return c.blob.empty() ? nullptr : (const ResTIMG*)c.blob.data();
+            return c.blob.empty() ? ImageLookup{ImageState::Failed, nullptr}
+                                  : ImageLookup{ImageState::Ready,
+                                        (const ResTIMG*)c.blob.data()};
         }
     }
-    if (s_decodeBudget <= 0) {
-        return nullptr;  // not resident yet; alt text this frame
+    // Miss. Ask for it if nothing else is being decoded, and draw the
+    // placeholder either way. No I/O, no allocation and no eviction happens in
+    // here any more — eviction in particular MUST NOT: a blob freed mid-draw
+    // may already have had its address written into the GX FIFO by an earlier
+    // drawTimg this frame, and the FIFO is not drained until end_frame.
+    if (s_imgTask == nullptr) {
+        s_imgTask = std::make_unique<ImageDecodeTask>(
+            s_docId, ref, dusk::guide::images_dir(s_docId) / ref, s_imgCacheEpoch);
     }
-    s_decodeBudget--;
+    return {ImageState::Pending, nullptr};
+}
+
+// Take a finished decode into the cache. Runs at the TOP of the frame, before
+// anything has drawn, which is what makes eviction here safe.
+void reapImageDecode() {
+    if (s_imgTask == nullptr || !s_imgTask->finished()) {
+        return;
+    }
+    // Stale epoch: the cache was cleared while this was decoding, so the result
+    // describes a world that no longer exists. Drop it WITHOUT inserting — an
+    // empty blob from "the file was not downloaded yet" would otherwise become a
+    // permanent negative entry in the freshly cleared cache, which is the exact
+    // failure the clear exists to prevent. Dropping it means the next draw asks
+    // again, which is what we want.
+    if (s_imgTask->epoch() != s_imgCacheEpoch) {
+        s_imgTask.reset();
+        return;
+    }
     CachedImage entry;
-    entry.doc = s_docId;
-    entry.ref = ref;
-    entry.blob = dusk::guide::load_timg_blob(dusk::guide::images_dir(s_docId) / ref);
+    entry.doc = s_imgTask->doc();  // the task's own doc: s_docId may have moved
+    entry.ref = s_imgTask->ref();
+    entry.blob = std::move(s_imgTask->blob());
     if (!entry.blob.empty() && !isSaneTimg((const ResTIMG*)entry.blob.data())) {
-        entry.blob.clear();  // corrupt or unsupported: fall back to alt text
+        entry.blob = {};  // corrupt or unsupported: fall back to alt text
     }
     // Evict oldest until the new entry fits. Ordered so the new entry is
     // still outside the list, which is what actually makes it un-evictable.
-    while (!s_imgCache.empty() && s_imgCacheBytes + entry.blob.size() > IMG_CACHE_BUDGET) {
+    // The ENTRY cap is not redundant with the byte budget: a negative entry
+    // (image not on disk) has an empty blob and so contributes 0 bytes, which
+    // means the byte loop never evicts one. A store whose images failed to
+    // download — an ordinary state, see store.cpp's note on hosts refusing
+    // image requests — otherwise accrues one permanent entry per missing ref,
+    // and the cache scan walks all of them per image per frame.
+    while (!s_imgCache.empty() &&
+        (s_imgCacheBytes + entry.blob.size() > IMG_CACHE_BUDGET ||
+            s_imgCache.size() >= IMG_CACHE_MAX_ENTRIES))
+    {
+        gfxForgetTimgLatch();  // the blob about to die may be latched
         s_imgCacheBytes -= s_imgCache.front().blob.size();
         s_imgCache.erase(s_imgCache.begin());
     }
+    // EMPTY BLOBS ARE INSERTED TOO. That entry is the "do not ask again" marker
+    // for a file that is missing or undecodable. Skipping it — the obvious-
+    // looking simplification — turns every missing image into one thread spawned
+    // per frame, for the rest of the session.
     s_imgCacheBytes += entry.blob.size();
     s_imgCache.push_back(std::move(entry));
-    const CachedImage& back = s_imgCache.back();
-    return back.blob.empty() ? nullptr : (const ResTIMG*)back.blob.data();
+    s_imgTask.reset();  // already finished; the join is immediate
 }
 
 // The wrap is keyed on (guide, section, width): Cinematic and Functional give
@@ -498,7 +624,8 @@ constexpr f32 BODY_INSET = 26.0f;   // total horizontal margin around body text
 constexpr f32 IMG_ALT_H = 26.0f;    // flow height reserved for missing-image text
 constexpr f32 LIST_INDENT = 14.0f;  // per nesting level of a list item
 
-void pushLine(const char* text, u8 kind, u8 level, f32 h, const std::string& ref = {}) {
+void pushLine(const char* text, u8 kind, u8 level, f32 h, const std::string& ref = {},
+    f32 imgW = 0.0f) {
     if (s_lineCount >= GUIDE_LINES_MAX) {
         return;
     }
@@ -507,6 +634,7 @@ void pushLine(const char* text, u8 kind, u8 level, f32 h, const std::string& ref
     s_lineLevel[s_lineCount] = level;
     s_lineH[s_lineCount] = h;
     s_lineRef[s_lineCount] = ref;
+    s_lineImgW[s_lineCount] = imgW;
     s_lineCount++;
 }
 
@@ -534,13 +662,14 @@ void wrapNode(const dusk::guide::Node& n, f32 width) {
         // one draw call for a typical section, evicting the very entries the
         // draw was about to need.
         f32 h = IMG_ALT_H;  // alt-text fallback: one line
+        f32 imgW = 0.0f;
         const std::string& file = n.ref;
         if (n.imgW > 0 && n.imgH > 0) {
             const f32 tw = (f32)n.imgW;
-            const f32 drawW = width < tw ? width : tw;
-            h = (f32)n.imgH * (drawW / tw) + 8.0f;
+            imgW = width < tw ? width : tw;
+            h = (f32)n.imgH * (imgW / tw) + 8.0f;
         }
-        pushLine(n.text.c_str(), (u8)NodeKind::Image, 0, h, file);
+        pushLine(n.text.c_str(), (u8)NodeKind::Image, 0, h, file, imgW);
         return;
     }
     // Bullet marker is part of the first line's text so the wrap accounts for
@@ -633,14 +762,33 @@ void drawBodyLine(int idx, f32 x, f32 y, FontDrawContext* ctx) {
         return;
     }
     if (kind == (u8)NodeKind::Image) {
-        const ResTIMG* t = imageFor(s_lineRef[idx]);
-        if (t == nullptr) {
+        const ImageLookup img = imageFor(s_lineRef[idx]);
+        if (img.state == ImageState::Failed) {
             // Never acquired, or not decodable (SDL has no JPEG loader). The
             // alt text is why the converter keeps it.
             drawTextEllipsized(x, y, TEXT_SIZE, s_wrappedWidth, TEXT_DIM,
                 s_lines[idx][0] != '\0' ? s_lines[idx] : "[image]");
             return;
         }
+        if (img.state == ImageState::Pending) {
+            // Decode in flight. An OUTLINE at the image's own footprint, never
+            // a filled plate spanning the body: only one image decodes at a
+            // time, and this guide's source pairs its screenshots, so a solid
+            // block of image-like size sitting directly under a real image
+            // reads as that image rendered twice. (It is also why this cannot
+            // just be the old alt text: the slot is picture-sized, and one line
+            // of text floating in it looks like a layout fault.)
+            const f32 slotH = s_lineH[idx];
+            const f32 pw = s_lineImgW[idx] > 0.0f ? s_lineImgW[idx] : s_wrappedWidth;
+            const f32 py0 = y - TEXT_SIZE;
+            const f32 py1 = py0 + (slotH > 8.0f ? slotH - 8.0f : slotH);
+            drawChamferFrame(x, py0, x + pw, py1, 6.0f, 1.0f, COL_IMG_PENDING,
+                1 | 2 | 4 | 8);
+            drawTextCentered(x + pw * 0.5f, (py0 + py1) * 0.5f + 5.0f, TEXT_SIZE,
+                TEXT_DIM, s_lines[idx][0] != '\0' ? s_lines[idx] : "...");
+            return;
+        }
+        const ResTIMG* t = img.timg;
         const f32 tw = (f32)(u16)t->width;
         const f32 th = (f32)(u16)t->height;
         const f32 drawW = s_wrappedWidth < tw ? s_wrappedWidth : tw;
@@ -1094,6 +1242,13 @@ void drawGuideSectionBody(f32 x0, f32 y0, f32 x1, f32 y1, f32 bodyX, f32 bodyW, 
 }  // namespace
 
 void drawGuideOverlay(f32 x0, f32 y0, f32 x1, f32 y1) {
+    // FIRST, and deliberately above the closed-reader early-out below: a decode
+    // in flight when the reader closes must still be taken and joined, and this
+    // is the only guide hook that runs every frame. It is also the only safe
+    // place to evict — nothing has drawn yet this frame, so no freed blob can
+    // still be sitting in the un-drained GX FIFO.
+    reapImageDecode();
+
     // Ramp first so a close still animates out after the flag clears.
     if (s_guideOpen) {
         s_guideT += (1.0f - s_guideT) * ANIM_RATE_FAST;
@@ -1110,7 +1265,6 @@ void drawGuideOverlay(f32 x0, f32 y0, f32 x1, f32 y1) {
         return;
     }
 
-    s_decodeBudget = 1;
     // Cheap poll; the actual work happened off-thread. Tracked per-consumer
     // because the settings pane watches the same signal (see fetch.hpp).
     static unsigned s_seenImportGen = 0;
@@ -1127,6 +1281,8 @@ void drawGuideOverlay(f32 x0, f32 y0, f32 x1, f32 y1) {
             // the import that fills them in; see imageFor.
             s_imgCache.clear();
             s_imgCacheBytes = 0;
+            s_imgCacheEpoch++;
+            gfxForgetTimgLatch();
             loadFirstDocument();
         } else if (!s_docLoaded) {
             loadFirstDocument();

@@ -832,11 +832,17 @@ void drawFunctionalSlotCorners(dMeter2Draw_c* md, f32 rx0, f32 rx1, f32 ty0, f32
             s_slotBtnRect[i][3] = slots[i].y1;
             continue;
         }
-        const int bound = slotBinding(i);
+        const int bound = slotDisplayBinding(i);
         // Resolved through the play mirror so a combo on the slot shows
-        // as the combined item (bomb/hawk arrows), exactly like X/Y.
-        const u8 item =
-            bound >= 0 ? dComIfGp_getSelectItem(2 + i) : (u8)dItemNo_NONE_e;
+        // as the combined item (bomb/hawk arrows), exactly like X/Y — except
+        // mid-borrow, when the mirror holds Ooccoo and only the raw inventory
+        // item still matches what the player thinks is in the slot. A borrow
+        // CAN land on a combo — the mix is saved and restored with the binding
+        // (s_ooccooSavedMix) — so for the frame or two the borrow is live this
+        // draws the raw partner item rather than the combined one. Cosmetic.
+        const u8 item = bound < 0 ? (u8)dItemNo_NONE_e
+            : slotIsBorrowed(i) ? dComIfGs_getItem(bound, false)
+                                : dComIfGp_getSelectItem(2 + i);
         const bool showItem = item != dItemNo_NONE_e && !xyHidden;
         // Depress: the whole box pinches toward its centre while the
         // button is held (touch or a physical "Use Slot" bind), like
@@ -876,9 +882,7 @@ void drawFunctionalSlotCorners(dMeter2Draw_c* md, f32 rx0, f32 rx1, f32 ty0, f32
             s_dropRect[DROP_TARGET_SLOT1 + i][2] = rx1;
             s_dropRect[DROP_TARGET_SLOT1 + i][3] = slots[i].y1;
             s_dropRectValid = true;
-            const bool hot = s_dragging && s_dragX >= rx0 - 8.0f &&
-                s_dragX <= rx1 + 8.0f && s_dragY >= slots[i].y0 - 8.0f &&
-                s_dragY <= slots[i].y1 + 8.0f;
+            const bool hot = dragOverDropRect(DROP_TARGET_SLOT1 + i);
             drawChamferFrame(rx0, slots[i].y0, rx1, slots[i].y1, FN_CORNER_CHAMFER,
                 3.0f, hot ? COL_SLOT_HOT : COL_SLOT_DROP, 1 | 2 | 4 | 8);
         } else if (s_denyFlash[2 + i] > 0) {

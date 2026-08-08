@@ -21,13 +21,18 @@ namespace dusk::companion {
 namespace {
 
 // [id][language], indexed by OS_LANGUAGE_* (0=EN 1=DE 2=FR 3=ES 4=IT).
-const char* const l_strings[STR_COUNT][5] = {
+const char* const l_strings[][5] = {
     // STR_RESET
     {"Reset",
      "Zur\xFC" "cksetzen",
      "R\xE9initialiser",
      "Reiniciar",
      "Reimposta"},
+    // STR_OOCCOO / STR_OOCCOO_JR - she is named in every language the game
+    // ships, so the button carries her name rather than a verb. The game
+    // leaves "Jr." untranslated.
+    {"Ooccoo", "Ooccoo", "Ooccoo", "Ooccoo", "Ooccoo"},
+    {"Ooccoo Jr.", "Ooccoo Jr.", "Ooccoo Jr.", "Ooccoo Jr.", "Ooccoo Jr."},
     // STR_SPECIES
     {"Species",
      "Art",
@@ -38,8 +43,6 @@ const char* const l_strings[STR_COUNT][5] = {
     {"Guide", "Guide", "Guide", "Gu\xED" "a", "Guida"},
     // STR_GUIDE_LIST
     {"List", "Liste", "Liste", "Lista", "Elenco"},
-    // STR_GUIDE_INTRO
-    {"Overview", "\xDC" "bersicht", "Vue d'ensemble", "Resumen", "Panoramica"},
     // STR_GUIDE_EMPTY
     {"No Guide", "Kein Guide", "Aucun guide", "Sin gu\xED" "a", "Nessuna guida"},
     // STR_GUIDE_HOWTO
@@ -181,6 +184,13 @@ const char* const l_strings[STR_COUNT][5] = {
      "No puedes teletransportarte aqu\xED",
      "Non puoi teletrasportarti qui"},
 };
+
+// The table is declared UNSIZED on purpose: a row missing here is then a size
+// mismatch caught right below, instead of C++ silently zero-filling a short
+// initialiser -- which shifts every id past the gap onto the wrong row and
+// leaves the last one reading nullptr, with no diagnostic anywhere.
+static_assert(sizeof(l_strings) / sizeof(l_strings[0]) == STR_COUNT,
+    "companion_strings: one row per StringId, in enum order");
 
 }  // namespace
 

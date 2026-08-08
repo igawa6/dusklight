@@ -67,7 +67,7 @@ constexpr int kIndexVersion = 1;
 // this a converter fix is invisible to anyone who already imported — their
 // .guide files keep whatever the old code produced. On a mismatch every
 // archived source is converted again.
-constexpr int kConverterVersion = 9;  // drops adverts and page furniture
+constexpr int kConverterVersion = 10;  // + drops duplicate images
 
 // Read a whole file. Returns nullopt rather than throwing: every caller here
 // treats "missing or unreadable" as "not present", never as a hard error.
@@ -229,6 +229,90 @@ void migrate_store_if_needed() {
 
 std::filesystem::path import_dir() {
     return guides_root() / "import";
+}
+
+// Cheap content key for an image file: length plus an FNV-1a of the bytes.
+// Not cryptographic and does not need to be — a collision would drop one
+// picture, and pairing the hash with the exact byte length makes that
+// vanishingly unlikely for files that are not already identical.
+std::string file_digest(const std::filesystem::path& f) {
+    std::ifstream in(f, std::ios::binary);
+    if (!in) {
+        return {};
+    }
+    std::uint64_t h = 1469598103934665603ull;
+    std::uint64_t n = 0;
+    char buf[8192];
+    while (in.read(buf, sizeof(buf)) || in.gcount() != 0) {
+        const std::streamsize got = in.gcount();
+        n += (std::uint64_t)got;
+        for (std::streamsize i = 0; i < got; i++) {
+            h ^= (unsigned char)buf[i];
+            h *= 1099511628211ull;
+        }
+    }
+    char out[40];
+    std::snprintf(out, sizeof(out), "%016llx:%llu", (unsigned long long)h,
+        (unsigned long long)n);
+    return out;
+}
+
+// Walkthrough sites repeat pictures: a video poster frame or a section banner
+// gets emitted near the top of every section, and the importer names files per
+// NODE, so the same bytes land on disk several times under different names and
+// the reader dutifully draws each one. Two of them adjacent is the visible
+// case — the same picture stacked twice.
+//
+// Content, not filename, is the only workable key: the refs differ by
+// construction. Done here rather than at download so it also fixes stores whose
+// images are already on disk (the reconvert path re-uses them), which is why
+// the converter version bump is enough to repair an existing library without
+// re-fetching a single image.
+void drop_duplicate_images(Document& doc, const std::filesystem::path& imgDir) {
+    // digest -> the file the surviving node points at. The path matters: two
+    // nodes can legitimately share a ref (two source URLs ending in the same
+    // filename collide on prefix + "-" + bare), and deleting "the duplicate"
+    // would then delete the file the kept node still needs.
+    std::vector<std::pair<std::string, std::filesystem::path>> seen;
+    std::size_t dropped = 0;
+    for (Section& sec : doc.sections) {
+        std::vector<Node> kept;
+        kept.reserve(sec.nodes.size());
+        for (Node& n : sec.nodes) {
+            if (n.kind != NodeKind::Image || n.ref.empty()) {
+                kept.push_back(std::move(n));
+                continue;
+            }
+            std::error_code ec;
+            const std::filesystem::path f = imgDir / n.ref;
+            if (!std::filesystem::exists(f, ec)) {
+                kept.push_back(std::move(n));  // no bytes: leave it to alt text
+                continue;
+            }
+            std::string digest = file_digest(f);
+            if (digest.empty()) {
+                kept.push_back(std::move(n));
+                continue;
+            }
+            const auto hit = std::find_if(seen.begin(), seen.end(),
+                [&digest](const std::pair<std::string, std::filesystem::path>& e) {
+                    return e.first == digest;
+                });
+            if (hit != seen.end()) {
+                dropped++;
+                if (hit->second != f) {
+                    std::filesystem::remove(f, ec);  // its own file, now unreferenced
+                }
+                continue;
+            }
+            seen.emplace_back(std::move(digest), f);
+            kept.push_back(std::move(n));
+        }
+        sec.nodes = std::move(kept);
+    }
+    if (dropped != 0) {
+        DuskLog.info("guide {}: dropped {} duplicate image(s)", doc.title, dropped);
+    }
 }
 
 std::filesystem::path images_dir(const std::string& id) {
@@ -544,6 +628,8 @@ std::string import_html_content(const std::string& html, const std::string& sour
         }
         (void)got;
     }
+
+    drop_duplicate_images(doc, images_dir(id));
 
     if (!save_document(id, doc)) {
         return {};

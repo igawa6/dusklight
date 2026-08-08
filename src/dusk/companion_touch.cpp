@@ -46,12 +46,7 @@ void setEquipMsg(int frames, const char* fmt, ...) {
 // slot, mix = bow slot). Dropping the bow onto its own combo button turns
 // the combo off. Returns true when the drop was consumed as a combo action.
 bool tryBowCombo(int btn, int slot, u8 itemNo) {
-    const bool comboPartner = itemNo == dItemNo_NORMAL_BOMB_e ||
-        itemNo == dItemNo_WATER_BOMB_e || itemNo == dItemNo_POKE_BOMB_e ||
-        itemNo == dItemNo_HAWK_EYE_e;
-    const bool btnHasBow = dComIfGs_getSelectItemIndex(btn) == SLOT_4 ||
-        dComIfGs_getMixItemIndex(btn) == SLOT_4;
-    if (comboPartner && btnHasBow) {
+    if (bowComboAmbiguous(btn, itemNo)) {
         for (int other = 0; other < 4; other++) {
             if (other == btn) {
                 continue;
@@ -115,6 +110,12 @@ bool equipFromCompanion(int btn, int slot) {
     }
     const u8 itemNo = dComIfGs_getItem(slot, false);
     if (btn >= DROP_TARGET_SLOT1) {
+        // Mid-borrow the slot holds Ooccoo, not what it shows. A drop landing
+        // here would be undone by the restore a few frames later, so refuse it
+        // outright rather than accept an equip that silently reverts.
+        if (slotIsBorrowed(btn - DROP_TARGET_SLOT1)) {
+            return false;
+        }
         // Talk/trade items need the per-button talk-event plumbing that only
         // exists for X/Y.
         if (daPy_py_c::checkTradeItem(itemNo)) {
@@ -124,7 +125,7 @@ bool equipFromCompanion(int btn, int slot) {
         }
         // Dropping the slot's own PLAIN item back unbinds it (toggle) —
         // unless it forms a combo (bow onto its combo = combo off, below).
-        if (slotBinding(btn - DROP_TARGET_SLOT1) == slot &&
+        if (slotDisplayBinding(btn - DROP_TARGET_SLOT1) == slot &&
             dComIfGs_getMixItemIndex(btn) == 0xFF)
         {
             setSlotBinding(btn - DROP_TARGET_SLOT1, -1);
@@ -138,18 +139,11 @@ bool equipFromCompanion(int btn, int slot) {
     // explicit R press combines) — touch has one gesture, so ask instead of
     // assuming. The chooser (drawComboChoice) resolves to tryBowCombo or
     // plainEquip in handleTouch.
-    {
-        const bool comboPartner = itemNo == dItemNo_NORMAL_BOMB_e ||
-            itemNo == dItemNo_WATER_BOMB_e || itemNo == dItemNo_POKE_BOMB_e ||
-            itemNo == dItemNo_HAWK_EYE_e;
-        const bool btnHasBow = dComIfGs_getSelectItemIndex(btn) == SLOT_4 ||
-            dComIfGs_getMixItemIndex(btn) == SLOT_4;
-        if (comboPartner && btnHasBow) {
-            s_comboChoiceBtn = btn;
-            s_comboChoiceSlot = slot;
-            queueSound(Z2SE_SY_CURSOR_ITEM, HAPTIC_LIGHT);
-            return true;
-        }
+    if (bowComboAmbiguous(btn, itemNo)) {
+        s_comboChoiceBtn = btn;
+        s_comboChoiceSlot = slot;
+        queueSound(Z2SE_SY_CURSOR_ITEM, HAPTIC_LIGHT);
+        return true;
     }
     // Combo-off still works directly (bow dropped onto its own combo).
     if (tryBowCombo(btn, slot, itemNo)) {
@@ -280,11 +274,16 @@ void beginHold(int btn) {
     s_holdBtn = btn;
     s_holdFrames = 0;
     s_holdReleaseReq = false;
-    if (btn < 2) {
-        s_padHoldMaskState.store(btn == 0 ? PAD_BUTTON_X : PAD_BUTTON_Y);
-    } else {
-        s_slotHoldMaskState.store(1u << (btn - 2));
-    }
+    // BOTH masks, unconditionally: this store IS the clear of the other family.
+    // Setting only one left the previous button asserted for the whole new hold
+    // whenever a second tap landed inside TAP_HOLD_FRAMES — that tap resets
+    // s_holdReleaseReq and s_holdFrames, so the deferred clear in
+    // beginFrameCompanionInput never fires, and the cancel gate there cannot
+    // catch it either (its X/Y term requires !mainHudRestored, and X/Y only
+    // exist in Functional, which IS mainHudRestored). Two taps inside 0.4s is
+    // ordinary play, and Functional publishes X/Y and I/II rects together.
+    s_padHoldMaskState.store(btn == 0 ? PAD_BUTTON_X : btn == 1 ? PAD_BUTTON_Y : 0u);
+    s_slotHoldMaskState.store(btn >= 2 ? (1u << (btn - 2)) : 0u);
 }
 
 // Finger lifted (or the gesture was cancelled): release the held button.
@@ -374,6 +373,12 @@ void handleSlotTap(int which) {
         setEquipMsg(150, "%s", txt(STR_NO_EQUIP_MENU));
         queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
         s_denyFlash[2 + which] = DENY_FLASH_FRAMES;
+        return;
+    }
+    // Mid-borrow this slot is holding Ooccoo for the map button, not the
+    // player's item — swallow the tap rather than firing her again or using
+    // whatever the borrow put there.
+    if (slotIsBorrowed(which)) {
         return;
     }
     const int bound = slotBinding(which);
@@ -492,6 +497,139 @@ bool handleCollectTouch(f32 tx, f32 ty) {
 }
 
 }  // namespace
+
+// "Is this drop a combo-or-replace question?" - a combo PARTNER landing on a
+// button that already carries the bow. Three sites ask it and must agree:
+// equipFromCompanion (raises the chooser), tryBowCombo (does the combining) and
+// drawComboChoice (self-cancels when it stops being true). Written out three
+// times, drift meant a chooser that could not resolve, or one that vanished
+// mid-decision.
+bool bowComboAmbiguous(int btn, u8 itemNo) {
+    const bool partner = itemNo == dItemNo_NORMAL_BOMB_e ||
+        itemNo == dItemNo_WATER_BOMB_e || itemNo == dItemNo_POKE_BOMB_e ||
+        itemNo == dItemNo_HAWK_EYE_e;
+    const bool btnHasBow = dComIfGs_getSelectItemIndex(btn) == SLOT_4 ||
+        dComIfGs_getMixItemIndex(btn) == SLOT_4;
+    return partner && btnHasBow;
+}
+
+// Ooccoo lives in SLOT_18 (item_func_DUNGEON_EXIT puts her there). Both her
+// forms count: Sr. warps out of a dungeon, Jr. warps back in, and the game
+// picks between them by which one is on a button — which is exactly why this
+// borrows a button rather than trying to invoke the action directly.
+static int ooccooSlot() {
+    const u8 item = dComIfGs_getItem(SLOT_18, false);
+    const bool isOoccoo =
+        item == dItemNo_DUNGEON_EXIT_e || item == dItemNo_DUNGEON_BACK_e;
+    return isOoccoo ? (int)SLOT_18 : -1;
+}
+
+// Prefer an EMPTY slot: then there is nothing to put back and the borrow is
+// invisible by construction rather than by masking. Failing that take II, on
+// the reasoning that a player who fills only one slot fills I first.
+static int pickOoccooBorrowSlot() {
+    for (int which = 1; which >= 0; which--) {
+        if (slotBinding(which) < 0) {
+            return which;
+        }
+    }
+    return 1;  // II
+}
+
+// Deliberately NOT gated on dComIfGs_isDungeonItemWarp(): that bit says Ooccoo
+// is findable in the current dungeon, which is not the same question. Holding
+// the item is the gate — DUNGEON_EXIT inside (Sr.), DUNGEON_BACK out in the
+// field (Jr.).
+//
+// Nor on dMeter2Draw_c::isItemUsable, the way handleSlotTap gates a slot press:
+// that bit is per-button and Link only raises it for a button that HAS a usable
+// item on it, so it reads false for exactly the empty slot this prefers to
+// borrow. Measured on the rig — usable2/usable3 were 0 for the whole run with
+// both slots empty. The rest of the refusals (mid-swim, boss room, the Lv7
+// shop, not on the ground) stay with the game, which already checks all of them
+// in checkItemProc: they cost a press that does nothing, and the borrow puts
+// itself back either way.
+bool ooccooQuickUseAvailable() {
+    return s_ooccooFrames < 0 && s_holdBtn < 0 && ooccooSlot() >= 0 &&
+           !companionWolf() && meterDraw() != NULL && !touchUseBlocked() &&
+           !dComIfGp_event_runCheck();
+}
+
+bool requestOoccooQuickUse() {
+    if (!ooccooQuickUseAvailable()) {
+        return false;
+    }
+    const int slot = ooccooSlot();
+    // Already on a companion slot? Press that one and borrow nothing. X/Y are
+    // deliberately excluded: their hold is cancelled every frame outside
+    // Functional mode (beginFrameCompanionInput), so a press there would
+    // silently do nothing in Cinematic.
+    for (int which = 0; which < 2; which++) {
+        if (slotBinding(which) == slot) {
+            s_ooccooFrames = 0;
+            s_ooccooHoldBtn = 2 + which;
+            beginHold(2 + which);
+            return true;
+        }
+    }
+    const int which = pickOoccooBorrowSlot();
+    s_ooccooBorrowWhich = which;
+    s_ooccooSavedBinding = slotBinding(which);
+    // The MIX too: setSlotBinding clears it, and a slot CAN carry a bow combo
+    // (equipFromCompanion's chooser is armed for the slot targets as well as
+    // X/Y, and sanitizeSlotBindings only dissolves a slot combo when the bow or
+    // its partner is also on X/Y). Restoring the select index alone destroyed
+    // the combo permanently.
+    s_ooccooSavedMix = dComIfGs_getMixItemIndex(2 + which);
+    s_ooccooFrames = 0;
+    s_ooccooHoldBtn = 2 + which;
+    setSlotBinding(which, slot);
+    beginHold(2 + which);
+    return true;
+}
+
+// Runs once per GAME frame beside the hold tick, so the press lasts exactly as
+// long as a real tap before the binding goes back. s_ooccooFrames < 0 means no
+// quick-use is in flight; a press with no borrow behind it (Ooccoo was already
+// on a slot) still runs through here, it just has nothing to put back.
+void tickOoccooQuickUse() {
+    if (s_ooccooFrames < 0) {
+        return;
+    }
+    s_ooccooFrames++;
+    if (s_ooccooFrames == TAP_HOLD_FRAMES) {
+        // Only if the quick-use still OWNS the hold. A tap on another button
+        // inside this window takes s_holdBtn over, and releasing it here would
+        // cut that press short. The binding restore below runs either way.
+        if (s_holdBtn == s_ooccooHoldBtn) {
+            releaseHold();
+        }
+        return;
+    }
+    // The restore has to wait for procDungeonWarpReadyInit, which reads
+    // checkItemSetButton(DUNGEON_EXIT) to choose between Sr. and Jr. — put the
+    // player's item back too early and it sees no Ooccoo on a button and
+    // spawns Jr. in a dungeon. That init retries until dComIfGp_event_compulsory
+    // grants, so wait for the event to actually be running rather than guessing
+    // a frame count. The hard cap covers a use the game refused outright (boss
+    // room, Lv7 shop), where no event ever starts.
+    constexpr int RESTORE_MARGIN = TAP_HOLD_FRAMES + 12;
+    constexpr int RESTORE_CAP = TAP_HOLD_FRAMES + 180;
+    if (s_ooccooFrames < RESTORE_MARGIN) {
+        return;
+    }
+    if (dComIfGp_event_runCheck() || s_ooccooFrames >= RESTORE_CAP) {
+        if (s_ooccooBorrowWhich != kOoccooBorrowNone) {
+            setSlotBinding(s_ooccooBorrowWhich, s_ooccooSavedBinding);
+            dComIfGs_setMixItemIndex(2 + s_ooccooBorrowWhich, (u8)s_ooccooSavedMix);
+            s_ooccooBorrowWhich = kOoccooBorrowNone;
+            s_ooccooSavedBinding = -1;
+            s_ooccooSavedMix = dItemNo_NONE_e;
+        }
+        s_ooccooFrames = -1;
+        s_ooccooHoldBtn = -1;
+    }
+}
 
 // Gear boxes mirror the pause menu's collection screen: two sword boxes
 // (Ordon, Master-that-upgrades-to-Light), two shield boxes (Ordon-or-Wooden,
@@ -797,6 +935,14 @@ void handleTouch(f32 w, f32 h) {
             // Warp and Floor are the left-column context tab now (handled
             // above, page-independent). Only the in-window Reset button
             // remains here.
+            // Ooccoo quick-use. One tap: her own two-choice message is the
+            // confirm step (see drawOoccooButton).
+            if (s_ooccooBtnRect[2] > s_ooccooBtnRect[0] && tx >= s_ooccooBtnRect[0] &&
+                tx <= s_ooccooBtnRect[2] && ty >= s_ooccooBtnRect[1] && ty <= s_ooccooBtnRect[3])
+            {
+                requestOoccooQuickUse();
+                return;
+            }
             // Reset-view button (mode-specific view state). Nothing snaps:
             // the glide (ticked on the MAP page in drawDashboard) eases the
             // view home; the dungeon's zoom/center ride its existing

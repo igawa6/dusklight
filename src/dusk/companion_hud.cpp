@@ -115,7 +115,6 @@ f32 drawOilGauge(f32 rightX, f32 cy) {
 }
 
 void drawHeartsRow(f32 x0, f32 x1) {
-    const int life = dComIfGs_getLife();          // quarter hearts
     const int maxHearts = dComIfGs_getMaxLife() / 5;  // max life counts in 5s
     if (maxHearts <= 0) {
         return;
@@ -222,8 +221,7 @@ void drawEquipTargets() {
         const f32 rx1 = s_dropRect[i][2];
         const f32 ry1 = s_dropRect[i][3];
         const f32 rh = ry1 - ry0;
-        const bool hot = s_dragging && s_dragX >= rx0 - 6.0f && s_dragX <= rx1 + 6.0f &&
-            s_dragY >= ry0 - 6.0f && s_dragY <= ry1 + 6.0f;
+        const bool hot = dragOverDropRect(i);
         fillRect(rx0 - 3.0f, ry0 - 3.0f, rx1 + 3.0f, ry1 + 3.0f,
             hot ? COL_DROP_HOT : l_dropBorder[i]);
         fillRect(rx0, ry0, rx1, ry1, l_dropBg[i]);
@@ -1009,11 +1007,7 @@ void drawComboChoice() {
     }
     const u8 itemNo =
         s_comboChoiceSlot >= 0 ? dComIfGs_getItem(s_comboChoiceSlot, false) : (u8)dItemNo_NONE_e;
-    const bool partner = itemNo == dItemNo_NORMAL_BOMB_e || itemNo == dItemNo_WATER_BOMB_e ||
-        itemNo == dItemNo_POKE_BOMB_e || itemNo == dItemNo_HAWK_EYE_e;
-    const bool btnHasBow = dComIfGs_getSelectItemIndex(s_comboChoiceBtn) == SLOT_4 ||
-        dComIfGs_getMixItemIndex(s_comboChoiceBtn) == SLOT_4;
-    if (!partner || !btnHasBow || anyMenuOpen()) {
+    if (!bowComboAmbiguous(s_comboChoiceBtn, itemNo) || anyMenuOpen()) {
         s_comboChoiceBtn = -1;
         return;
     }

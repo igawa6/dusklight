@@ -273,6 +273,41 @@ void drawMapResetButton(f32 x1, f32 y1, bool viewMoved) {
     s_mapResetRect[3] = y1 - 4.0f;
 }
 
+// Ooccoo quick-use, bottom LEFT inside the map window, mirroring the Reset
+// button opposite it. Drawn on both map kinds because both forms live in the
+// same slot: Sr. warps out of a dungeon, Jr. warps back in from the field.
+//
+// One tap. No confirm step here on purpose: both actors open with a two-choice
+// message (daObjTks_c / daNpcTkc_c getChoiceNo — Yes warps, No resets the event
+// and deletes the actor), so the game already asks. A confirm of our own would
+// make this the third yes, and would make the button stricter than pressing
+// Ooccoo on a real item button.
+void drawOoccooButton(f32 x0, f32 y1) {
+    if (!ooccooQuickUseAvailable()) {
+        s_ooccooBtnRect[2] = s_ooccooBtnRect[0];  // hidden
+        return;
+    }
+    // Wider than the Reset plate opposite it: "Ooccoo Jr." has to fit without
+    // being ellipsized down to "Ooccoo J...". They sit at opposite ends of the
+    // same row, so the width difference does not read as misalignment.
+    constexpr f32 W = 84.0f;
+    drawTabPlate(x0 + 4.0f, y1 - 30.0f, W, 26.0f, false);
+    // The INVENTORY icon, not the dmap portrait: ni_obacyan.bti is the same
+    // texture for BOTH forms in the dmap icon table, so it cannot tell Sr. from
+    // Jr. at all. The item icons can — item_resource gives 0x25 texture 0x28
+    // and 0x27 texture 0x26 — and they live in the item archive, which is
+    // mounted out in the field too, where the dmap archive is not.
+    const u8 item = dComIfGs_getItem(SLOT_18, false);
+    const bool jr = item == dItemNo_DUNGEON_BACK_e;
+    drawItemIcon(ICON_SLOT_OOCCOO, item, x0 + 7.0f, y1 - 27.0f, 20.0f);
+    drawTextFittedCentered(x0 + 56.0f, y1 - 12.0f, 12.0f, 8.0f, 50.0f, TEXT_DIM,
+        txt(jr ? STR_OOCCOO_JR : STR_OOCCOO));
+    s_ooccooBtnRect[0] = x0 + 4.0f;
+    s_ooccooBtnRect[1] = y1 - 30.0f;
+    s_ooccooBtnRect[2] = x0 + 4.0f + W;
+    s_ooccooBtnRect[3] = y1 - 4.0f;
+}
+
 // Steer the live map render with the finger drag, then keep the shifted
 // render-window center inside the stage's map-path bounds.
 void miniMapApplyPan(dMap_c* map, f32 drawW, f32 drawH) {
@@ -937,11 +972,7 @@ void drawFloorColumn(f32 tx0, f32 ty0, f32 tx1, f32 ty1, f32 clampY0, f32 clampY
         }
     }
 
-    constexpr GXColor COL_TAB_SCRIM = {18, 17, 14, 122};
     constexpr GXColor COL_BED = {24, 24, 22, 248};
-    constexpr GXColor COL_FRAME = {108, 102, 90, 255};
-    constexpr GXColor COL_HERE = {233, 206, 142, 255};
-    constexpr u32 TEXT_LOCKED = 0x6E685AFFu;
     // The bed grows with the list — this is the "bleed" behind the column,
     // chamfered on the left like the panels it sits among.
     // Cover the ENTIRE left column while the picker is up: the panels behind
@@ -1350,6 +1381,7 @@ void drawMapContent(f32 x0, f32 y0, f32 x1, f32 y1) {
     // In dungeons the live floor map replaces the minimap crop.
     if (s_dmapAvailable) {
         if (drawDungeonMapContent(x0, y0, x1, y1)) {
+            drawOoccooButton(x0, y1);
             drawMapNamePlate(x0, y0);
         } else {
             // Either the companion yielded because the game's own dungeon
@@ -1363,6 +1395,7 @@ void drawMapContent(f32 x0, f32 y0, f32 x1, f32 y1) {
             s_dmapFloorRectCount = 0;
             s_dmapFloorPickOpen = false;
             s_mapResetRect[2] = s_mapResetRect[0];          // hidden
+            s_ooccooBtnRect[2] = s_ooccooBtnRect[0];        // hidden
             // Nothing consumed the gestures this frame — drop them so they
             // don't burst into the view once it appears.
             s_mapPanX = 0.0f;
@@ -1373,6 +1406,9 @@ void drawMapContent(f32 x0, f32 y0, f32 x1, f32 y1) {
         return;
     }
     drawMiniMapContent(x0, y0, x1, y1);
+    // Jr. lives out here: once Sr. has warped the player out of a dungeon the
+    // return item is what SLOT_18 holds, so the overworld map offers it too.
+    drawOoccooButton(x0, y1);
     drawMapNamePlate(x0, y0);
     drawMapCaption(x0, y1);
     // Overworld minimap has no floors: the context tab shows Warp, not Floor.

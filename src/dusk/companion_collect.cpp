@@ -226,7 +226,10 @@ void drawCounterGrid(f32 x0, f32 x1, f32 rowY, f32 rowH, f32 rowGap) {
         }
         }
         drawText(ix + icon + textPad, cy + rowH * 0.5f + 5.0f, 14.0f, TEXT_MAIN, "%s", text);
-        if (rectIdx >= 0) {
+        // Not while the section zoom is travelling: cx/cy here are the
+        // interpolated underlay geometry, so a second tap during the ~170ms
+        // animation re-opened whichever cell had drifted under the finger.
+        if (rectIdx >= 0 && !collectZoomActive()) {
             s_collectIconRects[rectIdx][0] = cx;
             s_collectIconRects[rectIdx][1] = cy;
             s_collectIconRects[rectIdx][2] = cx + cellW;
@@ -427,7 +430,7 @@ void pushReaderRect(f32 x0, f32 y0, f32 x1, f32 y1, int id) {
     // stops the underlay's rows eating the 12-rect budget and silently
     // dropping the detail's own "< Back". The page transition guards the same
     // way via s_pageSliding.
-    if (readerZoomActive()) {
+    if (readerZoomActive() || collectZoomActive()) {
         return;
     }
     if (s_readerRectCount >= 12) {
@@ -1001,7 +1004,12 @@ int sortedLetters(int* o_idxs) {
     int count = 0;
     for (int i = 0; i < n && count < 64; i++) {
         const int v = (int)dComIfGs_getGetNumber(n - i - 1);
-        if (v > 0) {
+        // The RANGE matters, not just the count: v comes from save data and
+        // every consumer uses the returned value to index 64-entry caches
+        // (subj/from/cached/tries/wait in drawLettersContent). Bounding the
+        // loop alone left a corrupt or unexpected order table writing past
+        // them. The fallback below is index-generated and always in range.
+        if (v > 0 && v - 1 < 64) {
             o_idxs[count++] = v - 1;
         }
     }
@@ -1076,10 +1084,16 @@ void drawLettersList(f32 x0, f32 y0, f32 x1, f32 y1) {
     static char subj[64][80];
     static char from[64][48];
     static bool cached[64];
+    static u8 tries[64];
+    static u8 wait[64];
     static int cachedCount = -1;
-    if (cachedCount != n) {
+    static u32 cachedGen = 0;
+    if (cachedCount != n || cachedGen != s_lettersCacheGen) {
         cachedCount = n;
+        cachedGen = s_lettersCacheGen;
         memset(cached, 0, sizeof(cached));
+        memset(tries, 0, sizeof(tries));
+        memset(wait, 0, sizeof(wait));
     }
     if (s_nativeW != 0) {
         setWinScissor(x0, y0, x1, y0 + viewH);
@@ -1093,17 +1107,37 @@ void drawLettersList(f32 x0, f32 y0, f32 x1, f32 y1) {
             continue;
         }
         const int li = idxs[i];
+        // Latch on SUCCESS, not on attempt. dMeter2Info_c::getStringFull returns
+        // an EMPTY buffer when the message resource is not resident yet — which
+        // it routinely is not for the first frames after a stage load — and
+        // marking the row cached before looking meant a row first drawn in that
+        // window stayed blank for the rest of the session.
+        //
+        // Bounded, though: a legitimately empty subject would otherwise rescan
+        // the whole .bmg every frame forever. Same shape as the interning in
+        // companion_gfx.cpp, which exists because three sites had that bug.
         if (!cached[li]) {
-            cached[li] = true;
-            subj[li][0] = 0;
-            from[li][0] = 0;
-            dMeter2Info_getStringFull(dMenu_Letter::getLetterSubject(li), subj[li],
-                sizeof(subj[0]));
-            char sender[40];
-            sender[0] = 0;
-            dMeter2Info_getStringFull(dMenu_Letter::getLetterName(li), sender, sizeof(sender));
-            if (sender[0] != 0) {
-                snprintf(from[li], sizeof(from[0]), "%s", sender);
+            constexpr u8 FETCH_TRIES = 8;
+            constexpr u8 RETRY_GAP = 20;  // draws between attempts
+            if (wait[li] > 0) {
+                wait[li]--;
+            } else {
+                subj[li][0] = 0;
+                from[li][0] = 0;
+                dMeter2Info_getStringFull(dMenu_Letter::getLetterSubject(li), subj[li],
+                    sizeof(subj[0]));
+                char sender[40];
+                sender[0] = 0;
+                dMeter2Info_getStringFull(dMenu_Letter::getLetterName(li), sender,
+                    sizeof(sender));
+                if (sender[0] != 0) {
+                    snprintf(from[li], sizeof(from[0]), "%s", sender);
+                }
+                if (subj[li][0] != 0 || ++tries[li] >= FETCH_TRIES) {
+                    cached[li] = true;  // got it, or gave up
+                } else {
+                    wait[li] = RETRY_GAP;
+                }
             }
         }
         drawMenuBox(x0, ry, rx1, ry + rowH, li == s_collectSel ? 0x5A4A2AFFu : CELL_RGBA);
@@ -1201,6 +1235,14 @@ void readerDrawBodyLine(int idx, f32 x, f32 y, f32 ts, u32 rgba) {
 
 void readerInvalidate() {
     s_fetchedSel = -2;
+}
+
+// drawLettersContent's subject/sender caches are keyed on letter COUNT alone,
+// so they survive a file change whenever the two files hold the same number of
+// letters. This is the hook that drops them; the statics themselves live in
+// that function, so the count sentinel is what gets poisoned.
+void lettersInvalidate() {
+    s_lettersCacheGen++;
 }
 
 u32 readerBodyGen() {

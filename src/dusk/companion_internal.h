@@ -77,7 +77,8 @@ constexpr int ICON_SLOT_RUPEE = ICON_SLOT_LETTER + 1;  // Functional left column
 constexpr int ICON_SLOT_BUGPROG = ICON_SLOT_RUPEE + 1;  // left-column progress page
 constexpr int ICON_SLOT_FN1 = ICON_SLOT_BUGPROG + 1;  // I / II corner slot items
 constexpr int ICON_SLOT_FN2 = ICON_SLOT_FN1 + 1;
-constexpr int ICON_SLOT_COUNT = ICON_SLOT_FN2 + 1;
+constexpr int ICON_SLOT_OOCCOO = ICON_SLOT_FN2 + 1;  // map quick-use button
+constexpr int ICON_SLOT_COUNT = ICON_SLOT_OOCCOO + 1;
 
 // Collect-archive icon slots (clctres BTIs): 0 fish journal, 1 skills
 // scroll, 2 letter, 3-7 scents (medicine/children/fish/iria/poe), 8
@@ -276,11 +277,6 @@ constexpr f32 FN_LEFT_GAP = 8.0f;      // between the three zones
 constexpr f32 FN_RUPEE_H = 44.0f;      // rupee row: gem then its counter
 constexpr f32 FN_CTXTAB_H = 44.0f;     // middle context-tab height
 constexpr f32 FN_DUNGEON_H = 104.0f;   // dungeon 2x2 box, bottom-anchored
-// COLLECT page sub-tabs (All/Bugs/Fish/Skills/Mail).
-constexpr int COLLECT_TAB_COUNT = 5;
-// Gap between the COLLECT sub-tab plates (shared by draw and touch).
-constexpr f32 CTAB_GAP = 10.0f;
-constexpr f32 CTAB_H = 40.0f;  // sub-tab strip height (plate = CTAB_H - 4)
 
 // ---------------------------------------------------------------------------
 // Shared state (defined in companion.cpp — see the "Shared state" block).
@@ -331,6 +327,18 @@ constexpr int DROP_TARGET_SLOT1 = 2;
 extern bool s_dropRectValid;
 extern f32 s_dropRect[DROP_TARGET_COUNT][4];  // x0, y0, x1, y1
 
+// One grab margin for the equip drop targets, and one test that uses it.
+// dropTargetAt is the TRUTH — it decides where a release actually equips — so
+// the highlights have to agree with it exactly. They did not: the Cinematic
+// highlight used 6.0f against dropTargetAt's 8.0f, leaving a 2px band around
+// every target where a drop silently succeeded with no gold feedback.
+constexpr f32 DROP_GRAB = 8.0f;
+inline bool dragOverDropRect(int i) {
+    return s_dragging && s_dropRect[i][2] > s_dropRect[i][0] &&
+        s_dragX >= s_dropRect[i][0] - DROP_GRAB && s_dragX <= s_dropRect[i][2] + DROP_GRAB &&
+        s_dragY >= s_dropRect[i][1] - DROP_GRAB && s_dragY <= s_dropRect[i][3] + DROP_GRAB;
+}
+
 // Wolf/human quick-transform button above the d-pad. Rect published by the
 // dashboard draw (w == 0 when hidden); a tap sets the request, consumed on
 // the game frame loop (f_ap_game) where starting the transform is safe.
@@ -343,6 +351,24 @@ extern std::atomic<bool> s_transformReq;
 extern f32 s_zBtnRect[4];
 extern std::atomic<bool> s_zPressReq;
 extern f32 s_slotBtnRect[2][4];  // [0] = I, [1] = II
+
+// Ooccoo quick-use borrows an I/II binding for the length of one press. These
+// keep that invisible: drawing and equip logic ask for the DISPLAY binding,
+// which is the player's own item throughout.
+constexpr int kOoccooBorrowNone = -1;
+extern int s_ooccooBorrowWhich;   // 0 = I, 1 = II, or kOoccooBorrowNone
+extern int s_ooccooSavedBinding;  // what the player had bound there
+extern int s_ooccooSavedMix;      // and its combo partner, if it had one
+extern int s_ooccooHoldBtn;       // button the quick-use pressed, -1 when idle
+extern int s_ooccooFrames;
+bool slotIsBorrowed(int i_which);
+int slotDisplayBinding(int i_which);
+bool ooccooQuickUseAvailable();
+bool requestOoccooQuickUse();
+void tickOoccooQuickUse();
+
+// Ooccoo quick-use button on the map: rect for hit tests, empty when hidden.
+extern f32 s_ooccooBtnRect[4];
 // Round X/Y buttons' touch rects (tap-to-use; Functional only).
 extern f32 s_fnXYRect[2][4];
 
@@ -391,7 +417,9 @@ extern bool s_readerZoomClosing;
 extern f32 s_readerZoomFrom[4];
 bool readerZoomStep(f32* io_x0, f32* io_y0, f32* io_x1, f32* io_y1);
 f32 readerZoomProgress();
+bool bowComboAmbiguous(int btn, u8 itemNo);
 bool readerZoomActive();
+bool collectZoomActive();
 void readerZoomOpenFrom(f32 x0, f32 y0, f32 x1, f32 y1);
 // Drag-ghost feel. s_ghostPop: pickup pop (ghost starts 15% large, eases
 // down; set to 1 when a drag engages). s_ghostFly*: after release, the
@@ -622,6 +650,9 @@ void readerWrapBody(const char* body, f32 width, f32 ts);
 int readerBodyLineCount();
 void readerDrawBodyLine(int idx, f32 x, f32 y, f32 ts, u32 rgba);
 void readerInvalidate();
+// Bumped to drop drawLettersContent's count-keyed subject/sender caches.
+extern u32 s_lettersCacheGen;
+void lettersInvalidate();
 // Bumped whenever the shared body buffer is rewrapped — callers caching
 // their own fetch must refetch when it moves on without them.
 u32 readerBodyGen();
@@ -843,6 +874,8 @@ int fitPrefix(f32 size, f32 maxW, const char* text);
 void drawTextFittedCentered(f32 cx, f32 y, f32 size, f32 minSize, f32 maxW, u32 rgba,
     const char* text);
 void drawTimg(const ResTIMG* timg, f32 x, f32 y, f32 w, f32 h, u8 alpha);
+// Call before freeing any ResTIMG that may have been drawn (see the definition).
+void gfxForgetTimgLatch();
 void drawTimgRotated(const ResTIMG* timg, f32 cx, f32 cy, f32 size, f32 angleDeg, u8 alpha);
 // Rotated draw with an explicit w x h box (for art stored sideways).
 void drawTimgRotatedRect(const ResTIMG* timg, f32 cx, f32 cy, f32 w, f32 h, f32 angleDeg,

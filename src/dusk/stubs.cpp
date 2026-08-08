@@ -908,7 +908,11 @@ void AIInit(u8* stack) {
     // In a real scenario, it would set up the audio interface and prepare it for use.
 }
 
-void AIInitDMA(u32 start_addr, u32 length) {
+// uintptr_t, not u32: upstream aurora widened this on TARGET_PC so a 64-bit
+// host address survives the call (dolphin/ai.h guards the two spellings). The
+// stub has to match that declaration or it defines a different symbol and
+// JASAiCtrl's caller goes unresolved at link time.
+void AIInitDMA(uintptr_t start_addr, u32 length) {
     STUB_LOG();
 }
 

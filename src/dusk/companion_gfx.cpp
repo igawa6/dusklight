@@ -449,11 +449,35 @@ void drawChamferPlate(f32 x0, f32 y0, f32 x1, f32 y1, f32 ch, bool selected, int
     const f32 ox = x0 - (ow - bw) * 0.5f;
     const f32 oy = y0 - (oh - bh) * 0.5f;
 
+    // A band whose two corners are BOTH unmasked is a plain rectangle, so the
+    // per-row loop below would emit `ch` identical full-width one-row strips
+    // for it — each one a textured draw plus a scissor change. cornerMask 0 is
+    // the worst case and is on two per-frame callers (the Cinematic context
+    // tab and kOverlayRow, both ch=12): 25 draws collapse to 1. An open floor
+    // picker in a tall dungeon was costing up to 325 of them per frame.
+    // (These bands tile exactly with the middle one at y0+ch / y1-ch. With the
+    // integer ch every caller passes, that is the same coverage the loop
+    // produced; a fractional ch would additionally close a sub-pixel hairline
+    // the loop left, since it steps only (int)ch rows.)
+    const bool topSquare = (cornerMask & (1 | 2)) == 0;
+    const bool botSquare = (cornerMask & (4 | 8)) == 0;
+    if (topSquare && botSquare) {
+        plateStrip(plate, ox, oy, ow, oh, x0, y0, x1, y1, alpha, black, white);
+        applyWinClip();
+        return;
+    }
+
     // Middle band: full width. Then the chamfered ends as horizontal strips
     // whose width follows the diagonal — the union of scissor rects is the
     // octagon, so the plate shows through it and nothing else.
     plateStrip(plate, ox, oy, ow, oh, x0, y0 + ch, x1, y1 - ch, alpha, black, white);
-    const int steps = (int)ch;
+    if (topSquare) {
+        plateStrip(plate, ox, oy, ow, oh, x0, y0, x1, y0 + ch, alpha, black, white);
+    }
+    if (botSquare) {
+        plateStrip(plate, ox, oy, ow, oh, x0, y1 - ch, x1, y1, alpha, black, white);
+    }
+    const int steps = (topSquare && botSquare) ? 0 : (int)ch;
     for (int i = 0; i < steps; i++) {
         const f32 t0 = (f32)i;
         // Inset at the strip's TOP edge. Biasing to the bottom edge instead
@@ -467,10 +491,14 @@ void drawChamferPlate(f32 x0, f32 y0, f32 x1, f32 y1, f32 ch, bool selected, int
         const f32 topR = (cornerMask & 2) ? x1 - inset : x1;
         const f32 botL = (cornerMask & 8) ? x0 + inset : x0;
         const f32 botR = (cornerMask & 4) ? x1 - inset : x1;
-        plateStrip(plate, ox, oy, ow, oh, topL, y0 + t0, topR, y0 + t0 + 1.0f, alpha, black,
-            white);
-        plateStrip(plate, ox, oy, ow, oh, botL, y1 - t0 - 1.0f, botR, y1 - t0, alpha, black,
-            white);
+        if (!topSquare) {
+            plateStrip(plate, ox, oy, ow, oh, topL, y0 + t0, topR, y0 + t0 + 1.0f, alpha, black,
+                white);
+        }
+        if (!botSquare) {
+            plateStrip(plate, ox, oy, ow, oh, botL, y1 - t0 - 1.0f, botR, y1 - t0, alpha, black,
+                white);
+        }
     }
     applyWinClip();  // restores the window clip mid-page, full screen otherwise
 }
@@ -823,6 +851,20 @@ void drawTextCentered(f32 cx, f32 y, f32 size, u32 rgba, const char* text) {
 
 // Draw a texture through J2DPicture (JUTTexture handles palettes and EFB-copy
 // formats), reusing one picture object with changeTexture (no reallocation).
+// Drop the retexture latch. drawTimg and its eight siblings all skip
+// changeTexture when the incoming pointer equals s_lastTimg, so freeing a blob
+// whose address a later allocation reuses would draw the OLD picture — and if
+// aurora has since dropped that texobj from its cache, re-upload
+// old_w * old_h * 4 bytes out of a possibly-smaller blob. Anyone freeing a
+// ResTIMG that may have been drawn calls this first.
+//
+// Unconditional rather than pointer-matched on purpose: there is one latch
+// shared by all nine sites, so clearing it outright cannot miss an entry and
+// cannot be forgotten at a new free site. It costs one extra changeTexture.
+void gfxForgetTimgLatch() {
+    s_lastTimg = NULL;
+}
+
 void drawTimg(const ResTIMG* timg, f32 x, f32 y, f32 w, f32 h, u8 alpha) {
     if (timg == NULL || timg->width == 0 || timg->height == 0) {
         return;

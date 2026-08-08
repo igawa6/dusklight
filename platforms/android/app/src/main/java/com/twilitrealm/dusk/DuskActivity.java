@@ -33,6 +33,7 @@ import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 
+import dev.encounter.aurora.AuroraSurface;
 import org.libsdl.app.SDLActivity;
 import org.libsdl.app.SDLSurface;
 
@@ -810,7 +811,17 @@ public class DuskActivity extends SDLActivity {
         });
     }
 
-    private static final class DuskSurface extends SDLSurface {
+    // Extends AuroraSurface, not SDLSurface directly: AuroraSurface overrides the
+    // three surface callbacks to tell the native side when the surface is safe
+    // to draw into (nativeSetSurfaceReady). That signalling used to be patched
+    // straight into SDL's own SDLSurface.java, which meant carrying a modified
+    // copy of an upstream SDL file plus a matching JNI export inside aurora.
+    // Subclassing keeps SDL's Java stock and uses the hook aurora already ships.
+    //
+    // surfaceChanged below calls super FIRST, so AuroraSurface's ready/not-ready
+    // bracketing runs before the frame-rate request, which needs mIsSurfaceReady
+    // to already be settled.
+    private static final class DuskSurface extends AuroraSurface {
         private float preferredFrameRate = DEFAULT_SURFACE_FRAME_RATE;
 
         DuskSurface(Context context) {

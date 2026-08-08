@@ -444,6 +444,14 @@ bool readerZoomActive() {
     return s_readerZoomT < 1.0f && s_readerZoomFrom[2] > s_readerZoomFrom[0];
 }
 
+// Same question for the COLLECT library -> section zoom. Both the overview
+// underneath and the arriving section are drawn at INTERPOLATED geometry while
+// this runs, so anything they publish points at a travelling position — a tap
+// lands on whatever happens to be passing under the finger.
+bool collectZoomActive() {
+    return s_collectZoomT < 1.0f && s_collectZoomFrom[2] > s_collectZoomFrom[0];
+}
+
 bool readerZoomStep(f32* io_x0, f32* io_y0, f32* io_x1, f32* io_y1) {
     if (s_readerZoomClosing) {
         s_readerZoomT *= ANIM_DECAY_FAST;
@@ -734,6 +742,33 @@ unsigned slotHoldBits() {
 int slotBinding(int i_which) {
     const u8 idx = dComIfGs_getSelectItemIndex(2 + i_which);
     return idx < MAX_ITEM_SLOTS ? (int)idx : -1;
+}
+
+// Ooccoo quick-use borrows one of these bindings for the ~30 frames it takes
+// the press to reach Link, then puts it back. The player must never see that:
+// the HUD keeps drawing whatever they had bound, and equip logic keeps treating
+// the slot as still holding it. Only the game's own item-button poll sees the
+// borrowed value, which is the entire point — routing the press through the
+// normal item path is what sets mSelectItemId before the proc starts, and
+// calling the proc directly without it segfaults a few seconds later.
+int s_ooccooBorrowWhich = kOoccooBorrowNone;  // 0 = I, 1 = II
+int s_ooccooSavedBinding = -1;                // what the player had there
+int s_ooccooSavedMix = dItemNo_NONE_e;        // ...including its combo partner
+int s_ooccooHoldBtn = -1;                     // the button the quick-use pressed
+u32 s_lettersCacheGen = 0;
+int s_ooccooFrames = -1;  // -1 = no quick-use in flight
+f32 s_ooccooBtnRect[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+
+bool slotIsBorrowed(int i_which) {
+    return i_which >= 0 && s_ooccooBorrowWhich == i_which;
+}
+
+// What the slot should LOOK like: the player's item, borrowed or not.
+int slotDisplayBinding(int i_which) {
+    if (slotIsBorrowed(i_which)) {
+        return s_ooccooSavedBinding;
+    }
+    return slotBinding(i_which);
 }
 
 void setSlotBinding(int i_which, int i_slot) {
@@ -1092,6 +1127,44 @@ void cancelReadersOnDamage() {
     }
 }
 
+// Quit-to-title / game-over / file-select. The companion is not torn down
+// across that, so whatever was open stays open — and its CONTENT is keyed on
+// things that do not survive the change: the reader's fetched text, and the
+// letter caches keyed only on letter COUNT, which happily show file A's
+// subjects for file B when the counts happen to match.
+//
+// Mirrors cancelReadersOnDamage, including the two animation fields it clears:
+// dropping s_collectTab with a zoom in flight strands the animation the same
+// way the Cinematic branch has to unstick s_dmapFloorPickT.
+void resetCompanionOnLeaveGameplay() {
+    static bool sPrevLeft = false;
+    const bool left = dualscreen::leftGameplay();
+    if (left && !sPrevLeft) {  // rising edge only
+        s_readerSel = -1;
+        s_readerTapCand = -1;
+        s_scrollBody = 0.0f;
+        s_collectTab.store(0);
+        s_collectSel = -1;
+        s_scrollSkills = 0.0f;
+        s_scrollMail = 0.0f;
+        s_collectZoomT = 1.0f;
+        s_collectZoomClosing = false;
+        s_collectZoomFrom[0] = 0.0f;
+        s_collectZoomFrom[2] = 0.0f;
+        s_readerZoomT = 1.0f;
+        s_readerZoomClosing = false;
+        s_itemInfoSlot = -1;
+        s_scrollItemInfo = 0.0f;
+        s_selSlot = -1;
+        readerInvalidate();
+        lettersInvalidate();
+        if (guideIsOpen()) {
+            guideClose();
+        }
+    }
+    sPrevLeft = left;
+}
+
 // Reconcile the slot bindings with the save and the item wheel.
 void sanitizeSlotBindings() {
     // Save hygiene: retail (and pre-guard PC builds) park the learned
@@ -1111,6 +1184,12 @@ void sanitizeSlotBindings() {
     // — an item lives in exactly one place. A slot whose combo PARTNER moved
     // to X/Y dissolves just the combo and keeps its own item.
     for (int s = 2; s < 4; s++) {
+        // A borrowed slot is holding Ooccoo for a frame or two on the map
+        // button's behalf. If she is also on X/Y the rule below would dissolve
+        // it mid-press — leave the borrow alone; it puts itself back.
+        if (slotIsBorrowed(s - 2)) {
+            continue;
+        }
         const u8 xySel[4] = {dComIfGs_getSelectItemIndex(0), dComIfGs_getSelectItemIndex(1),
             dComIfGs_getMixItemIndex(0), dComIfGs_getMixItemIndex(1)};
         auto onXY = [&xySel](u8 idx) {
@@ -1129,6 +1208,7 @@ void sanitizeSlotBindings() {
 
 void beginFrameCompanionInput() {
     s_warpToggleLive = s_warpToggleReq.exchange(false);
+    tickOoccooQuickUse();
 
     // Touch item buttons, ticked at the GAME frame rate (the pad's rate).
     // A menu opening (full gate: the wheel and the item-explain window
@@ -1208,6 +1288,7 @@ void beginFrameCompanionInput() {
 
     tickGaugeWarning();
     cancelReadersOnDamage();
+    resetCompanionOnLeaveGameplay();
     sanitizeSlotBindings();
 }
 
@@ -1620,6 +1701,12 @@ void drawDashboard(float w, float h) {
     s_ctxTabRect[2] = 0.0f;
     s_zBtnRect[0] = 0.0f;
     s_zBtnRect[2] = 0.0f;
+    // The left info box publishes its rect from drawLeftInfoBox, which only
+    // runs in Functional. Left uncleared it stayed hit-testable in Cinematic
+    // over a ~78x104 band INSIDE the content window, swallowing COLLECT rows
+    // and the MAP page's Ooccoo and Reset buttons for the rest of the session.
+    s_leftBoxRect[0] = 0.0f;
+    s_leftBoxRect[2] = 0.0f;
     for (int i = 0; i < 2; i++) {
         s_slotBtnRect[i][0] = 0.0f;
         s_slotBtnRect[i][2] = 0.0f;
