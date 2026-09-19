@@ -1,11 +1,12 @@
 # Phone-as-Companion-Screen: Design Sketch
 
-**Status: phases 1 (capture → encode → push) and 3 (touch input) built and
-verified end-to-end on Linux; QR pairing and DPI loosening not started.**
-This documents a feasibility sketch for letting a phone act as a
-network-connected companion ("bottom screen") display for desktop
-(Windows/Linux/macOS) dusklight, paired by QR code, mirroring what the AYN
-Thor already gets for free from having two physical displays on one device.
+**Status: phases 1 (capture → encode → push), 2 (QR pairing), and 3 (touch
+input) built and verified end-to-end on Linux; DPI-clamp loosening and
+gamepad passthrough not started.** This documents a feasibility sketch for
+letting a phone act as a network-connected companion ("bottom screen")
+display for desktop (Windows/Linux/macOS) dusklight, paired by QR code,
+mirroring what the AYN Thor already gets for free from having two physical
+displays on one device.
 
 Not a commitment to build this — written to have a concrete plan to work
 from if/when it's picked up, and so the open questions are visible up front
@@ -310,14 +311,69 @@ unclear yet whether that's a real minimum-hold requirement in the
 companion's gesture code or a fluke; worth a proper look before relying on
 timing assumptions for phase 5's gamepad-as-synthetic-gestures idea).
 
+## Phase 2 results (built and verified) — QR pairing
+
+New dependency, as expected (the library research called this one): vendored
+[Nayuki's QR-Code-generator](https://github.com/nayuki/QR-Code-generator)
+(C version, single `.c`/`.h` pair, MIT-ish license) via `FetchContent`,
+gated the same way as the pre-existing `DUSK_ENABLE_OPUS` option — and while
+implementing that, **promoted `DUSK_PHONE_SPIKE` from a header `#define` to
+a real CMake `option()`** (`-DDUSK_PHONE_SPIKE=ON`), matching the
+`DUSK_ENABLE_OPUS` pattern exactly. Strictly better than what Phases 1/3
+had: no more hand-editing `dualscreen.h` and rebuilding to toggle it.
+
+New files: `phone_spike_pairing.{h,cpp}` — `generate_token()` (8 random
+bytes from `/dev/urandom`, hex-encoded), `discover_lan_ip()`
+(`getifaddrs()`, first non-loopback UP IPv4), `write_pairing_qr()` (encodes
+via `qrcodegen_encodeText()`, rasterizes the module matrix by hand into an
+RGBA bitmap with the QR spec's minimum 4-module quiet zone, encodes via the
+**same miniz PNG writer already used twice elsewhere in this codebase** —
+no second image dependency), and `start_pairing()` tying it together. Token
+is checked in `phone_spike_ws.cpp`'s WS-upgrade handler only (the plain
+HTML GET stays unauthenticated on purpose — it's static and harmless; a
+live session that can read frames and inject input is the actual boundary).
+The test page now forwards its own URL's `?token=...` straight into its
+WebSocket connection via `location.search`.
+
+**Verified with a real, independent decoder, not just "produces a PNG":**
+installed `opencv-python-headless` and decoded the generated QR with
+`cv2.QRCodeDetector()` — it read back the exact pairing URL byte-for-byte.
+Then verified the token gate itself with three real connection attempts: no
+token → HTTP 403, wrong token → HTTP 403, correct (decoded) token →
+connects and a full frame+touch round trip works. Confirmed the process
+survives a disconnect afterward (the Phase 3 SIGPIPE fix holding under this
+new code path too) and that rejected connection attempts themselves don't
+destabilize anything.
+
+**Real-world finding, not hypothetical:** on this dev box (which has both a
+normal LAN interface and a Tailscale VPN interface), `discover_lan_ip()`
+picked the **Tailscale interface** (a `100.x.x.x` CGNAT address), not the
+"real" LAN one — `getifaddrs()`'s interface ordering isn't something this
+code controls or filters for. Exactly the multi-NIC caveat already flagged
+in this doc's own header comment, now demonstrated rather than assumed. A
+real implementation needs either a better heuristic (prefer RFC 1918
+ranges, skip known VPN interface name patterns) or a way for the user to
+pick if more than one candidate exists — not solved here.
+
+**Not yet done:** single-use/token-rotation policy (the token is valid for
+the whole server lifetime right now, not invalidated after first use, which
+the earlier "Pairing" section above originally sketched); in-game display of
+the QR (it's a PNG on disk, not drawn into any UI yet — there is no
+Settings/dual-screen-setup screen surface for it in this repo to hang it off
+of without a larger UI task); and, as before, a real phone camera actually
+scanning it end-to-end (verified the QR decodes correctly and the pairing
+mechanics work, but the full "point a phone camera at a screen and have it
+open a browser" loop wasn't physically exercised).
+
 ## Suggested phasing
 
 1. ~~**Spike:** headless aux_window target + WS server + raw frame push to
    a phone browser, no input, no QR (manual URL entry). Confirms the
    capture/encode/push loop and gets a real latency number.~~ **Done — see
    Phase 1 results above.**
-2. **Add QR pairing** (token handshake, LAN IP discovery/display). Still
-   open — done after input instead of before, see Phase 3 results.
+2. ~~**Add QR pairing** (token handshake, LAN IP discovery/display).~~
+   **Done — see Phase 2 results above** (done after input instead of
+   before, per the Phase 3 reasoning).
 3. ~~**Add touch input** (`companion::touchEvent` wiring, since this is
    also the first time desktop gets *any* aux_window input path).~~ **Done
    — see Phase 3 results above.**

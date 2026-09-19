@@ -24,6 +24,7 @@
 #include "miniz.h"
 
 #if DUSK_PHONE_SPIKE
+#include "dusk/phone_spike_pairing.h"
 #include "dusk/phone_spike_ws.h"
 
 #include <chrono>
@@ -294,6 +295,10 @@ static void pollScreenshot() {
 static void pollAndPushSpikeFrame() {
     if (!s_spikeServerStarted) {
         s_spikeServerStarted = phone_spike::start_server(kSpikePort);
+        if (s_spikeServerStarted) {
+            const std::string qrPath = (data::configured_data_path() / "phone-pairing-qr.png").string();
+            phone_spike::start_pairing(kSpikePort, qrPath);
+        }
     }
 
     if (s_spikeCaptureArmed) {

@@ -10,6 +10,7 @@
 
 #include "dusk/companion.h"
 #include "dusk/logging.h"
+#include "dusk/phone_spike_pairing.h"
 #include "dusk/phone_spike_sha1.h"
 
 #include <nlohmann/json.hpp>
@@ -52,7 +53,9 @@ constexpr std::string_view kTestPage = R"HTML(<!DOCTYPE html>
 const stats = document.getElementById('stats');
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
-const ws = new WebSocket(`ws://${location.host}/`);
+// Carries the pairing token from the page's own URL (set by whatever
+// scanned the QR code) straight into the WS upgrade request's query string.
+const ws = new WebSocket(`ws://${location.host}/${location.search}`);
 ws.binaryType = 'arraybuffer';
 let lastFrameAt = 0;
 let intervals = [];
@@ -170,6 +173,36 @@ std::string find_header(const std::string& request, std::string_view name) {
             }
         }
         pos = lineEnd + 2;
+    }
+    return {};
+}
+
+// Pulls a query-string parameter out of the request LINE ("GET
+// /?token=abc HTTP/1.1" -> "abc" for name="token"). No URL-decoding — the
+// only value this ever needs to read is a hex token this same server
+// generated, which never contains characters that would need it.
+std::string find_query_param(const std::string& request, std::string_view name) {
+    const size_t lineEnd = request.find("\r\n");
+    const std::string_view requestLine(request.data(), lineEnd == std::string::npos ? request.size() : lineEnd);
+    const size_t qmark = requestLine.find('?');
+    if (qmark == std::string_view::npos) {
+        return {};
+    }
+    const size_t spaceAfter = requestLine.find(' ', qmark);
+    const std::string_view query =
+        requestLine.substr(qmark + 1, (spaceAfter == std::string_view::npos ? requestLine.size() : spaceAfter) - qmark - 1);
+    size_t pos = 0;
+    while (pos < query.size()) {
+        const size_t amp = query.find('&', pos);
+        const std::string_view pair = query.substr(pos, (amp == std::string_view::npos ? query.size() : amp) - pos);
+        const size_t eq = pair.find('=');
+        if (eq != std::string_view::npos && pair.substr(0, eq) == name) {
+            return std::string(pair.substr(eq + 1));
+        }
+        if (amp == std::string_view::npos) {
+            break;
+        }
+        pos = amp + 1;
     }
     return {};
 }
@@ -370,6 +403,20 @@ void handle_connection(int fd) {
         close(fd);
         return;
     }
+
+    // Token gate: this is the actual security boundary (the plain HTML GET
+    // above is unauthenticated on purpose — it's static and harmless; a live
+    // session that can read frames and inject input is the sensitive part).
+    // Only checked here, not the QR-scan step itself.
+    const std::string token = find_query_param(request, "token");
+    if (token.empty() || token != current_token()) {
+        DuskLog.warn("phone spike: rejected WS upgrade with {} token", token.empty() ? "missing" : "wrong");
+        static constexpr std::string_view kForbidden = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n";
+        send_all(fd, kForbidden.data(), kForbidden.size());
+        close(fd);
+        return;
+    }
+
     const std::string accept = websocket_accept_key(key);
     const std::string response = "HTTP/1.1 101 Switching Protocols\r\n"
                                  "Upgrade: websocket\r\n"

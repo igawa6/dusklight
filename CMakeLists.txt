@@ -93,6 +93,7 @@ option(DUSK_PACKAGE_INSTALL "Install Dusklight with a Linux-native file structur
 option(DUSK_GFX_DEBUG_GROUPS "Report debug groups to the native graphics API" ${DUSK_GFX_DEBUG_GROUPS_DEFAULT})
 option(DUSK_ENABLE_CODE_MODS "Enable code mods" ON)
 option(DUSK_ENABLE_OPUS "Enable loading Opus audio files for mods" OFF)
+option(DUSK_PHONE_SPIKE "Build the phone-companion-display network spike (see docs/phone-companion-design.md); throwaway, off by default" OFF)
 
 
 set(DUSK_HAS_FUNCHOOK OFF)
@@ -192,6 +193,17 @@ FetchContent_Declare(picosha2
 
 set(_fetch_content_deps miniz picosha2)
 
+if (DUSK_PHONE_SPIKE)
+    message(STATUS "dusklight: Fetching QR-Code-generator (phone spike pairing)")
+    FetchContent_Declare(qrcodegen
+        URL https://github.com/nayuki/QR-Code-generator/archive/refs/tags/v1.8.0.tar.gz
+        URL_HASH SHA256=2ec0a4d33d6f521c942eeaf473d42d5fe139abcfa57d2beffe10c5cf7d34ae60
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+        EXCLUDE_FROM_ALL
+    )
+    list(APPEND _fetch_content_deps qrcodegen)
+endif ()
+
 if (DUSK_ENABLE_OPUS)
     message(STATUS "dusklight: Fetching opusfile")
 
@@ -286,6 +298,9 @@ if (DUSK_ENABLE_OPUS)
     list(APPEND GAME_LIBS OpusFile::opusfile)
     list(APPEND GAME_COMPILE_DEFS DUSK_OPUS=1)
 endif ()
+if (DUSK_PHONE_SPIKE)
+    list(APPEND GAME_COMPILE_DEFS DUSK_PHONE_SPIKE=1)
+endif ()
 
 if (WIN32)
     list(APPEND GAME_LIBS Ws2_32)
@@ -364,6 +379,10 @@ if (ENABLE_ASAN)
 endif ()
 target_compile_definitions(dusk_internal PRIVATE ${GAME_COMPILE_DEFS})
 target_include_directories(dusk_internal PRIVATE ${miniz_SOURCE_DIR})
+if (DUSK_PHONE_SPIKE)
+    target_sources(dusk_internal PRIVATE ${qrcodegen_SOURCE_DIR}/c/qrcodegen.c)
+    target_include_directories(dusk_internal PRIVATE ${qrcodegen_SOURCE_DIR}/c)
+endif ()
 target_link_libraries(dusk_internal PRIVATE aurora::main ${GAME_LIBS} ${JSYSTEM_LIBRARIES})
 target_precompile_headers(dusk_internal PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_SOURCE_DIR}/include/dusk_pch.hpp>")
 
