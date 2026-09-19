@@ -1467,6 +1467,8 @@ set(DUSK_FILES
         src/dusk/dualscreen.h
         src/dusk/dualscreen.cpp
         src/dusk/phone_spike_sha1.h
+        src/dusk/phone_spike_pad.h
+        src/dusk/phone_spike_pad.cpp
         src/dusk/phone_spike_pairing.h
         src/dusk/phone_spike_pairing.cpp
         src/dusk/phone_spike_ws.h

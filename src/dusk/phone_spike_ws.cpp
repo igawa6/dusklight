@@ -10,6 +10,7 @@
 
 #include "dusk/companion.h"
 #include "dusk/logging.h"
+#include "dusk/phone_spike_pad.h"
 #include "dusk/phone_spike_pairing.h"
 #include "dusk/phone_spike_sha1.h"
 
@@ -126,6 +127,38 @@ canvas.addEventListener('pointerup', (e) => {
   const p = pointerToUV(e) || {u: 0, v: 0};
   ws.send(JSON.stringify({type: 'touch', action: 2, u: p.u, v: p.v}));
 });
+
+// Gamepad passthrough (phase 5) — a gamepad connected to the PHONE, not the
+// PC, forwarded as a REAL second controller for the main game (NOT
+// companion navigation — the companion stays touch-only). Continuous full
+// state sent every animation frame, not discrete edge-triggered events:
+// the PC needs to know what's held right now, matching how a real
+// controller is read. Standard Gamepad mapping: buttons[0..3] = A/B/X/Y,
+// [4] = left shoulder -> Z (Twilight Princess leans on Z-target enough to
+// deserve an easy button), [6]/[7] = analog L/R triggers, [9] = Start,
+// [12..15] = D-pad. axes[0..1] = left stick (main), axes[2..3] = right
+// stick (C-stick).
+function pollGamepad() {
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  const pad = pads && pads[0];
+  if (pad && ws.readyState === WebSocket.OPEN) {
+    const b = pad.buttons;
+    const pressed = i => !!(b[i] && b[i].pressed);
+    const value = i => (b[i] && b[i].value) || 0;
+    ws.send(JSON.stringify({
+      type: 'pad',
+      up: pressed(12), down: pressed(13), left: pressed(14), right: pressed(15),
+      a: pressed(0), b: pressed(1), x: pressed(2), y: pressed(3),
+      start: pressed(9), z: pressed(4),
+      l: pressed(6), r: pressed(7),
+      leftStickX: pad.axes[0] || 0, leftStickY: pad.axes[1] || 0,
+      rightStickX: pad.axes[2] || 0, rightStickY: pad.axes[3] || 0,
+      leftTrigger: value(6), rightTrigger: value(7),
+    }));
+  }
+  requestAnimationFrame(pollGamepad);
+}
+requestAnimationFrame(pollGamepad);
 </script></body></html>)HTML";
 
 std::mutex g_clientMutex;
@@ -329,6 +362,31 @@ void dispatch_message(std::string_view json) {
         // clamping happens on the game thread when this is consumed (see
         // dualscreen.cpp), not here; this just hands the raw report off.
         request_resize(msg.value("width", 0u), msg.value("height", 0u));
+    } else if (type == "pad") {
+        // Full continuous state, not a discrete event — see
+        // phone_spike_pad.h. Sent every animation frame by the test page,
+        // so this just latches the newest report; applyGamepadPassthrough()
+        // (game thread) turns it into a real PADStatus each game frame.
+        GamepadState state;
+        state.up = msg.value("up", false);
+        state.down = msg.value("down", false);
+        state.left = msg.value("left", false);
+        state.right = msg.value("right", false);
+        state.a = msg.value("a", false);
+        state.b = msg.value("b", false);
+        state.x = msg.value("x", false);
+        state.y = msg.value("y", false);
+        state.start = msg.value("start", false);
+        state.l = msg.value("l", false);
+        state.r = msg.value("r", false);
+        state.z = msg.value("z", false);
+        state.leftStickX = msg.value("leftStickX", 0.0f);
+        state.leftStickY = msg.value("leftStickY", 0.0f);
+        state.rightStickX = msg.value("rightStickX", 0.0f);
+        state.rightStickY = msg.value("rightStickY", 0.0f);
+        state.leftTrigger = msg.value("leftTrigger", 0.0f);
+        state.rightTrigger = msg.value("rightTrigger", 0.0f);
+        set_gamepad_state(state);
     } else {
         DuskLog.warn("phone spike: unknown input message type '{}'", type);
     }

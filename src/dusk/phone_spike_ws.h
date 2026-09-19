@@ -1,13 +1,16 @@
 #pragma once
 
-// Phase-1/3 spike for the phone-companion-display idea (see
+// Phase-1/3/5 spike for the phone-companion-display idea (see
 // docs/phone-companion-design.md): a minimal single-client HTTP+WebSocket
 // server that serves a test page on GET, pushes binary companion frames to
-// whatever connects over WS, and reads touch/pinch JSON messages back,
-// dispatching them straight into dusk::companion::touchEvent()/pinchZoom()
-// (same entry points the Android JNI touch path uses — see companion.h).
-// No pairing, no QR — the test page URL is typed in by hand. POSIX sockets
-// only (Linux/macOS); not wired up on Windows yet, see phone_spike_ws.cpp.
+// whatever connects over WS, reads touch/pinch JSON messages back
+// (dispatched into dusk::companion::touchEvent()/pinchZoom() — same entry
+// points the Android JNI touch path uses), and reads gamepad state from a
+// controller connected to the PHONE, passed through as a REAL second
+// controller for the main game (see phone_spike_pad.h — NOT companion
+// navigation; touch stays the only thing that drives the companion
+// display). POSIX sockets only (Linux/macOS); not wired up on Windows yet,
+// see phone_spike_ws.cpp.
 //
 // Gated by DUSK_PHONE_SPIKE (dualscreen.h) and off by default. This entire
 // file is throwaway scaffolding to get a real capture->encode->push latency
@@ -46,5 +49,12 @@ void request_resize(uint32_t width, uint32_t height);
 // flag in the same call. False (leaves width/height untouched) if nothing
 // is pending. Game thread only, by convention with the above.
 bool take_pending_resize(uint32_t& width, uint32_t& height);
+
+// Gamepad passthrough (phase 5) lives in phone_spike_pad.h — a controller
+// connected to the phone, forwarded as a real second controller for the
+// main game via dolphin::PAD's existing virtual-status injection point.
+// dispatch_message() (phone_spike_ws.cpp) parses "pad" messages and calls
+// straight into phone_spike_pad.h's set_gamepad_state(); nothing gamepad-
+// specific needs to live here.
 
 }  // namespace dusk::phone_spike

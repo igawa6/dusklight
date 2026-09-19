@@ -1,13 +1,16 @@
 # Phone-as-Companion-Screen: Design Sketch
 
-**Status: phases 1 (capture → encode → push), 2 (QR pairing), 3 (touch
-input), and 4 (native resolution) built and verified end-to-end on Linux;
-gamepad passthrough not started, blocked on a real product question (see
-Open Questions).** This documents a feasibility sketch for letting a phone
-act as a network-connected companion ("bottom screen") display for desktop
-(Windows/Linux/macOS) dusklight, paired by QR code, mirroring what the AYN
-Thor already gets for free from having two physical
-displays on one device.
+**Status: all five phases (capture → encode → push, QR pairing, touch
+input, native resolution, gamepad passthrough) built and verified
+end-to-end on Linux against real gameplay.** None of it has been tried on
+a real phone yet — every phase so far has been verified with a scripted
+test client standing in for one. This documents a feasibility sketch for
+letting a phone act as a network-connected companion ("bottom screen")
+display for desktop (Windows/Linux/macOS) dusklight, paired by QR code,
+mirroring what the AYN Thor already gets for free from having two physical
+displays on one device — plus, as of phase 5, letting a gamepad connected
+to that phone drive the main game itself, a capability the Thor doesn't
+have any equivalent of.
 
 Not a commitment to build this — written to have a concrete plan to work
 from if/when it's picked up, and so the open questions are visible up front
@@ -18,15 +21,22 @@ instead of discovered mid-implementation.
 - Desktop dusklight gets a companion display (map/items/hearts/quest UI)
   on a phone on the same LAN, no cable, no app install.
 - Pairing is a QR-code scan, not manual IP entry.
-- Phone can drive the companion via its own touchscreen, and via any
-  gamepad paired to the *phone* (not the PC).
-- Keep latency low enough that companion navigation (map panning, item
-  wheel) feels responsive, not laggy.
+- Phone's own touchscreen drives the companion display (tabs, items, map
+  pan/zoom) — unchanged, this is the *only* thing that controls the
+  companion.
+- A gamepad connected to the *phone* (not the PC) acts as a **real second
+  controller for the main game itself** — Link's movement, attack, camera,
+  everything a physical controller plugged into the PC would do. This is
+  NOT a companion-navigation input — see Phase 5 below, which corrects an
+  earlier wrong assumption in this doc that it was.
+- Keep latency low enough that both companion navigation and gamepad
+  control feel responsive, not laggy.
 
 ## Non-goals
 
-- Mirroring the *main* 3D game view. This is companion-HUD-only, same
-  scope as the existing dual-screen feature.
+- Mirroring the *main* 3D game view *to the phone*. The companion display
+  (frame push) stays HUD-only, same scope as the existing dual-screen
+  feature — only gamepad *input* reaches the main game, never its video.
 - General Steam-Link-style full remote play.
 - Any monetization mechanism — considered and explicitly dropped (ads /
   pay-to-remove is a real risk for a Nintendo-IP-derived project; see
@@ -151,10 +161,14 @@ opportunistically during the pairing window.
   `ScaleGestureDetector` — either compute a scale factor from two active
   touch points manually in JS, or drop pinch-to-zoom for v1 and rely on
   whatever non-pinch map navigation the companion already supports.
-- Phone gamepad: browser [Gamepad API](https://developer.mozilla.org/en-US/docs/Web/API/Gamepad_API)
-  polls button/axis state; no native "gamepad → companion" mapping
-  exists to receive it (see Open Questions — this is the one piece with
-  no existing analog on either platform).
+- Phone gamepad: **not companion input at all** — corrected in Phase 5
+  below after an earlier wrong assumption here. Browser
+  [Gamepad API](https://developer.mozilla.org/en-US/docs/Web/API/Gamepad_API)
+  polls button/axis state, forwarded as a real second controller for the
+  *main game* via `PADSetVirtualStatus`/`PADClearVirtualStatus` — the
+  exact mechanism the shipping on-screen touch controls already use
+  (`src/dusk/ui/touch_controls.cpp`), so this needed zero new companion or
+  aurora code, just a bridge.
 
 ### New dependencies
 
@@ -309,8 +323,7 @@ browser (still a scripted Python client), and whether a tap needs the
 ~0.5s hold used in the successful test or a shorter one also works (a
 first attempt with a 0.1s down-to-up gap did *not* register as a tap —
 unclear yet whether that's a real minimum-hold requirement in the
-companion's gesture code or a fluke; worth a proper look before relying on
-timing assumptions for phase 5's gamepad-as-synthetic-gestures idea).
+companion's gesture code or a fluke).
 
 ## Phase 2 results (built and verified) — QR pairing
 
@@ -415,6 +428,95 @@ coordinate, and it switched tabs correctly. Confirms the normalized 0–1
 coordinate convention itself is genuinely resolution/aspect-independent, as
 designed — the failure was my manual coordinate guess, not the mechanism.
 
+## Phase 5 results (built and verified) — gamepad passthrough to the main game, corrected scope
+
+**This phase's original framing in this doc was wrong**, caught only after
+building it: earlier revisions of this document (and an earlier
+implementation pass) assumed a phone-paired gamepad should navigate the
+*companion display* — a D-pad cursor over the ITEMS grid, mirroring
+`touchEvent()`. That version was fully built and verified (real tap-alike
+selection, a working cursor highlight) before being told directly that the
+actual intent was different: **touch stays the only thing that drives the
+companion; a phone-paired gamepad should act as a real second controller
+for the main game**, exactly as if a physical controller were plugged into
+the PC. The companion-navigation version was reverted in full (it was
+still uncommitted) rather than kept as unrequested scope.
+
+**The real mechanism turned out to need zero new companion or aurora
+code** — research surfaced a production precedent already shipping:
+`PADSetVirtualStatus(u32 port, const PADStatus*)` /
+`PADClearVirtualStatus(u32 port)` (`extern/aurora/lib/dolphin/pad/pad.cpp`,
+declared in `extern/aurora/include/dolphin/pad.h`) is exactly how the
+existing on-screen touch controls already inject synthetic input —
+`src/dusk/ui/touch_controls.cpp`'s `sync_virtual_input()` builds a
+`PADStatus` from touch state every frame and calls
+`PADSetVirtualStatus(PAD_CHAN0, &status)`, merged with any real controller
+via `merge_virtual_status()` (button bits OR'd, sticks take whichever
+input has the larger magnitude, triggers take the max). Phone-gamepad
+passthrough copies that exact shape instead of touching `dusk::companion`
+or SDL at all.
+
+**Built:** `phone_spike_pad.{h,cpp}` — `GamepadState` (a plain struct:
+button bools + four stick axes + two analog triggers), `set_gamepad_state()`
+(WS receive thread, mutex-guarded latest-value — continuous state, not a
+queue of discrete events, since what matters each frame is "what's held
+right now"), and `applyGamepadPassthrough()` (game thread, called from
+`dualscreen.cpp`'s existing per-frame spike tick, alongside — not inside —
+the resize/frame-push logic) which builds a `PADStatus` from the latest
+report and calls `PADSetVirtualStatus`/`PADClearVirtualStatus` on
+`PAD_CHAN0`, mirroring `sync_virtual_input()` line-for-line including its
+"clear if nothing held" logic. The WS protocol gained a `"pad"` message
+type (continuous full state, sent every animation frame by the test page's
+`pollGamepad()`, not edge-triggered like the old companion-nav version
+was) with a straightforward Standard-Gamepad-to-GameCube mapping (A/B/X/Y
+direct, D-pad direct, left shoulder → Z since Twilight Princess leans on
+Z-targeting enough to deserve an easy button, analog triggers → L/R, left
+stick → main stick, right stick → C-stick).
+
+**Verified against real gameplay, not just "no crash":** captured the
+*main* game window directly via X11 (`import -window <id>` against the
+Xvfb display — a capability this whole design doc's frame-push machinery
+doesn't touch, since gamepad passthrough affects the main window, not the
+companion aux window). Held forward on the left stick for 1.5s over a real
+WS connection: Link's pose changed from a standing idle stance to a clear
+mid-stride walking animation, an unambiguous behavioral confirmation the
+injected `PADStatus` is being read by real gameplay code (camera-follow
+made raw position comparison ambiguous, but the animation-state change
+wasn't).
+
+**Two real bugs found and fixed during this verification, not
+hypothetical:**
+1. A `"NO DEVICE ASSIGNED — Configure Port 1 in Settings"` banner appears
+   on a fresh profile and looked at first like it might be gating input —
+   traced into `PADRead()` (`pad.cpp`) and confirmed it's purely cosmetic:
+   the actual gate is `if (controller == nullptr && !keyboardBindingsSet
+   && !g_virtualPadActive[i]) { status[i].err = PAD_ERR_NO_CONTROLLER;
+   continue; }`, which is satisfied by `g_virtualPadActive` alone (set by
+   `PADSetVirtualStatus`) — no real device or explicit "assignment"
+   required, matching how touch controls already work on a controller-less
+   phone/tablet. Confirmed empirically, not just by reading the code: input
+   worked with the banner still showing on screen.
+2. The test client's own bug, not the passthrough code's: an early test
+   script sent `"pad"` state continuously but never read the frames the
+   server was simultaneously pushing (dual-screen was on in that test),
+   which backed up the socket and got the connection dropped
+   ("frame payload send failed/timed out") a few hundred ms in — passthrough
+   *looked* broken (no movement) but was actually just not receiving
+   ongoing input because the connection was gone. Two independent fixes:
+   made the test client drain frames concurrently, and separately re-ran
+   with dual-screen off entirely (`--cvar game.dualScreen=false` — note the
+   default is `true`, omitting the flag does not disable it) to cleanly
+   isolate passthrough testing from frame-push traffic. Real production
+   code wouldn't have this problem (a real phone browser both draws
+   incoming frames and polls its own gamepad without any such conflict),
+   but it's a real trap for anyone else writing a test client against this
+   server.
+
+**Not yet tested:** a real gamepad connected to a real phone (still a
+scripted Python client sending hand-built JSON), the C-stick/right-stick →
+substick mapping, analog trigger values (only digital press was exercised),
+and the Z/L/R button mappings.
+
 ## Suggested phasing
 
 1. ~~**Spike:** headless aux_window target + WS server + raw frame push to
@@ -430,16 +532,14 @@ designed — the failure was my manual coordinate guess, not the mechanism.
 4. ~~**Loosen `kMaxNativeDim`, verify true native-res on a real phone.**~~
    **Done — see Phase 4 results above** (verified with a simulated report,
    not yet a real phone — see "not yet tested" notes throughout).
-5. **Phone gamepad passthrough** — blocked on the open question below.
+5. ~~**Phone gamepad passthrough**~~ **Done — see Phase 5 results above**,
+   with corrected scope (main-game input, not companion navigation).
 
 ## Open questions / risks
 
-- **No existing "analog/D-pad" companion input surface.** Everything
-  today is touch/pinch-shaped. Does a phone-paired gamepad make sense
-  translated into synthetic swipes/taps (map panning via D-pad, item
-  wheel via analog stick angle), or does this need a genuinely new
-  companion input mode? Needs product thinking, not just plumbing —
-  punt to phase 5, don't let it block touch-only v1.
+- ~~No existing "analog/D-pad" companion input surface~~ — **moot, see
+  Phase 5**: gamepad was never meant to drive the companion in the first
+  place. The companion stays touch-only; no open question here anymore.
 - **Rust/Corrosion `vendor`-mode setup for a new crate is unproven** —
   nod-ffi's tri-mode provider is more machinery than a first pass needs;
   confirm forcing always-vendor mode for a new crate is actually simple

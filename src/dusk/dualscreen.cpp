@@ -24,6 +24,7 @@
 #include "miniz.h"
 
 #if DUSK_PHONE_SPIKE
+#include "dusk/phone_spike_pad.h"
 #include "dusk/phone_spike_pairing.h"
 #include "dusk/phone_spike_ws.h"
 
@@ -348,6 +349,13 @@ static void pollAndPushSpikeFrame() {
             }
         }
     }
+
+    // Applies the latest phone-gamepad report (if any) as a real second
+    // controller for the main game — see phone_spike_pad.h. Every frame,
+    // not just on change: PADSetVirtualStatus/PADClearVirtualStatus need
+    // refreshing continuously, matching touch_controls.cpp's own
+    // sync_virtual_input(), which this mirrors.
+    phone_spike::applyGamepadPassthrough();
 
     if (s_spikeCaptureArmed) {
         std::vector<u8> pixels;
