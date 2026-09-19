@@ -25,7 +25,6 @@ public:
         mNowSetFlg = 0;
     }
 
-private:
     /* 0x14 */ u16 mEndFlg;
     /* 0x16 */ u16 mNowSetFlg;
 };
@@ -34,9 +33,13 @@ class daPy_sightPacket_c : public dDlst_base_c {
 public:
     daPy_sightPacket_c() {}
     virtual void draw();
+#if TARGET_PC
+    virtual ~daPy_sightPacket_c();
+#else
     virtual ~daPy_sightPacket_c() {}
+#endif
 
-    void setSight();
+    void setSight(IF_DUSK(bool registerPacket = true));
     void setSightImage(ResTIMG* i_img);
 
     u8 getDrawFlg() { return mDrawFlag; }
@@ -67,10 +70,9 @@ public:
     static void offEventKeepFlg() { m_eventKeepFlg = 0; }
     static void onEventKeepFlg() { m_eventKeepFlg = 1; }
 
-    static s16 m_dropAngleY;
-    static s16 m_eventKeepFlg;
+    static DUSK_GAME_DATA s16 m_dropAngleY;
+    static DUSK_GAME_DATA s16 m_eventKeepFlg;
 
-private:
     /* 0x0 */ u8 field_0x0;
     /* 0x2 */ s16 field_0x2;
     /* 0x4 */ f32 m_offsetY;
@@ -151,7 +153,6 @@ public:
     fopAc_ac_c* getActor() const { return mActor; }
     fopAc_ac_c* getActorConst() const { return mActor; }
 
-private:
     /* 0x0 */ fpc_ProcID mID;
     /* 0x4 */ fopAc_ac_c* mActor;
 };  // Size: 0x8
@@ -296,7 +297,6 @@ public:
     void resetDemoType() { setDemoType(0); }
     void setStartDemoType() { setDemoType(DEMO_TYPE_START_e); }
 
-private:
     /* 0x00 */ u16 mDemoType;
     /* 0x02 */ s16 mDemoMoveAngle;
     /* 0x04 */ s16 mTimer;
@@ -311,9 +311,11 @@ private:
 class daMidna_c;
 class daSpinner_c;
 class daPy_py_c;
+#if !TARGET_PC
 inline daPy_py_c* dComIfGp_getLinkPlayer();
 inline BOOL dComIfGs_isEventBit(const u16);
 inline u32 dComIfGs_getLastSceneMode();
+#endif
 
 class daPy_py_c : public fopAc_ac_c {
 public:
@@ -1213,7 +1215,7 @@ public:
         onEndResetFlg0(ERFLG0_FISHING_RELEASE);
     }
 
-    static daMidna_c* m_midnaActor;
+    static DUSK_GAME_DATA daMidna_c* m_midnaActor;
 
     void setGiantPuzzle() { mMode = SMODE_WOLF_PUZZLE; }
     void setGiantPuzzleEnd() { mMode = 0; }

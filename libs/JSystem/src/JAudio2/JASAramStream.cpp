@@ -12,16 +12,16 @@
 #include "JSystem/JKernel/JKRSolidHeap.h"
 #include "JSystem/JSupport/JSupport.h"
 
-JASTaskThread* JASAramStream::sLoadThread;
+DUSK_GAME_DATA JASTaskThread* JASAramStream::sLoadThread;
 
-u8* JASAramStream::sReadBuffer;
+DUSK_GAME_DATA u8* JASAramStream::sReadBuffer;
 
-u32 JASAramStream::sBlockSize;
+DUSK_GAME_DATA u32 JASAramStream::sBlockSize;
 
-u32 JASAramStream::sChannelMax;
+DUSK_GAME_DATA u32 JASAramStream::sChannelMax;
 
-bool dvdHasErrored;
-bool hasErrored;
+DUSK_GAME_DATA bool dvdHasErrored;
+DUSK_GAME_DATA bool hasErrored;
 
 #define PAUSE_REQUESTED   1
 #define PAUSE_DVD_ERROR   2
@@ -713,7 +713,7 @@ void JASAramStream::channelStart() {
         wave_info.mpPenult = 0;
         // probably a fake match, this should be set in the JASWaveInfo constructor
         static u32 const one = 1;
-        wave_info.field_0x20 = &one;
+        wave_info.mpLoaded = &one;
         JASChannel* jc = JKR_NEW JASChannel(channelCallback, this);
         JUT_ASSERT(963, jc);
         jc->setPriority(0x7f7f);
@@ -722,9 +722,9 @@ void JASAramStream::channelStart() {
         }
         jc->setInitPitch(mSampleRate / JASDriver::getDacRate());
         jc->setOscInit(0, &OSC_ENV);
-        jc->field_0xdc.mWaveInfo = wave_info;
+        jc->mAnon.mWaveInfo = wave_info;
         jc->mWaveAramAddress = mAramAddress + sBlockSize * mAramBlocksPerChannel * i;
-        jc->field_0xdc.mChannelType = 0;
+        jc->mAnon.mChannelType = 0;
         int ret = jc->playForce();
         JUT_ASSERT(977, ret);
         JUT_ASSERT_MSG(979, mChannels[i] == NULL, "channelStart for already playing channel");

@@ -8,7 +8,12 @@
 #include "JSystem/J3DGraphBase/J3DShapeMtx.h"
 #include "JSystem/J3DGraphBase/J3DSys.h"
 #include "JSystem/JKernel/JKRHeap.h"
-#include "dusk/frame_interpolation.h"
+
+#if TARGET_PC
+#include "dusk/interp/frame_interpolation.h"
+#include "dusk/interp/material.h"
+#include "dusk/interp/vertex.h"
+#endif
 
 #define J3D_ASSERTMSG(LINE, COND, MSG) JUT_ASSERT_MSG(LINE, (COND) != 0, MSG)
 #define J3D_WARN1(LINE, MSG, ARG1) JUT_WARN(LINE, MSG, ARG1)
@@ -26,6 +31,7 @@ void J3DModel::initialize() {
 
     MTXIdentity(mBaseTransformMtx);
     MTXIdentity(mInternalView);
+    IF_DUSK(MTXIdentity(mPresentationBase));
 
     mMtxBuffer = NULL;
     mMatPacket = NULL;
@@ -98,11 +104,36 @@ s32 J3DModel::entryModelData(J3DModelData* pModelData, u32 mdlFlags, u32 mtxNum)
 }
 
 #if TARGET_PC
-void J3DModel::interp_callback(bool isSimFrame, void* pUserWork) {
-    J3DModel* i_this = static_cast<J3DModel*>(pUserWork);
-    if (!isSimFrame) {
-        i_this->calcMaterial();
-        i_this->diff();
+void J3DModel::calc_presentation_base_mtx() {
+    Mtx identity;
+    MTXIdentity(identity);
+    J3DCalcViewBaseMtx(identity, mBaseScale, mBaseTransformMtx, mPresentationBase);
+    dusk::interp::record_final_mtx(mPresentationBase);
+    prepare_presentation_view();
+}
+
+void J3DModel::prepare_presentation_view() {
+    Mtx replacement;
+    MtxP presentationBase = mPresentationBase;
+    if (dusk::interp::lookup_replacement(mPresentationBase, replacement)) {
+        presentationBase = replacement;
+    }
+    MTXConcat(j3dSys.getViewMtx(), presentationBase, mInternalView);
+}
+
+void J3DModel::setAnmMtx(int jointNo, Mtx m) {
+    mMtxBuffer->setAnmMtx(jointNo, m);
+    dusk::interp::record_final_mtx(mMtxBuffer->getAnmMtx(jointNo));
+}
+
+void J3DModel::forgetMtx() {
+    dusk::interp::vertex::reset(&mVertexBuffer);
+    dusk::interp::forget_mtx(mPresentationBase);
+    for (u16 i = 0; i < mModelData->getJointNum(); ++i) {
+        dusk::interp::forget_mtx(getAnmMtx(i));
+    }
+    for (u16 i = 0; i < mModelData->getWEvlpMtxNum(); ++i) {
+        dusk::interp::forget_mtx(getWeightAnmMtx(i));
     }
 }
 #endif
@@ -291,7 +322,16 @@ void J3DModel::calcMaterial() {
             material->getMaterialAnm()->calc(material);
         }
 
-        material->calc(getAnmMtx(material->getJoint()->getJntNo()));
+        MtxP jointMtx = getAnmMtx(material->getJoint()->getJntNo());
+#if TARGET_PC
+        Mtx presentedJoint;
+        if (dusk::interp::is_presentation_active() &&
+            dusk::interp::lookup_replacement(jointMtx, presentedJoint))
+        {
+            jointMtx = presentedJoint;
+        }
+#endif
+        material->calc(jointMtx);
     }
 }
 
@@ -460,13 +500,15 @@ void J3DModel::calc() {
         mCalcCallBack(this, 0);
     }
 
-#ifdef TARGET_PC
+#if TARGET_PC
+    dusk::interp::vertex::capture(&mVertexBuffer, mDeformData);
+
     for (u16 i = 0; i < mModelData->getJointNum(); ++i) {
-        dusk::frame_interp::record_final_mtx(getAnmMtx(i));
+        dusk::interp::record_final_mtx(getAnmMtx(i));
     }
 
     for (u16 i = 0; i < mModelData->getWEvlpMtxNum(); ++i) {
-        dusk::frame_interp::record_final_mtx(getWeightAnmMtx(i));
+        dusk::interp::record_final_mtx(getWeightAnmMtx(i));
     }
 #endif
 }
@@ -497,8 +539,9 @@ void J3DModel::entry() {
     }
 
 #if TARGET_PC
-    if (mModelData->needsInterpCallBack())
-        dusk::frame_interp::add_interpolation_callback(&J3DModel::interp_callback, this);
+    if (mModelData->needsInterpCallBack()) {
+        dusk::interp::material::record_model(this);
+    }
 #endif
 }
 
@@ -508,18 +551,20 @@ void J3DModel::viewCalc() {
 
     if (getModelData()->checkFlag(0x10)) {
         if (getMtxCalcMode() == 2) {
+#if TARGET_PC
+            calc_presentation_base_mtx();
+#else
             J3DCalcViewBaseMtx(j3dSys.getViewMtx(), mBaseScale, mBaseTransformMtx,
                                (MtxP)&mInternalView);
-#ifdef TARGET_PC
-            dusk::frame_interp::record_final_mtx(mInternalView);
 #endif
         }
     } else if (isCpuSkinningOn()) {
         if (getMtxCalcMode() == 2) {
+#if TARGET_PC
+            calc_presentation_base_mtx();
+#else
             J3DCalcViewBaseMtx(j3dSys.getViewMtx(), mBaseScale, mBaseTransformMtx,
                                (MtxP)&mInternalView);
-#ifdef TARGET_PC
-            dusk::frame_interp::record_final_mtx(mInternalView);
 #endif
         }
     } else if (checkFlag(J3DMdlFlag_SkinPosCpu)) {
@@ -540,15 +585,6 @@ void J3DModel::viewCalc() {
         DCStoreRangeNoSync(getDrawMtxPtr(), mModelData->getDrawMtxNum() * sizeof(Mtx));
         DCStoreRange(getNrmMtxPtr(), mModelData->getDrawMtxNum() * sizeof(Mtx33));
     }
-
-#ifdef TARGET_PC
-    Mtx* drawMtx = getDrawMtxPtr();
-    if (drawMtx != J3DMtxBuffer::sNoUseDrawMtxPtr) {
-        for (u16 i = 0; i < mModelData->getDrawMtxNum(); ++i) {
-            dusk::frame_interp::record_final_mtx(drawMtx[i]);
-        }
-    }
-#endif
 
     prepareShapePackets();
 }

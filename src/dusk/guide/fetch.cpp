@@ -7,8 +7,9 @@
 #include <fmt/format.h>
 
 #include "dusk/guide/store.hpp"
-#include "dusk/http/http.hpp"
-#include "version.h"
+
+#include <borealis/http.hpp>
+#include <borealis/version.h>
 
 namespace dusk::guide {
 
@@ -20,7 +21,7 @@ namespace {
 
 
 std::string user_agent() {
-    return fmt::format("Dusklight/{} (+guide-import)", DUSK_WC_DESCRIBE);
+    return fmt::format("Dusklight/{} (+guide-import)", BOREALIS_APP_DESCRIBE);
 }
 
 
@@ -95,24 +96,34 @@ int last_import_count() {
 }
 
 ImageSource network_image_source() {
-    if (!http::available()) {
+    if (!borealis::http::available()) {
         return {};
     }
     return [](const std::string& url, std::string& out) {
         if (url.compare(0, 8, "https://") != 0) {
             return false;
         }
-        http::Request ir{
+        borealis::http::Request ir{
             .url = url,
             .headers = {{.name = "User-Agent", .value = user_agent()}},
-            .timeout = std::chrono::milliseconds(10000),
+            .connectTimeout = std::chrono::milliseconds(10000),
+            .idleTimeout = std::chrono::milliseconds(10000),
             .maxBodyBytes = 4u * 1024u * 1024u,
         };
-        const http::Result r = http::get(ir);
-        if (r.error != http::Error::None || r.response.statusCode != 200) {
+        // Already on this task's own worker thread (see ImportTask above), so
+        // blocking here to wait out the async request costs nothing extra —
+        // borealis::http has no synchronous entry point to call instead.
+        borealis::Task<borealis::http::Result> task = borealis::http::start(std::move(ir));
+        while (!task.ready()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        const auto r = task.try_take();
+        if (!r.has_value() || r->error != borealis::http::Error::None ||
+            r->response.statusCode != 200)
+        {
             return false;
         }
-        out = r.response.body;
+        out = r->response.body;
         return true;
     };
 }

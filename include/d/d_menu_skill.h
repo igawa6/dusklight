@@ -51,6 +51,7 @@ public:
 
 #if TARGET_PC
     bool pointerWait();
+    void presentAnims();
 #endif
 
     virtual void draw() { _draw(); }
@@ -58,7 +59,6 @@ public:
 
     u8 getStatus() { return mStatus; }
 
-private:
     /* 0x004 */ JKRExpHeap* mpHeap;
     /* 0x008 */ JKRArchive* mpArchive;
     /* 0x00C */ STControl* mpStick;
@@ -91,7 +91,7 @@ private:
     /* 0x1F4 */ f32 mBarScale[2];
     /* 0x1FC */ u32 mStringID;
     /* 0x200 */ s16 mFrame;
-    /* 0x202 */ s16 mProcFrame;
+    /* 0x202 */ DUSK_IF_ELSE(f32, s16) mProcFrame;
     /* 0x204 */ u8 mStatus;
     /* 0x205 */ u8 mProcess;
     /* 0x206 */ u8 mIndex;

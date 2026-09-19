@@ -1,6 +1,7 @@
 #include <utility>
 
 #include "dusk/io.hpp"
+#include <borealis/io.hpp>
 #include "loader.hpp"
 
 namespace fs = std::filesystem;
@@ -32,7 +33,7 @@ std::vector<std::string> ModBundleDisk::getFileNames() {
 
         const auto& path = it->path();
         const auto relPath = fs::relative(path, root_path);
-        auto string = io::fs_path_to_string(relPath);
+        auto string = borealis::io::fs_path_to_string(relPath);
         if constexpr (fs::path::preferred_separator != '/') {
             // Convert \ to / on Windows
             for (auto& chr : string) {
@@ -55,6 +56,14 @@ size_t ModBundleDisk::getFileSize(const std::string& fileName) {
 std::filesystem::path ModBundleDisk::toRealPath(const std::string& fileName) const {
     const fs::path filePath = reinterpret_cast<const char8_t*>(fileName.c_str());
     return root_path / filePath;
+}
+
+bool ModBundleDisk::file_exists(const std::string& fileName) {
+    return std::filesystem::is_regular_file(toRealPath(fileName));
+}
+
+bool ModBundleDisk::directory_exists(const std::string& fileName) {
+    return std::filesystem::is_directory(toRealPath(fileName));
 }
 
 }  // namespace dusk::mods

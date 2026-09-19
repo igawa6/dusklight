@@ -1,12 +1,16 @@
 #include "d/dolzel.h" // IWYU pragma: keep
 
-#include "d/d_msg_out_font.h"
 #include "JSystem/J2DGraph/J2DTextBox.h"
 #include "JSystem/JUtility/JUTTexture.h"
 #include "d/d_meter2_info.h"
 #include "d/d_msg_object.h"
-#include "dusk/frame_interpolation.h"
+#include "d/d_msg_out_font.h"
 #include "f_op/f_op_msg_mng.h"
+
+#if TARGET_PC
+#include "dusk/interp/user_interface.h"
+#include "dusk/version.hpp"
+#endif
 
 COutFontSet_c::COutFontSet_c() {
     initialize();
@@ -289,8 +293,10 @@ void COutFont_c::initialize() {
 
 void COutFont_c::drawFont(J2DTextBox* i_textbox, u8 i_type, f32 i_posX, f32 i_posY, f32 i_sizeX,
                           f32 i_sizeY, u32 i_color, u8 i_alpha) {
-#if VERSION != VERSION_GCN_JPN
+#if TARGET_PC || VERSION != VERSION_GCN_JPN
+    IF_DUSK_BLOCK(!dusk::version::isRegionJpn())
     i_posY += 1.0f;
+    IF_DUSK_BLOCK_END;
 #endif
     for (int i = 0; i < 35; i++) {
         if (mpOfs[i]->getType() == 0x47) {
@@ -306,20 +312,11 @@ void COutFont_c::setAlphaRatio(f32 i_ratio) {
 }
 
 void COutFont_c::draw(J2DTextBox* i_textbox, f32 param_1, f32 param_2, f32 param_3) {
-    s16 sp256[70];
+    DUSK_IF_ELSE(f32, s16) sp256[70];
 
     for (int i = 0; i < 70; i++) {
         sp256[i] = field_0x1b4[i];
     }
-
-#ifdef TARGET_PC
-    bool uiTickPending = dusk::frame_interp::get_ui_tick_pending();
-    if (!uiTickPending) {
-        for (int i = 0; i < 70; i++) {
-            sp256[i] = -1;
-        }
-    }
-#endif
 
     for (int i = 0; i < 35; i++) {
         u8 type = mpOfs[i]->getType();
@@ -380,7 +377,15 @@ void COutFont_c::draw(J2DTextBox* i_textbox, f32 param_1, f32 param_2, f32 param
                     break;
                 case 5:
                 case 6: {
-#if VERSION == VERSION_GCN_JPN
+#if TARGET_PC
+                    if (dusk::version::isRegionJpn()) {
+                        posY -= 2.0f;
+                        sizeY -= 2.0f;
+                    } else {
+                        posY += 1.0f;
+                        sizeY -= 3.0f;
+                    }
+#elif VERSION == VERSION_GCN_JPN
                     posY -= 2.0f;
                     sizeY -= 2.0f;
 #else
@@ -400,11 +405,14 @@ void COutFont_c::draw(J2DTextBox* i_textbox, f32 param_1, f32 param_2, f32 param
                 }
                 case 9:
                     if (sp256[type] == field_0x1b4[type]) {
+#if TARGET_PC
+                        dusk::vdt::advance_looping_frame(field_0x1b4[type], 1.0f, 80.0f);
+#else
                         field_0x1b4[type]++;
-
                         if (field_0x1b4[type] >= 80) {
                             field_0x1b4[type] = 0;
                         }
+#endif
                         setBlendAnime(mpPane[type], field_0x1b4[type]);
                     }
 
@@ -420,55 +428,70 @@ void COutFont_c::draw(J2DTextBox* i_textbox, f32 param_1, f32 param_2, f32 param
                     break;
                 case 14:
                     if (sp256[type] == field_0x1b4[type]) {
+#if TARGET_PC
+                        dusk::vdt::advance_looping_frame(field_0x1b4[type], 1.0f, 20.0f);
+#else
                         field_0x1b4[type]++;
-
                         if (field_0x1b4[type] >= 20) {
                             field_0x1b4[type] = 0;
                         }
+#endif
                         setBlendAnime(mpPane[type], field_0x1b4[type]);
                     }
                     mpPane[type]->draw(posX, posY, sizeX, sizeY, false, false, true);
                     break;
                 case 15:
                     if (sp256[type] == field_0x1b4[type]) {
+#if TARGET_PC
+                        dusk::vdt::advance_looping_frame(field_0x1b4[type], 1.0f, 20.0f);
+#else
                         field_0x1b4[type]++;
-
                         if (field_0x1b4[type] >= 20) {
                             field_0x1b4[type] = 0;
                         }
+#endif
                         setBlendAnime(mpPane[type], field_0x1b4[type]);
                     }
                     mpPane[type]->draw(posX, posY, sizeX, sizeY, true, true, true);
                     break;
                 case 16:
                     if (sp256[type] == field_0x1b4[type]) {
+#if TARGET_PC
+                        dusk::vdt::advance_looping_frame(field_0x1b4[type], 1.0f, 20.0f);
+#else
                         field_0x1b4[type]++;
-
                         if (field_0x1b4[type] >= 20) {
                             field_0x1b4[type] = 0;
                         }
+#endif
                         setBlendAnime(mpPane[type], field_0x1b4[type]);
                     }
                     mpPane[type]->draw(posX, posY, sizeX, sizeY, false, false, false);
                     break;
                 case 17:
                     if (sp256[type] == field_0x1b4[type]) {
+#if TARGET_PC
+                        dusk::vdt::advance_looping_frame(field_0x1b4[type], 1.0f, 20.0f);
+#else
                         field_0x1b4[type]++;
-
                         if (field_0x1b4[type] >= 20) {
                             field_0x1b4[type] = 0;
                         }
+#endif
                         setBlendAnime(mpPane[type], field_0x1b4[type]);
                     }
                     mpPane[type]->draw(posX, posY, sizeX, sizeY, true, true, false);
                     break;
                 case 18:
                     if (sp256[type] == field_0x1b4[type]) {
+#if TARGET_PC
+                        dusk::vdt::advance_looping_frame(field_0x1b4[type], 1.0f, 40.0f);
+#else
                         field_0x1b4[type]++;
-
                         if (field_0x1b4[type] >= 40) {
                             field_0x1b4[type] = 0;
                         }
+#endif
                         setBlendAnime(mpPane[type], field_0x1b4[type]);
                     }
 
@@ -480,11 +503,14 @@ void COutFont_c::draw(J2DTextBox* i_textbox, f32 param_1, f32 param_2, f32 param
                     break;
                 case 19:
                     if (sp256[type] == field_0x1b4[type]) {
+#if TARGET_PC
+                        dusk::vdt::advance_looping_frame(field_0x1b4[type], 1.0f, 40.0f);
+#else
                         field_0x1b4[type]++;
-
                         if (field_0x1b4[type] >= 40) {
                             field_0x1b4[type] = 0;
                         }
+#endif
                         setBlendAnime(mpPane[type], field_0x1b4[type]);
                     }
 
@@ -515,27 +541,28 @@ void COutFont_c::draw(J2DTextBox* i_textbox, f32 param_1, f32 param_2, f32 param
                 case 20:
                 case 21:
                 case 22:
-#ifdef TARGET_PC
-                    if (uiTickPending)
-#endif
-                    {
-                        field_0x1b4[type]++;
-                        if (field_0x1b4[type] >= 28) {
-                            field_0x1b4[type] = 0;
-                        }
+#if TARGET_PC
+                    dusk::vdt::advance_looping_frame(field_0x1b4[type], 1.0f, 28.0f);
+#else
+                    field_0x1b4[type]++;
+                    if (field_0x1b4[type] >= 28) {
+                        field_0x1b4[type] = 0;
                     }
-
+#endif
                     mpPane[type]->rotate(0.5f * sizeX, 0.5f * sizeY, ROTATE_Z,
                                          (360.0f * (f32)field_0x1b4[type]) / 28.0f);
                     mpPane[type]->draw(posX, posY, sizeX, sizeY, false, false, false);
                     break;
                 case 25:  // some issues in here, 2020
                     if (sp256[type] == field_0x1b4[type]) {
+#if TARGET_PC
+                        dusk::vdt::advance_looping_frame(field_0x1b4[type], 1.0f, 18.0f);
+#else
                         field_0x1b4[type]++;
-
                         if (field_0x1b4[type] >= 18) {
                             field_0x1b4[type] -= 18;
                         }
+#endif
                     }
 
                     f32 alpha;
@@ -612,11 +639,14 @@ void COutFont_c::draw(J2DTextBox* i_textbox, f32 param_1, f32 param_2, f32 param
                 case 67:
                 case 68:
                     if (sp256[type] == field_0x1b4[type]) {
+#if TARGET_PC
+                        dusk::vdt::advance_looping_frame(field_0x1b4[type], 1.0f, 40.0f);
+#else
                         field_0x1b4[type]++;
-
                         if (field_0x1b4[type] >= 40) {
                             field_0x1b4[type] = 0;
                         }
+#endif
                         setBlendAnime(mpPane[type], field_0x1b4[type]);
                     }
 
@@ -632,23 +662,28 @@ void COutFont_c::draw(J2DTextBox* i_textbox, f32 param_1, f32 param_2, f32 param
                 case 59:
                 case 60:
                     if (sp256[type] == field_0x1b4[type]) {
+#if TARGET_PC
+                        dusk::vdt::advance_looping_frame(field_0x1b4[type], 1.0f, 40.0f);
+#else
                         field_0x1b4[type]++;
-
                         if (field_0x1b4[type] >= 40) {
                             field_0x1b4[type] = 0;
                         }
+#endif
                         setBlendAnime(mpPane[type], field_0x1b4[type]);
                     }
                     mpPane[type]->draw(posX, posY, sizeX, sizeY, false, false, false);
                     break;
                 case 62:
                     if (sp256[type] == field_0x1b4[type]) {
+#if TARGET_PC
+                        dusk::vdt::advance_looping_frame(field_0x1b4[type], 1.0f, 10.0f);
+#else
                         field_0x1b4[type]++;
-
                         if (field_0x1b4[type] >= 10) {
                             field_0x1b4[type] = 0;
                         }
-
+#endif
                         if (field_0x1b4[type] < 5) {
                             mpPane[type]->setBlendRatio(1.0f, 0.0f);
                         } else {
@@ -687,14 +722,22 @@ void COutFont_c::reset(J2DTextBox* i_textbox) {
     }
 }
 
-void COutFont_c::setBlendAnime(J2DPicture* i_pic, s16 param_1) {
+void COutFont_c::setBlendAnime(J2DPicture* i_pic, DUSK_IF_ELSE(f32, s16) param_1) {
+#if TARGET_PC
+    f32 i = fmodf(param_1, 20.0f);
+    if (i < 0.0f) {
+        i += 20.0f;
+    }
+#else
     int i = param_1 % 20;
+#endif
 
     if (i < 10) {
-        f32 dVar6 = fopMsgM_valueIncrease(10, i, 0);
+        f32 dVar6 = DUSK_IF_ELSE((i / 10.0f) * (i / 10.0f), fopMsgM_valueIncrease(10, i, 0));
         i_pic->setBlendRatio(1.0f - dVar6, dVar6);
     } else {
-        f32 dVar6 = fopMsgM_valueIncrease(10, i - 10, 0);
+        f32 dVar6 = DUSK_IF_ELSE(((i - 10.0f) / 10.0f) * ((i - 10.0f) / 10.0f),
+                                  fopMsgM_valueIncrease(10, i - 10, 0));
         i_pic->setBlendRatio(dVar6, 1.0f - dVar6);
     }
 }

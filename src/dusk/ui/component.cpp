@@ -7,6 +7,9 @@ Component::Component(Rml::Element* root) : mRoot(root) {}
 Component::~Component() = default;
 
 void Component::update() {
+    if (mTooltip) {
+        mTooltip->update();
+    }
     for (const auto& child : mChildren) {
         child->update();
     }
@@ -45,21 +48,51 @@ void Component::set_selected(bool value) {
     mRoot->SetPseudoClass("selected", value);
 }
 
+void Component::set_tooltip(const Rml::String& text) {
+    if (text.empty()) {
+        mTooltip.reset();
+    } else if (mTooltip) {
+        mTooltip->set_label(text);
+    } else {
+        mTooltip = std::make_unique<Tooltip>(mRoot, text);
+    }
+}
+
 void Component::set_disabled(bool value) {
     if (Component::disabled() == value) {
         return;
     }
+    auto* context = mRoot->GetContext();
     if (value) {
+        if (context != nullptr && context->GetFocusElement() == mRoot) {
+            // RmlUi moves focus to the parent when a focused control is disabled.
+            mDisabledFocusFallback = mRoot->GetParentNode();
+        }
         mRoot->SetAttribute("disabled", "");
         mRoot->SetPseudoClass("disabled", true);
         mRoot->Blur();
     } else {
+        const bool restoreFocus = mDisabledFocusFallback != nullptr && context != nullptr &&
+                                  context->GetFocusElement() == mDisabledFocusFallback;
         mRoot->RemoveAttribute("disabled");
         mRoot->SetPseudoClass("disabled", false);
+        mDisabledFocusFallback = nullptr;
+        if (restoreFocus) {
+            focus();
+        }
     }
 }
 
 void Component::listen(Rml::Element* element, Rml::EventId event,
+    ScopedEventListener::Callback callback, bool capture) {
+    if (element == nullptr) {
+        element = mRoot;
+    }
+    mListeners.emplace_back(
+        std::make_unique<ScopedEventListener>(element, event, std::move(callback), capture));
+}
+
+void Component::listen(Rml::Element* element, const Rml::String& event,
     ScopedEventListener::Callback callback, bool capture) {
     if (element == nullptr) {
         element = mRoot;
@@ -82,6 +115,24 @@ void Component::clear_children() {
     while (mRoot->GetNumChildren() > 0) {
         mRoot->RemoveChild(mRoot->GetFirstChild());
     }
+}
+
+Rml::Element* Component::add_section(const Rml::String& text) {
+    auto* elem = append(mRoot, "section-heading");
+    append_text(elem, text);
+    return elem;
+}
+
+Rml::Element* Component::add_text(const Rml::String& text) {
+    auto* elem = append(mRoot, "div");
+    append_text(elem, text);
+    return elem;
+}
+
+Rml::Element* Component::add_rml(const Rml::String& rml) {
+    auto* elem = append(mRoot, "div");
+    elem->SetInnerRML(rml);
+    return elem;
 }
 
 }  // namespace dusk::ui

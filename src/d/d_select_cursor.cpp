@@ -5,8 +5,21 @@
 #include "d/d_com_inf_game.h"
 #include "JSystem/J2DGraph/J2DAnimation.h"
 #include "JSystem/J2DGraph/J2DAnmLoader.h"
-#include "dusk/frame_interpolation.h"
 #include <cstring>
+
+#if TARGET_PC
+#include "dusk/interp/samples.h"
+#include "dusk/interp/user_interface.h"
+
+#include "m_Do/m_Do_lib.h"
+
+namespace {
+struct CursorSamples {
+    dusk::interp::Samples<cXyz> positions;
+    dusk::interp::Samples<f32> alpha;
+};
+}  // namespace
+#endif
 
 dSelect_cursorHIO_c::dSelect_cursorHIO_c() {
     field_0x8 = 1.0f;
@@ -202,6 +215,7 @@ dSelect_cursor_c::dSelect_cursor_c(u8 param_0, f32 param_1, JKRArchive* param_2)
 
 
 dSelect_cursor_c::~dSelect_cursor_c() {
+    IF_DUSK(dusk::interp::erase_owned_samples(this);)
     JKR_DELETE(mpScreen);
     mpScreen = NULL;
     if (mpPaneMgr) {
@@ -247,6 +261,15 @@ dSelect_cursor_c::~dSelect_cursor_c() {
 }
 
 void dSelect_cursor_c::draw() {
+#if TARGET_PC
+    const f32 alpha = mpPaneMgr->getAlphaRate();
+    const bool visible = mpPaneMgr->isVisible();
+    const f32 presentedAlpha = dusk::interp::get<CursorSamples>(this).alpha.read(0, alpha);
+    mpPaneMgr->setAlphaRate(presentedAlpha);
+    if (alpha == 0.0f && presentedAlpha > 0.0f) {
+        mpPaneMgr->show();
+    }
+#endif
     mpPaneMgr->getAlphaRate();
     update();
     J2DGrafContext* gphCtx = dComIfGp_getCurrentGrafPort();
@@ -255,6 +278,12 @@ void dSelect_cursor_c::draw() {
     if (mpSelectIcon) {
         mpSelectIcon->drawSelf(); // inline here, but not sure how to properly define it
     }
+#if TARGET_PC
+    mpPaneMgr->setAlphaRate(alpha);
+    if (!visible) {
+        mpPaneMgr->hide();
+    }
+#endif
 }
 
 void dSelect_cursor_c::update() {
@@ -262,14 +291,31 @@ void dSelect_cursor_c::update() {
     if (field_0xb6 == 3) {
         fVar1 = 0.5f;
     }
-#ifdef TARGET_PC
+
+#if TARGET_PC
     if (mpPane) {
         Vec pos = mpPaneMgr->getGlobalVtxCenter(mpPane, false, 0);
         mPositionX = pos.x;
         mPositionY = pos.y;
     }
+
+    auto& samples = dusk::interp::get<CursorSamples>(this);
+    cXyz position(mPositionX, mPositionY, 0.0f);
+    if (mpPane == nullptr) {
+        if (mInterpolatePosition) {
+            position = samples.positions.read(0, position);
+        }
+        if (mWorldCursor) {
+            cXyz world = samples.positions.read(1, mWorldPosition);
+            Vec projected;
+            mDoLib_project(&world, &projected);
+            position.x += projected.x;
+            position.y += projected.y;
+        }
+    }
 #endif
-    mpPaneMgr->translate(mPositionX, mPositionY);
+
+    mpPaneMgr->translate(DUSK_IF_ELSE(position.x, mPositionX), DUSK_IF_ELSE(position.y, mPositionY));
     if (mpCursorHIO->mDebugON) {
         mParam1 = mpCursorHIO->mXAxisExpansion;
         mParam2 = mpCursorHIO->mYAxisExpansion;
@@ -281,20 +327,21 @@ void dSelect_cursor_c::update() {
     if (mUpdateFlag) {
         if (field_0x30) {
             if (chkPlayAnime(0)) {
-#ifdef TARGET_PC
-                if (dusk::frame_interp::get_ui_tick_pending())
-#endif
-                {
-                    if (mNameIdx == 1) {
-                        field_0x44 += mpCursorHIO->field_0x8 * fVar1;
-                    } else {
-                        field_0x44 += fVar1;
-                    }
-
-                    if (field_0x44 >= field_0x30->getFrameMax()) {
-                        field_0x44 -= field_0x30->getFrameMax();
-                    }
+#if TARGET_PC
+                dusk::vdt::advance_looping_frame(
+                    field_0x44, mNameIdx == 1 ? mpCursorHIO->field_0x8 * fVar1 : fVar1,
+                    field_0x30->getFrameMax());
+#else
+                if (mNameIdx == 1) {
+                    field_0x44 += mpCursorHIO->field_0x8 * fVar1;
+                } else {
+                    field_0x44 += fVar1;
                 }
+
+                if (field_0x44 >= field_0x30->getFrameMax()) {
+                    field_0x44 -= field_0x30->getFrameMax();
+                }
+#endif
 
                 field_0x30->setFrame(field_0x44);
                 setBpkAnimation(field_0x30);
@@ -310,19 +357,20 @@ void dSelect_cursor_c::update() {
         for (int i = 0; i < 2; i++) {
             if (field_0x34[i]) {
                 if ((i == 0 && chkPlayAnime(2)) || (i == 1 && chkPlayAnime(3))) {
-#ifdef TARGET_PC
-                    if (dusk::frame_interp::get_ui_tick_pending())
-#endif
-                    {
-                        if (mNameIdx == 1) {
-                            field_0x48[i] += mpCursorHIO->field_0x8 * fVar1;
-                        } else {
-                            field_0x48[i] += fVar1;
-                        }
-                        if (field_0x48[i] >= field_0x34[i]->getFrameMax()) {
-                            field_0x48[i] -= field_0x34[i]->getFrameMax();
-                        }
+#if TARGET_PC
+                    dusk::vdt::advance_looping_frame(
+                        field_0x48[i], mNameIdx == 1 ? mpCursorHIO->field_0x8 * fVar1 : fVar1,
+                        field_0x34[i]->getFrameMax());
+#else
+                    if (mNameIdx == 1) {
+                        field_0x48[i] += mpCursorHIO->field_0x8 * fVar1;
+                    } else {
+                        field_0x48[i] += fVar1;
                     }
+                    if (field_0x48[i] >= field_0x34[i]->getFrameMax()) {
+                        field_0x48[i] -= field_0x34[i]->getFrameMax();
+                    }
+#endif
 
                     field_0x34[i]->setFrame(field_0x48[i]);
                 }
@@ -331,19 +379,20 @@ void dSelect_cursor_c::update() {
         }
 
         if (field_0x2C && chkPlayAnime(1)) {
-#ifdef TARGET_PC
-            if (dusk::frame_interp::get_ui_tick_pending())
-#endif
-            {
-                if (mNameIdx == 1) {
-                    field_0x40 += mpCursorHIO->field_0x8 * fVar1;
-                } else {
-                    field_0x40 += fVar1;
-                }
-                if (field_0x40 >= field_0x2C->getFrameMax()) {
-                    field_0x40 -= field_0x2C->getFrameMax();
-                }
+#if TARGET_PC
+            dusk::vdt::advance_looping_frame(
+                field_0x40, mNameIdx == 1 ? mpCursorHIO->field_0x8 * fVar1 : fVar1,
+                field_0x2C->getFrameMax());
+#else
+            if (mNameIdx == 1) {
+                field_0x40 += mpCursorHIO->field_0x8 * fVar1;
+            } else {
+                field_0x40 += fVar1;
             }
+            if (field_0x40 >= field_0x2C->getFrameMax()) {
+                field_0x40 -= field_0x2C->getFrameMax();
+            }
+#endif
 
             field_0x2C->setFrame(field_0x40);
             setBckAnimation(field_0x2C);
@@ -351,12 +400,7 @@ void dSelect_cursor_c::update() {
         }
 
         if (chkPlayAnime(1) && mNameIdx == 0) {
-#ifdef TARGET_PC
-            if (dusk::frame_interp::get_ui_tick_pending())
-#endif
-            {
-                setCursorAnimation();
-            }
+            setCursorAnimation();
         }
 
         mpScreen->animation();
@@ -454,6 +498,7 @@ void dSelect_cursor_c::setAlphaRate(f32 i_alphaRate) {
     }
 
     mpPaneMgr->setAlphaRate(i_alphaRate);
+    IF_DUSK(dusk::interp::get<CursorSamples>(this).alpha.capture(&i_alphaRate, 1));
 }
 
 int dSelect_cursor_c::addAlpha() {
@@ -468,7 +513,7 @@ int dSelect_cursor_c::addAlpha() {
     } else {
         alpha_timer++;
         mpPaneMgr->alphaAnimeStart(alpha_timer);
-        mpPaneMgr->setAlphaRate(alpha_timer/5.0f);
+        DUSK_IF_ELSE(setAlphaRate, mpPaneMgr->setAlphaRate)(alpha_timer/5.0f);
     }
 
     return 0;
@@ -485,7 +530,7 @@ int dSelect_cursor_c::decAlpha() {
     } else {
         alpha_timer--;
         mpPaneMgr->alphaAnimeStart(alpha_timer);
-        mpPaneMgr->setAlphaRate(alpha_timer/5.0f);
+        DUSK_IF_ELSE(setAlphaRate, mpPaneMgr->setAlphaRate)(alpha_timer/5.0f);
     }
 
     return 0;
@@ -543,10 +588,14 @@ void dSelect_cursor_c::setCursorAnimation() {
         fVar1 = 0.5f;
     }
 
+#if TARGET_PC
+    dusk::vdt::advance_looping_frame(field_0x40, fVar1, 20.0f);
+#else
     field_0x40 += fVar1;
     if (field_0x40 >= 20.0f) {
         field_0x40 -= 20.0f;
     }
+#endif
     f32 fVar2;
     f32 param3 = mParam3;
     fVar2 = field_0x40;
@@ -576,7 +625,32 @@ void dSelect_cursor_c::moveCenter(J2DPane* i_pane, f32 i_x, f32 i_y) {
     i_pane->translate(i_x,i_y);
 }
 
-#ifdef TARGET_PC
+#if TARGET_PC
+void dSelect_cursor_c::setInterp(bool enabled) {
+    if (mInterpolatePosition != enabled) {
+        mInterpolatePosition = enabled;
+        dusk::interp::get<CursorSamples>(this).positions.reset();
+    }
+}
+
+void dSelect_cursor_c::setPos(f32 x, f32 y, const cXyz* world) {
+    auto& positions = dusk::interp::get<CursorSamples>(this).positions;
+    if (mWorldCursor != (world != nullptr)) {
+        positions.reset();
+    }
+    mWorldCursor = world != nullptr;
+    mPositionX = x;
+    mPositionY = y;
+    if (world) {
+        mpPane = nullptr;
+        mWorldPosition = *world;
+    }
+    if (mInterpolatePosition) {
+        const cXyz values[] = {cXyz(x, y, 0.0f), mWorldPosition};
+        positions.capture(values, mWorldCursor ? 2 : 1);
+    }
+}
+
 void dSelect_cursor_c::refreshAspectScale(f32 param_0) {
     mParam1 = mBaseParam1 * param_0;
 }

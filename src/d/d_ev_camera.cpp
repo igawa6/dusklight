@@ -13,12 +13,14 @@
 #include "d/actor/d_a_alink.h"
 #include <cstring>
 
-#include "dusk/string.hpp"
+#if TARGET_PC
+#include "dusk/interp/frame_interpolation.h"
 
-#ifdef __MWERKS__
-#define LOAD_4BYTE_STRING_LITERAL(x) (*(u32*)(x))
-#else
+#include "helpers/string.hpp"
+
 #define LOAD_4BYTE_STRING_LITERAL(x) read_big_endian_u32(x)
+#else
+#define LOAD_4BYTE_STRING_LITERAL(x) (*(u32*)(x))
 #endif
 
 namespace {
@@ -1832,6 +1834,7 @@ bool dCamera_c::restorePosEvCamera() {
                 mViewCache.mDirection.Val(restorePos->field_0x48.mEye - restorePos->field_0x48.mCenter);
                 mViewCache.mEye = mViewCache.mCenter + mViewCache.mDirection.Xyz();
                 mViewCache.mFovy = restorePos->field_0x48.mFovy;
+                IF_DUSK(dusk::interp::request_presentation_sync());
             }
     }
 
@@ -2683,6 +2686,11 @@ bool dCamera_c::loadEvCamera() {
     }
 
     if (mCurCamStyleTimer < load->mTimer) {
+#if TARGET_PC
+        if (mCurCamStyleTimer == 0 && load->mTimer == 1) {
+            dusk::interp::request_presentation_sync();
+        }
+#endif
         f32 fVar5;
         if (load->mType != 0) {
             mEventData.field_0xf0.Step();
@@ -3488,6 +3496,11 @@ bool dCamera_c::fixedFramesEvCamera() {
     mViewCache.mEye = fframes_p->field_0x10;
     mViewCache.mFovy = fframes_p->field_0x28;
     mViewCache.mDirection.Val(mViewCache.mEye - mViewCache.mCenter);
+#if TARGET_PC
+    if (mCurCamStyleTimer == 0) {
+        dusk::interp::request_presentation_sync();
+    }
+#endif
     if (fframes_p->field_0x0 && mCurCamStyleTimer < fframes_p->mTimer) {
         return 0;
     }
@@ -3541,6 +3554,11 @@ bool dCamera_c::bSplineEvCamera() {
     }
 
     if (bSpline->field_0x1c == 0 && mEventData.field_0xf0.Step()) {
+#if TARGET_PC
+        if (mCurCamStyleTimer == 0) {
+            dusk::interp::request_presentation_sync();
+        }
+#endif
         cXyz tmpcenters = mEventData.field_0xf0.Calc(bSpline->mCenters);
         cXyz tmpeyes = mEventData.field_0xf0.Calc(bSpline->mEyes);
 

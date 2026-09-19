@@ -27,7 +27,6 @@ public:
 
     void setScrnExplain(dMsgScrnExplain_c* p_scrn) { mpScrn = p_scrn; }
 
-private:
     /* 0x4 */ dMsgScrnExplain_c* mpScrn;
 };
 
@@ -264,11 +263,12 @@ public:
     void setInitSaveData();
     void _draw();
 
-    #if TARGET_PC
+#if TARGET_PC
     void menuSaveWide();
     bool pointerSaveSelect();
     bool pointerYesNoSelect(bool errorSelect, u8 errParam = 0, u8 soundParam = 0);
-    #endif
+    void presentLayoutAnims();
+#endif
 
     void _draw2();
 
@@ -278,7 +278,6 @@ public:
     u8 getEndStatus() { return mEndStatus; }
     void setUseType(u8 type) { mUseType = type; }
 
-private:
     /* 0x0004 */ JKRArchive* mpArchive;
     /* 0x0008 */ mDoDvdThd_mountArchive_c* mpMount;
     /* 0x000C */ STControl* stick;
@@ -295,16 +294,16 @@ private:
     /* 0x0054 */ u8 mSelectedFile;
     /* 0x0055 */ u8 mLastSelFile;
     /* 0x0058 */ CPaneMgr* mpSelectMoveBase;
-    /* 0x005C */ int mDataBaseMoveAnmFrame;
+    /* 0x005C */ DUSK_IF_ELSE(f32, int) mDataBaseMoveAnmFrame;
     /* 0x0060 */ int mDataBaseMoveFrameMax;
     /* 0x0064 */ u8 field_0x64;
     /* 0x0065 */ u8 field_0x65;
     /* 0x0068 */ CPaneMgr* mpSelData[3];
-    /* 0x0074 */ int field_0x74[3];
+    /* 0x0074 */ DUSK_IF_ELSE(f32, int) field_0x74[3];
     /* 0x0080 */ int field_0x80;
     /* 0x0084 */ CPaneMgr* mpNoYes[2];
-    /* 0x008C */ int field_0x8c[2];
-    /* 0x0094 */ int mYesNoMoveAnmFrame;
+    /* 0x008C */ DUSK_IF_ELSE(f32, int) field_0x8c[2];
+    /* 0x0094 */ DUSK_IF_ELSE(f32, int) mYesNoMoveAnmFrame;
     /* 0x0098 */ int mYesNoMoveAnmMax;
     /* 0x009C */ u8 field_0x9c;
     /* 0x009D */ u8 field_0x9d;
@@ -312,7 +311,7 @@ private:
     /* 0x00A0 */ J2DPane* field_0xa0;
     /* 0x00A4 */ u8 field_0xa4[0x10];
     /* 0x00B4 */ J2DPane* field_0xb4;
-    /* 0x00B8 */ int field_0xb8;
+    /* 0x00B8 */ DUSK_IF_ELSE(f32, int) field_0xb8;
     /* 0x00BC */ int field_0xbc;
     /* 0x00C0 */ CPaneMgrAlpha* mpErrTxtPane[2];
     /* 0x00C8 */ TEXT_SPAN mpErrTxt[2];
@@ -336,15 +335,15 @@ private:
     /* 0x0134 */ u8 mNoYesWakuAnmTimer[2];
     /* 0x0138 */ CPaneMgr* mpNoYesTxt[2];
     /* 0x0140 */ J2DAnmColor* mpFileWakuAnm;
-    /* 0x0144 */ int mFileWakuAnmFrame;
+    /* 0x0144 */ DUSK_IF_ELSE(f32, int) mFileWakuAnmFrame;
     /* 0x0148 */ J2DAnmTextureSRTKey* mpFileWakuRotAnm;
-    /* 0x014C */ int mFileWakuRotAnmFrame;
+    /* 0x014C */ DUSK_IF_ELSE(f32, int) mFileWakuRotAnmFrame;
     /* 0x0150 */ J2DAnmColor* field_0x150;
-    /* 0x0154 */ int field_0x154;
+    /* 0x0154 */ DUSK_IF_ELSE(f32, int) field_0x154;
     /* 0x0158 */ J2DAnmTextureSRTKey* field_0x158;
-    /* 0x015C */ int field_0x15c;
+    /* 0x015C */ DUSK_IF_ELSE(f32, int) field_0x15c;
     /* 0x0160 */ J2DAnmTevRegKey* field_0x160;
-    /* 0x0164 */ int field_0x164;
+    /* 0x0164 */ DUSK_IF_ELSE(f32, int) field_0x164;
     /* 0x0168 */ CPaneMgrAlpha* mpHeaderTxtPane[2];
     /* 0x0170 */ TEXT_SPAN mpHeaderTxt[2];
     /* 0x0178 */ u8 mHeaderTxtType;  // 0: Select Menu  1: YesNo Menu
@@ -396,6 +395,9 @@ private:
     /* 0x21A1 */ u8 field_0x21a1;
     /* 0x21A2 */ u8 field_0x21a2;
     /* 0x21A3 */ u8 field_0x21a3;
+#if TARGET_PC
+    u8 mYesNoSelAnmCol;
+#endif
 };
 
 #endif /* D_MENU_D_MENU_SAVE_H */

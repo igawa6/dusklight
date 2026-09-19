@@ -106,7 +106,11 @@ public:
     bool isShowFlag(int i_no) { return field_0x1e6 & (1 << i_no); }
     void onShowFlag(int i_no) { field_0x1e6 |= (1 << i_no); }
 
-private:
+#if TARGET_PC
+    void presentAnims();
+    void presentMap();
+#endif
+
     /* 0x0FC */ int field_0xfc;
     /* 0x100 */ JKRExpHeap* mpHeap;
     /* 0x104 */ JKRExpHeap* mpSubHeap;
@@ -306,6 +310,16 @@ private:
     /* 0x460 */ u8 field_0x460[0x4bc - 0x460];
     /* 0x4BC */ u8 field_0x4bc;
     /* 0x4BC */ u8 field_0x4bd;
+
+#if TARGET_PC
+    struct {
+        f32 vesselX, vesselY, vesselScale, vesselAlpha;
+        f32 buttonAX[2], buttonAY[2];
+        f32 buttonBX[2], buttonBY[2];
+        f32 crossX, crossY;
+        bool ready;
+    } mPresentationTargets;
+#endif
 };
 
 #endif /* D_METER_D_METER2_H */

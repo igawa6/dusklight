@@ -27,6 +27,10 @@ public:
     void _delete();
     void _move();
     void _draw();
+#if TARGET_PC
+    void advanceSelectItem();
+    void captureRenderState();
+#endif
     void setKanteraPos(f32, f32);
     bool isOpen();
     bool isMoveEnd();
@@ -84,7 +88,6 @@ public:
     void drawFlag0() { mDrawFlag = 0; }
     void setStatus(u8 i_status) { mStatus = i_status; }
 
-private:
     /* 0x004 */ JKRExpHeap* mpHeap;
     /* 0x008 */ STControl* mpStick;
     /* 0x00C */ CSTControl* mpCStick;
@@ -167,7 +170,7 @@ private:
     /* 0x67E */ s16 field_0x67e;
     /* 0x680 */ s16 mCursorSpeed;
     /* 0x682 */ s16 field_0x682;
-    /* 0x684 */ s16 field_0x684;
+    /* 0x684 */ DUSK_IF_ELSE(f32, s16) field_0x684;
     /* 0x686 */ s16 field_0x686[4];
     /* 0x68E */ s16 field_0x68e;
     /* 0x690 */ u8 mItemSlots[MAX_ITEM_SLOTS];
@@ -208,16 +211,6 @@ private:
     /* 0x6D2 */ u8 field_0x6d2;
     /* 0x6D3 */ u8 field_0x6d3;
 #if TARGET_PC
-    f32 mSelectItemSlideElapsed[4];
-    f32 mCursorInterpPrevX;
-    f32 mCursorInterpPrevY;
-    f32 mCursorInterpCurrX;
-    f32 mCursorInterpCurrY;
-    s16 mCursorInterpPrevAngle;
-    s16 mCursorInterpCurrAngle;
-    bool mCursorInterpPrevAngular;
-    bool mCursorInterpCurrAngular;
-    bool mCursorInterpInit;
     bool mPointerTouchPressHoveredCurrent;
 #endif
 };

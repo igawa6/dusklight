@@ -1,6 +1,7 @@
 #pragma once
 
 #include "event.hpp"
+#include "tooltip.hpp"
 #include "ui.hpp"
 
 #include <RmlUi/Core.h>
@@ -26,23 +27,32 @@ public:
 
     virtual void update();
     virtual bool focus();
+    virtual bool focus_from(NavCommand direction) { return focus(); }
 
     virtual bool selected() const { return mRoot->IsPseudoClassSet("selected"); }
     virtual void set_selected(bool selected);
     virtual bool disabled() const { return mRoot->IsPseudoClassSet("disabled"); }
     virtual void set_disabled(bool disabled);
+    virtual void set_tooltip(const Rml::String& text);
 
     void listen(Rml::Element* element, Rml::EventId event, ScopedEventListener::Callback callback,
         bool capture = false);
+    void listen(Rml::Element* element, const Rml::String& event,
+        ScopedEventListener::Callback callback, bool capture = false);
     bool contains(Rml::Element* element) const;
 
     template <typename T, typename... Args>
-    requires std::is_base_of_v<Component, T> T& add_child(Args&&... args) {
+        requires std::is_base_of_v<Component, T>
+    T& add_child(Args&&... args) {
         auto child = std::make_unique<T>(mRoot, std::forward<Args>(args)...);
         T& ref = *child;
         mChildren.emplace_back(std::move(child));
         return ref;
     }
+
+    Rml::Element* add_section(const Rml::String& text);
+    Rml::Element* add_text(const Rml::String& text);
+    Rml::Element* add_rml(const Rml::String& rml);
 
     Rml::Element* root() const { return mRoot; }
 
@@ -50,8 +60,10 @@ protected:
     void clear_children();
 
     Rml::Element* mRoot = nullptr;
-    std::vector<std::unique_ptr<Component> > mChildren;
-    std::vector<std::unique_ptr<ScopedEventListener> > mListeners;
+    Rml::Element* mDisabledFocusFallback = nullptr;
+    std::vector<std::unique_ptr<Component>> mChildren;
+    std::vector<std::unique_ptr<ScopedEventListener>> mListeners;
+    std::unique_ptr<Tooltip> mTooltip;
 };
 
 template <class Derived>

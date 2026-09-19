@@ -32,11 +32,11 @@
 #include "JSystem/JKernel/JKRSolidHeap.h"
 #include <cstdlib>
 #include <cstring>
+
 #if TARGET_PC
-#include "dusk/imgui/ImGuiBloomWindow.hpp"
-#include "dusk/settings.h"
-#include "dusk/frame_interpolation.h"
 #include "dusk/game_clock.h"
+#include "dusk/interp/material.h"
+#include "dusk/imgui/ImGuiBloomWindow.hpp"
 static f32 timeScale = 1.0f;
 #endif
 
@@ -107,9 +107,9 @@ static u16 lightMaskData[8] = {
     GX_LIGHT0, GX_LIGHT1, GX_LIGHT2, GX_LIGHT3, GX_LIGHT4, GX_LIGHT5, GX_LIGHT6, GX_LIGHT7,
 };
 
-dScnKy_env_light_c g_env_light;
+DUSK_GAME_DATA dScnKy_env_light_c g_env_light;
 
-Z2EnvSeMgr g_mEnvSeMgr;
+DUSK_GAME_DATA Z2EnvSeMgr g_mEnvSeMgr;
 
 #if DEBUG
 dKankyo_HIO_c g_kankyoHIO;
@@ -1800,9 +1800,7 @@ void dScnKy_env_light_c::setLight_palno_get(u8* prev_envr_id_p, u8* next_envr_id
     u8 psel_idx = 0;
     int i;
     int sp14 = 0;
-#if TARGET_PC
-    const f32 timeScale = (pattern_ratio_p == &g_env_light.pat_ratio) ? ::timeScale : 1.0f;
-#endif
+    IF_DUSK(const f32 timeScale = pattern_ratio_p == &g_env_light.pat_ratio ? ::timeScale : 1.0f);
 
     if (*init_timer_p != 0) {
         (*init_timer_p)++;
@@ -2344,10 +2342,7 @@ void dScnKy_env_light_c::setLight() {
         u8 next_pal_start_id;
         u8 prev_pal_end_id;
         u8 next_pal_end_id;
-#if TARGET_PC
-        const f32 deltaTime = dusk::game_clock::consume_interval(this);
-        timeScale = deltaTime / dusk::game_clock::period_for_original_frames(1.0f);
-#endif
+        IF_DUSK(timeScale = dusk::game_clock::original_frames());
         setLight_palno_get(&g_env_light.PrevCol, &g_env_light.UseCol, &g_env_light.wether_pat0,
                            &g_env_light.wether_pat1, &prev_pal_start_id, &prev_pal_end_id,
                            &next_pal_start_id, &next_pal_end_id, &color_ratio, &start_pat_pal_id,
@@ -4485,6 +4480,7 @@ static void setLightTevColorType_MAJI_sub(J3DMaterial* material_p, dKy_tevstr_c*
                 }
             }
         }
+        IF_DUSK(dusk::interp::material::record_light_view(material_p));
     }
 }
 
@@ -8275,9 +8271,7 @@ static int dKy_Create(void* i_this) {
     kankyo_class* kankyo = (kankyo_class*)i_this;
     BOOL next_time_set = false;
 
-#if TARGET_PC
-    kankyo->base.draw_interp_frame = true;
-#endif
+    IF_DUSK(kankyo->base.draw_interp_frame = true);
 
     stage_envr_info_class* stage_envr_p = dComIfGp_getStageEnvrInfo();
     if (stage_envr_p != NULL && dComIfGp_getStartStageRoomNo() != -1) {

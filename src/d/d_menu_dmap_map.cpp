@@ -11,12 +11,13 @@
 #include "d/d_menu_dmap_map.h"
 #include "f_op/f_op_msg_mng.h"
 #include "m_Do/m_Do_graphic.h"
+
 #if TARGET_PC
-#include <dolphin/gx/GXExtra.h>
+#include "dusk/interp/user_interface.h"
 #endif
 
 struct dMdm_HIO_prm_res_dst_s {
-    static void* m_res;
+    static DUSK_GAME_DATA void* m_res;
 };
 
 bool renderingDmap_c::hasMap() const {
@@ -172,7 +173,7 @@ int renderingDmap_c::getLineWidth(int param_0) {
     return var_r31;
 }
 
-static u32 const l_paletteDmap_m[60] ATTRIBUTE_ALIGN(32) = {
+ATTRIBUTE_ALIGN(32) static u32 const l_paletteDmap_m[60] = {
     0x00000000,
     0x00000000,
     0x80008000,
@@ -288,7 +289,7 @@ void renderingDmap_c::afterDrawPath() {
     renderingPlusDoor_c::afterDrawPath();
 }
 
-void* dMdm_HIO_prm_res_dst_s::m_res;
+DUSK_GAME_DATA void* dMdm_HIO_prm_res_dst_s::m_res;
 
 void dMenu_DmapMap_c::_create(u16 param_0, u16 param_1, u16 param_2, u16 param_3,
                               void* res) {
@@ -461,7 +462,7 @@ void dMenu_StageMapCtrl_c::setPlusNowStayFloorNo(s8 param_0, u8 param_1) {
 }
 
 void dMenu_StageMapCtrl_c::moveFloor() {
-    if ((field_0xf3 == 0) && (field_0xf1 == 0)) {
+    if ((field_0xf3 DUSK_IF_ELSE(<= , ==) 0) && (field_0xf1 DUSK_IF_ELSE(<= , ==) 0)) {
         if (field_0xea != 0) {
             field_0xf3 = field_0xf0;
             field_0x90 = 0.0f;
@@ -488,7 +489,7 @@ void dMenu_StageMapCtrl_c::moveFloor() {
 
             field_0xea = 0;
         }
-    } else if (field_0xf1 != 0 && field_0xea != 0) {
+    } else if (field_0xf1 DUSK_IF_ELSE(>, !=) 0 && field_0xea != 0) {
         if (field_0xea > 0) {
             if (field_0xe7 < field_0xed) {
                 if ((field_0xe7 == std::floor(field_0xc4) && field_0xe8 == field_0xe7 + field_0xea) || field_0x90 > 0.5f) {
@@ -520,22 +521,22 @@ void dMenu_StageMapCtrl_c::moveFloor() {
         field_0xeb = field_0xe7;
     }
 
-    if (field_0xf1 != 0) {
+    if (field_0xf1 DUSK_IF_ELSE(>, !=) 0) {
         f32 temp_f31 = (f32)(field_0xf0 - field_0xf3) / (f32)field_0xf0;
 
         field_0xeb = getFloorNo(field_0xc4);
         field_0xec = getFloorNo(field_0xc0);
         field_0x90 = getBlendPer(temp_f31 - std::floor(temp_f31));
 
-        field_0xf1--;
-        if (field_0xf1 == 0) {
+        DUSK_IF_ELSE(dusk::vdt::advance_toward_frame(field_0xf1, 0.0f, 1.0f), field_0xf1--);
+        if (field_0xf1 DUSK_IF_ELSE(<=, ==) 0) {
             field_0xe8 = field_0xe7;
         }
     }
 
-    if (field_0xf3 != 0) {
-        field_0xf3--;
-        if (field_0xf3 != 0 && field_0xf1 != 0) {
+    if (field_0xf3 DUSK_IF_ELSE(>, !=) 0) {
+        DUSK_IF_ELSE(dusk::vdt::advance_toward_frame(field_0xf3, 0.0f, 1.0f), field_0xf3--);
+        if (field_0xf3 DUSK_IF_ELSE(>, !=) 0 && field_0xf1 DUSK_IF_ELSE(>, !=) 0) {
             f32 temp_f30 = (f32)(field_0xf0 - field_0xf3) / (f32)field_0xf0;
             field_0xeb = getFloorNo(field_0xc4);
             field_0xec = getFloorNo(field_0xc0);
@@ -680,7 +681,7 @@ f32 dMenu_DmapMapCtrl_c::getZoomCmPerPixel() {
     return var_f29;
 }
 
-static u32 l_data[61] ATTRIBUTE_ALIGN(32) = {
+ATTRIBUTE_ALIGN(32) static u32 l_data[61] = {
     0x80008000,
     0x80008000,
     0x00000000,
@@ -804,12 +805,14 @@ void dMenu_StageMapCtrl_c::zoomCalcSet(f32 param_0) {
 }
 
 void dMenu_StageMapCtrl_c::zoomIn_proc() {
-    f32 temp_f1 = fopMsgM_valueIncrease(field_0xf2, field_0xf2 - field_0xf4, 4);
+    IF_DUSK(dusk::vdt::advance_toward_frame(field_0xf4, 0.0f, 1.0f));
+    f32 temp_f1 = DUSK_IF_ELSE(dusk::vdt::present_sine_ease(field_0xf2, field_0xf2 - field_0xf4),
+                               fopMsgM_valueIncrease(field_0xf2, field_0xf2 - field_0xf4, 4));
     field_0xd8 = temp_f1;
     zoomCalcSet(temp_f1);
 
-    field_0xf4--;
-    if (field_0xf4 < 0) {
+    IF_NOT_DUSK(field_0xf4--);
+    if (field_0xf4 DUSK_IF_ELSE(<=, <) 0) {
         field_0xf5 = 2;
     }
 }
@@ -843,7 +846,7 @@ void dMenu_StageMapCtrl_c::zoomWait_init_proc() {
 }
 
 bool dMenu_DmapMapCtrl_c::isEnableZoomMove() const {
-    return field_0xf3 == 0 && (!getDisableZoomMoveFlgX() || !getDisableZoomMoveFlgZ());
+    return field_0xf3 DUSK_IF_ELSE(<=, ==) 0 && (!getDisableZoomMoveFlgX() || !getDisableZoomMoveFlgZ());
 }
 
 void dMenu_StageMapCtrl_c::zoomWait_proc() {
@@ -887,12 +890,14 @@ void dMenu_StageMapCtrl_c::zoomOut_init_proc() {
 }
 
 void dMenu_StageMapCtrl_c::zoomOut_proc() {
-    f32 temp_f1 = fopMsgM_valueIncrease(field_0xf2, field_0xf2 - field_0xf4, 4);
+    IF_DUSK(dusk::vdt::advance_toward_frame(field_0xf4, 0.0f, 1.0f));
+    f32 temp_f1 = DUSK_IF_ELSE(dusk::vdt::present_sine_ease(field_0xf2, field_0xf2 - field_0xf4),
+                               fopMsgM_valueIncrease(field_0xf2, field_0xf2 - field_0xf4, 4));
     zoomCalcSet(1.0f - temp_f1);
     field_0xd8 = 1.0f - temp_f1;
 
-    field_0xf4--;
-    if (field_0xf4 < 0) {
+    IF_NOT_DUSK(field_0xf4--);
+    if (field_0xf4 DUSK_IF_ELSE(<=, <) 0) {
         field_0xf5 = 0;
     }
 }
@@ -939,13 +944,13 @@ void dMenu_StageMapCtrl_c::_create(u16 param_0, u16 param_1, u16 param_2, u16 pa
     _create(param_0, param_1, param_2, param_3, var_r31, param_4);
 }
 
-f32 dMenu_StageMapCtrl_c::m_zoomCenterMinX;
+DUSK_GAME_DATA f32 dMenu_StageMapCtrl_c::m_zoomCenterMinX;
 
-f32 dMenu_StageMapCtrl_c::m_zoomCenterMaxX;
+DUSK_GAME_DATA f32 dMenu_StageMapCtrl_c::m_zoomCenterMaxX;
 
-f32 dMenu_StageMapCtrl_c::m_zoomCenterMinZ;
+DUSK_GAME_DATA f32 dMenu_StageMapCtrl_c::m_zoomCenterMinZ;
 
-f32 dMenu_StageMapCtrl_c::m_zoomCenterMaxZ;
+DUSK_GAME_DATA f32 dMenu_StageMapCtrl_c::m_zoomCenterMaxZ;
 
 void dMenu_StageMapCtrl_c::_create(u16 width, u16 height, u16 param_2, u16 param_3,
                                    s8 param_4, void* param_5) {
@@ -990,7 +995,7 @@ void dMenu_StageMapCtrl_c::_delete() {
 
 bool dMenu_StageMapCtrl_c::isEnableZoomIn() {
     bool var_r30 = 0;
-    if (field_0xf3 == 0 && dStage_roomControl_c::getFileList2(field_0xe6) != NULL) {
+    if (field_0xf3 DUSK_IF_ELSE(<=, ==) 0 && dStage_roomControl_c::getFileList2(field_0xe6) != NULL) {
         var_r30 = 1;
     }
 
@@ -998,7 +1003,7 @@ bool dMenu_StageMapCtrl_c::isEnableZoomIn() {
 }
 
 bool dMenu_StageMapCtrl_c::isEnableZoomOut() {
-    return field_0xf3 == 0;
+    return field_0xf3 DUSK_IF_ELSE(<=, ==) 0;
 }
 
 void dMenu_StageMapCtrl_c::setPlusZoomCenterX(f32 param_0) {

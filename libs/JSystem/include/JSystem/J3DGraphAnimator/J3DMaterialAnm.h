@@ -31,10 +31,15 @@ public:
     void setAnmFlag(bool flag) { mAnmFlag = flag; }
     bool getAnmFlag() const { return mAnmFlag; }
 
+#if TARGET_PC
+    void calc(GXColor* pColor) const;
+    J3DAnmColor* getAnimation() const { return mAnmColor; }
+#else
     void calc(GXColor* pColor) const {
         J3D_ASSERT_NULLPTR(507, pColor != NULL);
         mAnmColor->getColor(field_0x0, pColor);
     }
+#endif
 
 private:
     /* 0x0 */ u16 field_0x0;
@@ -66,10 +71,15 @@ public:
 
     void setAnmFlag(bool flag) { mAnmFlag = flag; }
 
+#if TARGET_PC
+    void calc(J3DTextureSRTInfo* pSRTInfo) const;
+    J3DAnmTextureSRTKey* getAnimation() const { return mAnmTransform; }
+#else
     void calc(J3DTextureSRTInfo* pSRTInfo) const {
         J3D_ASSERT_NULLPTR(519, pSRTInfo != NULL);
         mAnmTransform->getTransform(field_0x0, pSRTInfo);
     }
+#endif
 
     bool getAnmFlag() const { return mAnmFlag; }
 
@@ -108,6 +118,9 @@ public:
 
     void setAnmFlag(bool flag) { mAnmFlag = flag; }
     bool getAnmFlag() const { return mAnmFlag; }
+#if TARGET_PC
+    J3DAnmTexPattern* getAnimation() const { return mAnmTexPattern; }
+#endif
     J3DAnmTexPattern* getAnmTexPattern() { return mAnmTexPattern; }
 
 private:
@@ -141,10 +154,15 @@ public:
     void setAnmFlag(bool flag) { mAnmFlag = flag; }
     bool getAnmFlag() const { return mAnmFlag; }
 
+#if TARGET_PC
+    void calc(GXColorS10* pColor) const;
+    J3DAnmTevRegKey* getAnimation() const { return mAnmTevReg; }
+#else
     void calc(GXColorS10* pColor) const {
         J3D_ASSERT_NULLPTR(545, pColor != NULL);
         mAnmTevReg->getTevColorReg(field_0x0, pColor);
     }
+#endif
 
 private:
     /* 0x0 */ u16 field_0x0;
@@ -177,10 +195,15 @@ public:
     void setAnmFlag(bool flag) { mAnmFlag = flag; }
     bool getAnmFlag() const { return mAnmFlag; }
 
+#if TARGET_PC
+    void calc(GXColor* pColor) const;
+    J3DAnmTevRegKey* getAnimation() const { return mAnmTevReg; }
+#else
     void calc(GXColor* pColor) const {
         J3D_ASSERT_NULLPTR(558, pColor != NULL);
         mAnmTevReg->getTevKonstReg(field_0x0, pColor);
     }
+#endif
 
 private:
     /* 0x0 */ u16 field_0x0;
@@ -197,6 +220,9 @@ public:
     J3DMaterialAnm() { initialize(); }
 
     void initialize();
+#if TARGET_PC
+    bool hasMaterialAnimation() const;
+#endif
     void setMatColorAnm(int, J3DMatColorAnm*);
     void setTexMtxAnm(int, J3DTexMtxAnm*);
     void setTexNoAnm(int, J3DTexNoAnm*);
@@ -207,6 +233,12 @@ public:
     virtual void calc(J3DMaterial*) const;
 
     const J3DTexMtxAnm& getTexMtxAnm(int i) const { return mTexMtxAnm[i]; }
+#if TARGET_PC
+    const J3DMatColorAnm& getMatColorAnm(int i) const { return mMatColorAnm[i]; }
+    const J3DTexNoAnm& getTexNoAnm(int i) const { return mTexNoAnm[i]; }
+    const J3DTevColorAnm& getTevColorAnm(int i) const { return mTevColorAnm[i]; }
+    const J3DTevKColorAnm& getTevKColorAnm(int i) const { return mTevKColorAnm[i]; }
+#endif
 
 private:
     /* 0x04 */ J3DMatColorAnm mMatColorAnm[2];

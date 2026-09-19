@@ -9,9 +9,9 @@
 #include <os.h>
 #include <stdint.h>
 
-#include "dusk/string.hpp"
+#include "helpers/string.hpp"
 
-JASHeap* JASWaveArcLoader::sAramHeap;
+DUSK_GAME_DATA JASHeap* JASWaveArcLoader::sAramHeap;
 
 JASHeap* JASWaveArcLoader::getRootHeap() {
     if (JASWaveArcLoader::sAramHeap) {
@@ -20,7 +20,7 @@ JASHeap* JASWaveArcLoader::getRootHeap() {
     return JASKernel::getAramHeap();
 }
 
-char JASWaveArcLoader::sCurrentDir[DIR_MAX] = "/AudioRes/Waves/";
+DUSK_GAME_DATA char JASWaveArcLoader::sCurrentDir[DIR_MAX] = "/AudioRes/Waves/";
 
 void JASWaveArcLoader::setCurrentDir(char const* dir) {
     JUT_ASSERT(40, std::strlen(dir) < DIR_MAX - 1);
@@ -38,7 +38,7 @@ char* JASWaveArcLoader::getCurrentDir() {
 }
 
 JASWaveArc::JASWaveArc() : mHeap(this) {
-    _48 = 0;
+    mCurrentlyLoaded = 0;
     mStatus = 0;
     mEntryNum = -1;
     mFileLength = 0;
@@ -57,7 +57,7 @@ bool JASWaveArc::loadSetup(u32 param_0) {
     if (mStatus != 1) {
         return false;
     }
-    _48 = 1;
+    mCurrentlyLoaded = 1;
     mStatus = 2;
     return true;
 }
@@ -71,7 +71,7 @@ bool JASWaveArc::eraseSetup() {
         mStatus = 0;
         return false;
     }
-    _48 = 0;
+    mCurrentlyLoaded = 0;
     mStatus = 0;
     return true;
 }
@@ -91,7 +91,7 @@ void JASWaveArc::loadToAramCallback(void* this_) {
 
 bool JASWaveArc::sendLoadCmd() {
     JASMutexLock mutexLock(&mMutex);
-    _48 = 0;
+    mCurrentlyLoaded = 0;
     mStatus = 1;
     loadToAramCallbackParams commandInfo;
     commandInfo.mWavArc = this;

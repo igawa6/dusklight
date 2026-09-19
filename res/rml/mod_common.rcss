@@ -1,0 +1,36 @@
+update-badge {
+    display: inline-block;
+    flex: 0 0 auto;
+    align-self: center;
+    min-width: 20dp;
+    height: 20dp;
+    margin-left: 8dp;
+    padding: 0 6dp;
+    border-radius: 10dp;
+    background-color: var(--color-accent);
+    color: #19170f;
+    font-family: var(--font-family-body);
+    font-size: 12dp;
+    font-weight: bold;
+    line-height: 20dp;
+    text-align: center;
+    white-space: nowrap;
+    vertical-align: middle;
+    pointer-events: none;
+    transform: translateY(0dp);
+}
+
+.mod-update-link {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+}
+
+.mod-update-link > update-label {
+    display: block;
+    flex: 0 0 auto;
+}
+
+.mod-update-link > update-badge {
+    margin-left: 0;
+}

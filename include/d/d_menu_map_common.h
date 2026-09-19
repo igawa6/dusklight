@@ -123,8 +123,8 @@ public:
     /* 0x06C */ u32 _6c;
     /* 0x070 */ IconInfo_s mIconInfo[128];
     /* 0xC70 */ u16 mIconNum;
-    /* 0xC72 */ s16 mBlinkTimer;
-    /* 0xC74 */ s16 mLightDropFlashTimer;
+    /* 0xC72 */ DUSK_IF_ELSE(f32, s16) mBlinkTimer;
+    /* 0xC74 */ DUSK_IF_ELSE(f32, s16) mLightDropFlashTimer;
     /* 0xC76 */ u16 _c76;
     /* 0xC78 */ f32 mBlinkAlpha;
     /* 0xC7C */ f32 _c7c;

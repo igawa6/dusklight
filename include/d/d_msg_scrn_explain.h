@@ -23,6 +23,9 @@ public:
     dMsgScrnExplain_c(STControl*, u8, bool, u8);
     void move();
     void draw(J2DOrthoGraph*);
+#if TARGET_PC
+    void presentAnims();
+#endif
     void wait_init();
     void wait_proc();
     void open_request_init();
@@ -49,7 +52,6 @@ public:
     void onForceSelect() { mForceSelect = 1; }
     void setKeyWaitTimer(s16 timer) { mKeyWaitTimer = timer; }
 
-private:
     /* 0x04 */ dMsgString_c* mpString_c;
     /* 0x08 */ CPaneMgr* mpTm_c[2];
     /* 0x10 */ CPaneMgr* mpTmr_c[2];
@@ -68,7 +70,7 @@ private:
     /* 0x50 */ f32 field_0x50;
     /* 0x54 */ u32 mOpenMsgId;
     /* 0x58 */ bool field_0x58;
-    /* 0x5A */ s16 field_0x5a;
+    /* 0x5A */ DUSK_IF_ELSE(f32, s16) field_0x5a;
     /* 0x5C */ s16 field_0x5c;
     /* 0x5E */ s16 mKeyWaitTimer;
     /* 0x60 */ u8 mStatus;

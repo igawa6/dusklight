@@ -24,6 +24,11 @@
 #include "JSystem/JUtility/JUTTexture.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "dusk/interp/user_interface.h"
+#include "dusk/version.hpp"
+#endif
+
 dMsgScrnItem_c::dMsgScrnItem_c(u8 param_1, u8 param_2, JKRExpHeap* param_3) {
     if (param_3 != NULL) {
         field_0x138 = param_3;
@@ -198,7 +203,53 @@ dMsgScrnItem_c::dMsgScrnItem_c(u8 param_1, u8 param_2, JKRExpHeap* param_3) {
 
     mpPmP_c->scale(g_MsgObject_HIO_c.mBoxItemScaleX, g_MsgObject_HIO_c.mBoxItemScaleY);
 
-#if VERSION == VERSION_GCN_JPN
+#if TARGET_PC
+    if (dusk::version::isRegionJpn()) {
+        if (dComIfGs_getOptRuby() == 0) {
+            mpTm_c[0] = JKR_NEW CPaneMgr(mpTxScreen, MULTI_CHAR('mg_3flin'), 0, NULL);
+            JUT_ASSERT(407, mpTm_c[0] != NULL);
+
+            mpTm_c[1] = JKR_NEW CPaneMgr(mpTxScreen, MULTI_CHAR('t3f_s'), 0, NULL);
+            JUT_ASSERT(410, mpTm_c[1] != NULL);
+
+            mpTm_c[2] = JKR_NEW CPaneMgr(mpTxScreen, MULTI_CHAR('t3f_w'), 0, NULL);
+            JUT_ASSERT(413, mpTm_c[2] != NULL);
+
+            mpTmr_c[0] = JKR_NEW CPaneMgr(mpTxScreen, MULTI_CHAR('mg_3f'), 0, NULL);
+            JUT_ASSERT(416, mpTmr_c[0] != NULL);
+
+            mpTmr_c[1] = JKR_NEW CPaneMgr(mpTxScreen, MULTI_CHAR('mg_3f_s'), 0, NULL);
+            JUT_ASSERT(419, mpTmr_c[1] != NULL);
+
+            mpTmr_c[2] = JKR_NEW CPaneMgr(mpTxScreen, MULTI_CHAR('mg_3f_w'), 0, NULL);
+            JUT_ASSERT(422, mpTmr_c[2] != NULL);
+
+            mpTxScreen->search(MULTI_CHAR('n_3line'))->hide();
+            mpTxScreen->search(MULTI_CHAR('n_3fline'))->show();
+            mpTxScreen->search(MULTI_CHAR('n_e4line'))->hide();
+        } else {
+            mpTm_c[0] = JKR_NEW CPaneMgr(mpTxScreen, MULTI_CHAR('mg_3line'), 0, NULL);
+            JUT_ASSERT(407, mpTm_c[0] != NULL);
+            mpTm_c[1] = JKR_NEW CPaneMgr(mpTxScreen, 't3_s', 0, NULL);
+            JUT_ASSERT(410, mpTm_c[1] != NULL);
+            mpTm_c[2] = JKR_NEW CPaneMgr(mpTxScreen, 't3_w', 0, NULL);
+            JUT_ASSERT(413, mpTm_c[2] != NULL);
+            mpTxScreen->search(MULTI_CHAR('n_3line'))->show();
+            mpTxScreen->search(MULTI_CHAR('n_3fline'))->hide();
+            mpTxScreen->search(MULTI_CHAR('n_e4line'))->hide();
+        }
+    } else {
+        mpTm_c[0] = JKR_NEW CPaneMgr(mpTxScreen, MULTI_CHAR('mg_e4lin'), 0, NULL);
+        JUT_ASSERT(407, mpTm_c[0] != NULL);
+        mpTm_c[1] = JKR_NEW CPaneMgr(mpTxScreen, 't4_s', 0, NULL);
+        JUT_ASSERT(410, mpTm_c[1] != NULL);
+        mpTm_c[2] = JKR_NEW CPaneMgr(mpTxScreen, 't4_w', 0, NULL);
+        JUT_ASSERT(413, mpTm_c[2] != NULL);
+        mpTxScreen->search(MULTI_CHAR('n_3line'))->hide();
+        mpTxScreen->search(MULTI_CHAR('n_3fline'))->hide();
+        mpTxScreen->search(MULTI_CHAR('n_e4line'))->show();
+    }
+#elif VERSION == VERSION_GCN_JPN
     if (dComIfGs_getOptRuby() == 0) {
         mpTm_c[0] = JKR_NEW CPaneMgr(mpTxScreen, MULTI_CHAR('mg_3flin'), 0, NULL);
         JUT_ASSERT(407, mpTm_c[0] != NULL);
@@ -346,6 +397,25 @@ dMsgScrnItem_c::~dMsgScrnItem_c() {
     dComIfGp_getMsgCommonArchive()->removeResourceAll();;
 }
 
+#if TARGET_PC
+void dMsgScrnItem_c::presentAnims() {
+    dMsgScrnBase_c::presentAnims();
+    mpSelect_c->presentAnims();
+    for (int i = 0; i < 1; i++) {
+        dusk::vdt::present_looping(field_0x140[i], field_0x118[i], g_MsgObject_HIO_c.mBoxItemAnmSpeed);
+    }
+    for (int i = 0; i < 2; i++) {
+        dusk::vdt::present_looping(field_0x154[i], field_0x12c[i], g_MsgObject_HIO_c.mBoxItemAnmSpeed);
+    }
+    mpScreen->animation();
+    if (isTalkNow()) {
+        fukiAlpha(1.0f);
+    } else {
+        fukiAlpha(field_0x13c);
+    }
+}
+#endif
+
 void dMsgScrnItem_c::exec() {
     f32 dVar12 = field_0x13c;
     if (!field_0x19d) {
@@ -354,6 +424,7 @@ void dMsgScrnItem_c::exec() {
         setBpk1Animation(field_0x12c[1]);
         field_0x19d = true;
     }
+#if !TARGET_PC
     for (int i = 0; i < 1; i++) {
         field_0x140[i] += g_MsgObject_HIO_c.mBoxItemAnmSpeed;
         if (field_0x140[i] >= field_0x118[i]->getFrameMax()) {
@@ -375,7 +446,8 @@ void dMsgScrnItem_c::exec() {
     } else {
         fukiAlpha(dVar12);
     }
-    
+#endif
+
     f32 yOffset;
     switch(field_0x19c) {
     case 1:
@@ -527,6 +599,12 @@ bool dMsgScrnItem_c::selectAnimeMove(u8 param_0, u8 param_1, bool param_2) {
 bool dMsgScrnItem_c::selectAnimeEnd() {
     return mpSelect_c->selAnimeEnd();
 }
+
+#if TARGET_PC
+bool dMsgScrnItem_c::isSelectAnimeActive() {
+    return mpSelect_c != NULL && mpSelect_c->isAnimeActive();
+}
+#endif
 
 void dMsgScrnItem_c::fukiScale(f32 param_0) {
 }

@@ -6,6 +6,7 @@
 
 #include "revmodel.hpp"
 #include "denormals.h"
+#include <cmath>
 
 revmodel::revmodel()
 {
@@ -194,8 +195,9 @@ void revmodel::update()
 
 	for(i=0; i<numcombs; i++)
 	{
-		combL[i].setdamp(damp1);
-		combR[i].setdamp(damp1);
+		float scaledDamp = powf(damp1, 32000.0f/48000.0f);	
+		combL[i].setdamp(scaledDamp);
+		combR[i].setdamp(scaledDamp);
 	}
 }
 

@@ -11,6 +11,9 @@ struct dMsgScrnTree_c : public dMsgScrnBase_c {
     virtual ~dMsgScrnTree_c();
     void exec();
     void draw();
+#if TARGET_PC
+    void presentAnims();
+#endif
     void fukiAlpha(f32);
     void fukiScale(f32);
     void fukiTrans(f32, f32);

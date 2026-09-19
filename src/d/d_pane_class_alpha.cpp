@@ -5,7 +5,13 @@
 #include "JSystem/JKernel/JKRExpHeap.h"
 #include "m_Do/m_Do_ext.h"
 
-CPaneMgrAlpha::CPaneMgrAlpha() {}
+#if TARGET_PC
+#include "dusk/interp/user_interface.h"
+#endif
+
+CPaneMgrAlpha::CPaneMgrAlpha() {
+    IF_DUSK(mAlphaAnimation.active = false);
+}
 
 CPaneMgrAlpha::CPaneMgrAlpha(J2DScreen* p_screen, u64 tag, u8 flags, JKRExpHeap* p_heap) {
     J2DPane* pane = p_screen->search(tag);
@@ -21,6 +27,8 @@ CPaneMgrAlpha::~CPaneMgrAlpha() {
 }
 
 void CPaneMgrAlpha::initiateAlpha(J2DPane* p_pane, JKRExpHeap* p_heap) {
+    IF_DUSK(mAlphaAnimation.active = false);
+
     mPane = p_pane;
 
     if (p_heap != NULL) {
@@ -68,7 +76,7 @@ bool CPaneMgrAlpha::isVisible() {
     return mPane->isVisible();
 }
 
-f32 CPaneMgrAlpha::rateCalc(s16 maxTimer, s16 curTimer, u8 calcType) {
+f32 CPaneMgrAlpha::rateCalc(DUSK_IF_ELSE(f32, s16) maxTimer, DUSK_IF_ELSE(f32, s16) curTimer, u8 calcType) {
     if (maxTimer <= curTimer) {
         return 1.0f;
     }
@@ -105,7 +113,22 @@ f32 CPaneMgrAlpha::getAlphaRate() {
     return rate;
 }
 
+#if TARGET_PC
+void CPaneMgrAlpha::presentAlphaAnime() {
+    dusk::vdt::present_animation(mAlphaAnimation, mAlphaTimer, *this, [&](f32 rate) {
+        setAlpha(mAlphaAnimation.start + rate * (f32)(mAlphaAnimation.end - mAlphaAnimation.start));
+    });
+}
+#endif
+
 bool CPaneMgrAlpha::alphaAnime(s16 timer, u8 startAlpha, u8 endAlpha, u8 calcType) {
+#if TARGET_PC
+    if (!dusk::vdt::request_animation(mAlphaAnimation, mAlphaTimer, timer, startAlpha, endAlpha, calcType)) {
+        return false;
+    }
+    setAlpha(endAlpha);
+    return true;
+#else
     if (mAlphaTimer < timer - 1) {
         mAlphaTimer++;
         f32 rate = rateCalc(timer, mAlphaTimer, calcType);
@@ -117,20 +140,41 @@ bool CPaneMgrAlpha::alphaAnime(s16 timer, u8 startAlpha, u8 endAlpha, u8 calcTyp
     }
 
     return false;
+#endif
 }
 
 bool CPaneMgrAlpha::alphaAnimeLoop(s16 param_0, u8 param_1, u8 param_2, u8 param_3) {
     bool ret = false;
     s16 temp_r4 = param_0 / 2;
 
+#if TARGET_PC
+    mAlphaAnimation.active = false;
+    if (param_0 <= 0) {
+        mAlphaTimer = 0.0f;
+        setAlpha(param_1);
+        return true;
+    }
+    const f32 frames = dusk::game_clock::original_frames();
+    if (frames <= 0.0f) {
+        return false;
+    }
+    if (mAlphaTimer >= param_0) {
+        mAlphaTimer = 0.0f;
+        ret = true;
+    } else {
+        ret = mAlphaTimer + frames >= param_0;
+        dusk::vdt::advance_looping_frame(mAlphaTimer, 1.0f, param_0);
+    }
+#else
     mAlphaTimer++;
 
     if (mAlphaTimer >= param_0) {
         mAlphaTimer = 0;
         ret = true;
     }
+#endif
 
-    s16 tmp;
+    DUSK_IF_ELSE(f32, s16) tmp;
     if (mAlphaTimer < temp_r4) {
         tmp = mAlphaTimer;
     } else {

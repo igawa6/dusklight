@@ -41,13 +41,13 @@ static bool padLockButton(s32 i_padNo) {
 }
 }  // namespace
 
-type_tbl_entry dAttention_c::loc_type_tbl[3] = {
+DUSK_GAME_DATA type_tbl_entry dAttention_c::loc_type_tbl[3] = {
     {fopAc_attn_LOCK_e, fopAc_AttnFlag_LOCK_e},
     {fopAc_attn_TALK_e, fopAc_AttnFlag_TALK_e},
     {fopAc_attn_BATTLE_e, fopAc_AttnFlag_BATTLE_e},
 };
 
-type_tbl_entry dAttention_c::act_type_tbl[5] = {
+DUSK_GAME_DATA type_tbl_entry dAttention_c::act_type_tbl[5] = {
     {fopAc_attn_SPEAK_e, fopAc_AttnFlag_SPEAK_e},
     {fopAc_attn_CARRY_e, fopAc_AttnFlag_CARRY_e},
     {fopAc_attn_DOOR_e, fopAc_AttnFlag_DOOR_e},
@@ -157,13 +157,14 @@ int dAttDraw_CallBack_c::execute(u16 param_0, J3DTransformInfo* transform) {
     return 1;
 }
 
-dAttDrawParam_c g_AttDwHIO;
+DUSK_GAME_DATA dAttDrawParam_c g_AttDwHIO;
 
 dAttention_c::dAttention_c(fopAc_ac_c* i_player, u32 i_padNo) {
     mpPlayer = i_player;
     mPadNo = i_padNo;
 
     mLockTargetID = fpcM_ERROR_PROCESS_ID_e;
+    IF_DUSK(mTargetActorID = fpcM_ERROR_PROCESS_ID_e);
     field_0x32e = 0;
     field_0x32f = 0;
 
@@ -339,7 +340,7 @@ dAttList_c* dAttention_c::getActionBtnXY() {
     return NULL;
 }
 
-int dAttention_c::loc_type_num = 3;
+DUSK_GAME_DATA int dAttention_c::loc_type_num = 3;
 
 int dAttention_c::chkAttMask(u32 i_type, u32 i_mask) {
     int i;
@@ -375,13 +376,13 @@ static int check_event_condition(u32 i_attnType, u16 i_condition) {
     return false;
 }
 
-int dAttention_c::act_type_num = 5;
+DUSK_GAME_DATA int dAttention_c::act_type_num = 5;
 
-type_tbl_entry dAttention_c::chk_type_tbl[1] = {
+DUSK_GAME_DATA type_tbl_entry dAttention_c::chk_type_tbl[1] = {
     {fopAc_attn_CHECK_e, fopAc_AttnFlag_CHECK_e},
 };
 
-int dAttention_c::chk_type_num = 1;
+DUSK_GAME_DATA int dAttention_c::chk_type_num = 1;
 
 static bool attn_opt_hold = true;
 
@@ -1455,6 +1456,13 @@ if (dusk::getSettings().game.recordingMode) {
             }
             #endif
 
+#if TARGET_PC
+            if (mTargetActorID != fopAcM_GetID(lockon_actor) ||
+                (fopAcM_GetName(lockon_actor) == fpcNm_Tag_Wljump_e &&
+                 mDrawAttnPos != lockon_actor->attention_info.position)) {
+                draw[0].mModel[draw[0].mDrawType]->forgetMtx();
+            }
+#endif
             draw[0].draw(lockon_actor->attention_info.position, inv_m);
 
             if (mLockonCount >= 2 && draw[1].field_0x173 == 2) {
@@ -1483,6 +1491,12 @@ if (dusk::getSettings().game.recordingMode) {
             fopAc_ac_c* actor = fopAcM_SearchByID(mTargetActorID);
 
             if (actor != NULL) {
+#if TARGET_PC
+                if (fopAcM_GetName(actor) == fpcNm_Tag_Wljump_e &&
+                    mDrawAttnPos != actor->attention_info.position) {
+                    draw[0].mModel[draw[0].mDrawType]->forgetMtx();
+                }
+#endif
                 draw[0].draw(actor->attention_info.position, inv_m);
                 mDrawAttnPos = actor->attention_info.position;
             } else {
@@ -1506,6 +1520,7 @@ void dAttention_c::lockSoundStart(u32 i_sfxID) {
 
 void dAttDraw_c::setAnm(u8 i_drawType, f32 i_anmSpeed) {
     mDrawType = i_drawType;
+    IF_DUSK(mModel[mDrawType]->forgetMtx());
     mNoticeCursorBck[mDrawType].reset();
     mNoticeCursorBck[mDrawType].setPlaySpeed(i_anmSpeed);
     mNoticeCursorBpk[mDrawType].reset();

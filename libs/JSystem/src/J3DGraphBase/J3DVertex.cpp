@@ -6,6 +6,10 @@
 #include "JSystem/JKernel/JKRHeap.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "dusk/interp/vertex.h"
+#endif
+
 J3DVertexData::J3DVertexData() {
     mVtxNum = 0;
     mNrmNum = 0;
@@ -31,6 +35,7 @@ J3DVertexData::J3DVertexData() {
 }
 
 void J3DVertexBuffer::setVertexData(J3DVertexData* pVtxData) {
+    IF_DUSK(dusk::interp::vertex::reset(this));
     J3D_ASSERT_NULLPTR(175, pVtxData != NULL);
 
     mVtxData = pVtxData;
@@ -50,6 +55,7 @@ void J3DVertexBuffer::setVertexData(J3DVertexData* pVtxData) {
 }
 
 void J3DVertexBuffer::init() {
+    IF_DUSK(dusk::interp::vertex::reset(this));
     mVtxData = NULL;
 
     mVtxPosArray[0] = mVtxPosArray[1] = NULL;
@@ -65,11 +71,15 @@ void J3DVertexBuffer::init() {
     frameInit();
 }
 
-J3DVertexBuffer::~J3DVertexBuffer() {}
+J3DVertexBuffer::~J3DVertexBuffer() {
+    IF_DUSK(dusk::interp::vertex::reset(this));
+}
 
 void J3DVertexBuffer::setArray() const {
-    j3dSys.setVtxPos(mCurrentVtxPos, mVtxData->getVtxNum());
-    j3dSys.setVtxNrm(mCurrentVtxNrm, mVtxData->getNrmNum());
+    j3dSys.setVtxPos(DUSK_IF_ELSE(dusk::interp::vertex::positions(this, mCurrentVtxPos), mCurrentVtxPos),
+                     mVtxData->getVtxNum());
+    j3dSys.setVtxNrm(DUSK_IF_ELSE(dusk::interp::vertex::normals(this, mCurrentVtxNrm), mCurrentVtxNrm),
+                     mVtxData->getNrmNum());
     j3dSys.setVtxCol(mCurrentVtxCol, mVtxData->getColNum());
 }
 

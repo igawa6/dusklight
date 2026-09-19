@@ -15,6 +15,10 @@
 #include "f_op/f_op_camera_mng.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "dusk/interp/frame_interpolation.h"
+#endif
+
 enum Head_Action {
     /* 0x0 */ HEAD_ACTION_WAIT,
     /* 0x1 */ HEAD_ACTION_ATTACK_1,
@@ -1129,6 +1133,7 @@ static void demo_camera(e_gb_class* i_this) {
         i_this->keyYRot = KREG_S(4) + 0x5000;
         i_this->demoCamCenter.set(-5689.0f, 4747.0f, 15000.0f);
         i_this->demoCamEye.set(-5700.0f, 4740.0f, 14644.0f);
+        IF_DUSK(dusk::interp::request_presentation_sync());
         i_this->demoCamCenterTarget.set(-5689.0f, 4740.0f, 14643.0f);
         i_this->demoCamEyeTarget.set(-5723.0f, 4733.0f, 14293.0f);
         i_this->demoCamEyeTargetDist.x = fabsf(i_this->demoCamEyeTarget.x - i_this->demoCamEye.x);
@@ -1156,6 +1161,7 @@ static void demo_camera(e_gb_class* i_this) {
         if (i_this->demoCounter != 170) break;
         i_this->demoCamCenter.set(-5690.0f, 4432.0f, 9610.0f);
         i_this->demoCamEye.set(-5709.0f, 4445.0f, 9961.0f);
+        IF_DUSK(dusk::interp::request_presentation_sync());
         i_this->demoCamCenterTarget.set(-5741.0f, 4432.0f, 10530.0f);
         i_this->demoCamEyeTarget.set(-5760.0f, 4496.0f, 10896.0f);
         i_this->demoCamEyeTargetDist.x = fabsf(i_this->demoCamEyeTarget.x - i_this->demoCamEye.x);
@@ -1199,6 +1205,7 @@ static void demo_camera(e_gb_class* i_this) {
         mDoAud_seStart(Z2SE_EN_GF_OPEN, &actor->home.pos, 0, 0);
         i_this->demoCamCenter.set(-5706.0f, 4526.0f, 11379.0f);
         i_this->demoCamEye.set(-5687.0f, 4505.0f, 11008.0f);
+        IF_DUSK(dusk::interp::request_presentation_sync());
         i_this->demoCamCenterTarget.set(-5624.0f, 4439.0f, 9818.0f);
         i_this->demoCamEyeTarget.set(-5604.0f, 4418.0f, 9447.0f);
         i_this->demoCamEyeTargetDist.x = fabsf(i_this->demoCamEyeTarget.x - i_this->demoCamEye.x);
@@ -1270,6 +1277,11 @@ static void demo_camera(e_gb_class* i_this) {
         i_this->demoCamEye.x += YREG_F(13);
         i_this->demoCamEye.y += YREG_F(14) + 300.0f;
         i_this->demoCamEye.z += YREG_F(15) + -600.0f;
+#if TARGET_PC
+        if (i_this->demoCounter == 0) {
+            dusk::interp::request_presentation_sync();
+        }
+#endif
 
         if (i_this->demoCounter == 100) {
             i_this->demoMode = 100;
@@ -1278,6 +1290,7 @@ static void demo_camera(e_gb_class* i_this) {
 
     case 100:
         camera->mCamera.Reset(i_this->demoCamCenter, i_this->demoCamEye);
+        IF_DUSK(dusk::interp::request_presentation_sync());
         camera->mCamera.Start();
         camera->mCamera.SetTrimSize(0);
         dComIfGp_event_reset();

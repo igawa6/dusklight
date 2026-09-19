@@ -94,8 +94,12 @@ s32 mDoMemCdRWm_Store(CARDFileInfo* file, void* data, u32 length) {
         return ret;
     }
 
+#if TARGET_PC
+    return mDoMemCdRWm_SetCardStat(file);
+#else
     mDoMemCdRWm_SetCardStat(file);
     return ret;
+#endif
 }
 
 s32 mDoMemCdRWm_Restore(CARDFileInfo* file, void* data, u32 length) {
@@ -320,7 +324,7 @@ static void mDoMemCdRWm_BuildHeader(mDoMemCdRWm_HeaderData* header) {
 #endif
 
     OSCalendarTime time;
-    OSTicksToCalendarTime(OSGetTime(), &time);
+    OSTicksToCalendarTime(DUSK_IF_ELSE(OSGetSystemTime(), OSGetTime()), &time);
 
 #if TARGET_PC
     if (dusk::version::isRegionPal()) {
@@ -348,9 +352,10 @@ static void mDoMemCdRWm_BuildHeader(mDoMemCdRWm_HeaderData* header) {
 
         snprintf(header->mComment, sizeof(header->mComment), HEADER_COMMENT, time.mon + 1, time.mday);
     } else {
-        // TODO JPN SHIFT-JIS
-        // snprintf(header->mTitle, sizeof(header->mTitle), "ゼルダの伝説 ﾄﾜｲﾗｲﾄﾌﾟﾘﾝｾｽ");
-        // snprintf(header->mComment, sizeof(header->mComment), "%d月%d日のセーブデータです", time.mon + 1, time.mday);
+        // shift-jis "ゼルダの伝説 ﾄﾜｲﾗｲﾄﾌﾟﾘﾝｾｽ"
+        snprintf(header->mTitle, sizeof(header->mTitle), "\x83\x5b\x83\x8b\x83\x5f\x82\xcc\x93\x60\x90\xe0\x20\xc4\xdc\xb2\xd7\xb2\xc4\xcc\xdf\xd8\xdd\xbe\xbd");
+        // shift-jis "%d月%d日のセーブデータです"
+        snprintf(header->mComment, sizeof(header->mComment), "\x25\x64\x8c\x8e\x25\x64\x93\xfa\x82\xcc\x83\x5a\x81\x5b\x83\x75\x83\x66\x81\x5b\x83\x5e\x82\xc5\x82\xb7", time.mon + 1, time.mday);
     }
 #elif VERSION == VERSION_GCN_PAL
     switch (dComIfGs_getPalLanguage()) {
@@ -387,9 +392,18 @@ static void mDoMemCdRWm_BuildHeader(mDoMemCdRWm_HeaderData* header) {
     dComIfGp_getCardIconResArchive()->removeResourceAll();
 }
 
+#if TARGET_PC
+static s32 mDoMemCdRWm_SetCardStat(CARDFileInfo* file) {
+    CARDStat stat;
+    const s32 result = CARDGetStatus(file->chan, file->fileNo, &stat);
+    if (result != CARD_RESULT_READY) {
+        return result;
+    }
+#else
 static void mDoMemCdRWm_SetCardStat(CARDFileInfo* file) {
     CARDStat stat;
     mDoMemCd_getCardStatus(file->fileNo, &stat);
+#endif
 
     stat.iconAddr = 0;
     stat.commentAddr = 0x2400;
@@ -412,7 +426,11 @@ static void mDoMemCdRWm_SetCardStat(CARDFileInfo* file) {
     CARDSetIconSpeed(&stat, 6, CARD_STAT_SPEED_END);
     CARDSetIconSpeed(&stat, 7, CARD_STAT_SPEED_END);
 
+#if TARGET_PC
+    return CARDSetStatus(file->chan, file->fileNo, &stat);
+#else
     mDoMemCd_setCardStatus(file->fileNo, &stat);
+#endif
 }
 
 static BOOL mDoMemCdRWm_CheckCardStat(CARDFileInfo* file) {

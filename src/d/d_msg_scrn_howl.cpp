@@ -4,24 +4,25 @@
 
 #include "d/dolzel.h" // IWYU pragma: keep
 
-#include "d/d_msg_scrn_howl.h"
-#include "m_Do/m_Do_controller_pad.h"
-#include "m_Do/m_Do_graphic.h"
-#include "d/d_msg_object.h"
-#include "d/d_pane_class.h"
+#include "JSystem/J2DGraph/J2DGrafContext.h"
+#include "JSystem/J2DGraph/J2DScreen.h"
+#include "JSystem/JUtility/JUTAssert.h"
+#include "JSystem/JUtility/JUTTexture.h"
+#include "Z2AudioLib/Z2WolfHowlMgr.h"
 #include "d/actor/d_a_alink.h"
 #include "d/d_meter2.h"
 #include "d/d_meter2_draw.h"
 #include "d/d_meter2_info.h"
-#include "JSystem/JUtility/JUTTexture.h"
-#include "JSystem/JUtility/JUTAssert.h"
-#include "JSystem/J2DGraph/J2DGrafContext.h"
-#include "JSystem/J2DGraph/J2DScreen.h"
-#include "Z2AudioLib/Z2WolfHowlMgr.h"
+#include "d/d_msg_object.h"
+#include "d/d_msg_scrn_howl.h"
+#include "d/d_pane_class.h"
+#include "dusk/version.hpp"
+#include "m_Do/m_Do_controller_pad.h"
+#include "m_Do/m_Do_graphic.h"
 
 #if TARGET_PC
-#include "dusk/frame_interpolation.h"
-#include "dusk/settings.h"
+#include "dusk/game_clock.h"
+#include "dusk/interp/user_interface.h"
 #endif
 
 // POSIX already defines a macro with this name, but we know that this specific name is
@@ -89,7 +90,21 @@ dMsgScrnHowl_c::dMsgScrnHowl_c() {
     JUT_ASSERT(96, mpButtonIcon[1] != NULL);
     mpButtonText[1] = JKR_NEW CPaneMgr(mpScreen, MULTI_CHAR('gr_txt_n'), 2, NULL);
     JUT_ASSERT(98, mpButtonText[1] != NULL);
-#if VERSION == VERSION_GCN_JPN
+#if TARGET_PC
+    J2DTextBox* piStack_19c;
+    J2DTextBox* piStack_1a0;
+    if (dusk::version::isRegionJpn()) {
+        piStack_19c = (J2DTextBox*)mpScreen->search(MULTI_CHAR('g_l_info'));
+        piStack_1a0 = (J2DTextBox*)mpScreen->search(MULTI_CHAR('g_r_info'));
+        mpScreen->search(MULTI_CHAR('fgr_info'))->hide();
+        mpScreen->search(MULTI_CHAR('fgl_info'))->hide();
+    } else {
+        piStack_19c = (J2DTextBox*)mpScreen->search(MULTI_CHAR('fgl_info'));
+        piStack_1a0 = (J2DTextBox*)mpScreen->search(MULTI_CHAR('fgr_info'));
+        mpScreen->search(MULTI_CHAR('g_l_info'))->hide();
+        mpScreen->search(MULTI_CHAR('g_r_info'))->hide();
+    }
+#elif VERSION == VERSION_GCN_JPN
     J2DTextBox* piStack_19c = (J2DTextBox*)mpScreen->search(MULTI_CHAR('g_l_info'));
     J2DTextBox* piStack_1a0 = (J2DTextBox*)mpScreen->search(MULTI_CHAR('g_r_info'));
     mpScreen->search(MULTI_CHAR('fgr_info'))->hide();
@@ -133,6 +148,10 @@ dMsgScrnHowl_c::dMsgScrnHowl_c() {
     field_0x2124 = 0;
     field_0x2128 = 0;
     mPlotTime = 0;
+#if TARGET_PC
+    mSampleAcc = 0.0f;
+    mPulseFrame = 0.0f;
+#endif
     field_0x212c = 0;
     field_0x212e = 0;
     field_0x2126 = 0;
@@ -274,18 +293,52 @@ dMsgScrnHowl_c::~dMsgScrnHowl_c() {
     dComIfGp_getMsgArchive(5)->removeResourceAll();;
 }
 
+#if TARGET_PC
+void dMsgScrnHowl_c::presentAnims() {
+    dMsgScrnBase_c::presentAnims();
+    for (int i = 0; i < 0x300; i++) {
+        if (field_0x1b14[i] > 0) {
+            dusk::vdt::advance_toward_frame(field_0x1b14[i], 0.0f, 1.0f);
+        }
+    }
+    f32 alphaRate = mpPmP_c->getAlphaRate();
+    f32 fVar1;
+    f32 fVar2;
+    if (field_0x2798 == 3) {
+        fVar1 = 0.5f;
+        fVar2 = 0.0f;
+    } else {
+        fVar1 = 1.0f;
+        fVar2 = 1.0f;
+    }
+    if (field_0x1994 != fVar1) {
+        dusk::vdt::present_addCalc2(&field_0x1994, fVar1, 0.2f, 1.0f, 0.1f);
+    }
+    if (field_0x1998 != fVar2) {
+        dusk::vdt::present_addCalc2(&field_0x1998, fVar2, 0.2f, 1.0f, 0.1f);
+    }
+    mpButtonIcon[0]->setAlphaRate(field_0x1994 * alphaRate);
+    mpButtonIcon[1]->setAlphaRate(field_0x1994 * alphaRate);
+    mpButtonText[0]->setAlphaRate(field_0x1998 * alphaRate);
+    mpButtonText[1]->setAlphaRate(field_0x1998 * alphaRate);
+}
+#endif
+
 void dMsgScrnHowl_c::exec() {
     field_0x2799 = field_0x2798;
     (this->*process[field_0x2798])();
+#if !TARGET_PC
     for (int i = 0; i < 0x300; i++) {
         if (field_0x1b14[i] > 0) {
             field_0x1b14[i]--;
         }
     }
+#endif
     if (field_0x2799 != field_0x2798) {
         (this->*init_proc[field_0x2798])();
     }
-    
+
+#if !TARGET_PC
     f32 alphaRate = mpPmP_c->getAlphaRate();
     f32 fVar1;
     f32 fVar2;
@@ -312,6 +365,7 @@ void dMsgScrnHowl_c::exec() {
     mpButtonIcon[1]->setAlphaRate(field_0x1994 * alphaRate);
     mpButtonText[0]->setAlphaRate(field_0x1998 * alphaRate);
     mpButtonText[1]->setAlphaRate(field_0x1998 * alphaRate);
+#endif
 
 #if TARGET_PC
     showCursor = true;
@@ -452,6 +506,7 @@ void dMsgScrnHowl_c::resetLine() {
     field_0x2195 = 0;
     field_0x2128 = 0;
     mPlotTime = 0;
+    IF_DUSK(mSampleAcc = 0.0f);
     field_0x212c = 0;
     field_0x212e = 0;
     field_0x2124 = 0;
@@ -488,7 +543,7 @@ void dMsgScrnHowl_c::drawWave() {
     if (local_80 < 0) {
         local_80 = 0;
     }
-    s32 local_94 = 0;
+    DUSK_IF_ELSE(f32, s32) local_94 = 0;
     Vec fVar12 = field_0x128;
     Vec this_02 = field_0x140;
 #if TARGET_PC // TODO: make this actually use the scissor
@@ -526,7 +581,7 @@ void dMsgScrnHowl_c::drawWave() {
         for (int iVar10 = 0; iVar10 < field_0x2128 - 1; iVar10++) {
             f32 local_54 = local_e0;
             f32 local_c8 = field_0x180[sVar14];
-            s32 sVar3 = field_0x1b14[sVar14];
+            DUSK_IF_ELSE(f32, s32) sVar3 = field_0x1b14[sVar14];
             local_e0 += field_0x1980;
             local_68 += field_0x1984;
             if (local_68 > 255.0f) {
@@ -534,7 +589,7 @@ void dMsgScrnHowl_c::drawWave() {
             }
             sVar14 = addCount(sVar14);
             f32 fVar2 = field_0x180[sVar14];
-            s16 temp_r4 = field_0x1b14[sVar14];
+            DUSK_IF_ELSE(f32, s16) temp_r4 = field_0x1b14[sVar14];
             if (iVar10 == field_0x2128 - 2) {
                 local_60 = local_e0;
                 local_64 = fVar2;
@@ -582,19 +637,23 @@ void dMsgScrnHowl_c::drawWave() {
                 f18 = local_64;
             } else {
 #if TARGET_PC
-                if (dusk::frame_interp::get_ui_tick_pending())
-#endif
-                {
-                    field_0x2134++;
-                    if (field_0x2134 > 30) {
-                        field_0x2134 = 0;
-                    }
+                dusk::vdt::advance_looping_frame(mPulseFrame, 1.0f, 31.0f);
+                if (mPulseFrame < 15.0f) {
+                    local_dc = mPulseFrame / 15.0f;
+                } else {
+                    local_dc = (30.0f - mPulseFrame) / 15.0f;
+                }
+#else
+                field_0x2134++;
+                if (field_0x2134 > 30) {
+                    field_0x2134 = 0;
                 }
                 if (field_0x2134 < 15) {
                     local_dc = field_0x2134 / 15.0f;
                 } else {
                     local_dc = (30.0f - field_0x2134) / 15.0f;
                 }
+#endif
                 f17 = f26;
                 f18 = local_e4;
             }
@@ -867,6 +926,19 @@ void dMsgScrnHowl_c::drawEffect() {
 }
 
 void dMsgScrnHowl_c::calcMain() {
+#if TARGET_PC
+    mSampleAcc += dusk::game_clock::original_frames();
+    while (mSampleAcc >= 1.0f) {
+        mSampleAcc -= 1.0f;
+        if (mPlotTime < field_0x2138 + 380) {
+            mPlotTime++;
+        } else {
+            field_0x212c--;
+        }
+        calcWave();
+        calcGuide();
+    }
+#else
     if (mPlotTime < field_0x2138 + 380) {
         mPlotTime++;
     } else {
@@ -874,6 +946,7 @@ void dMsgScrnHowl_c::calcMain() {
     }
     calcWave();
     calcGuide();
+#endif
 }
 
 void dMsgScrnHowl_c::calcWave() {

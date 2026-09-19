@@ -17,7 +17,12 @@ public:
     virtual int _execute(u32);
     virtual int _delete();
 
-    f32 acc(s16 param_0, s16 param_1, s16 param_2) {
+    f32 acc(DUSK_IF_ELSE(f32, s16) param_0, DUSK_IF_ELSE(f32, s16) param_1, DUSK_IF_ELSE(f32, s16) param_2) {
+#if TARGET_PC
+        if (param_0 == param_2) {
+            return 1.0f;
+        }
+#endif
         return ((f32)(param_1 - param_2) * (f32)(param_1 - param_2)) / ((f32)(param_0 - param_2) * (f32)(param_0 - param_2));
     }
 

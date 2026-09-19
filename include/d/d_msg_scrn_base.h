@@ -37,6 +37,10 @@ public:
     virtual void fukiAlpha(f32);
     virtual void fontAlpha(f32);
     virtual void fukiPosCalc(u8) {}
+#if TARGET_PC
+    virtual void presentAnims();
+    virtual bool isSelectAnimeActive() { return false; }
+#endif
 
     f32 getSelTextBoxPosX(int idx) { return mSelTextBoxPosX[idx]; }
     f32 getSelTextBoxPosY(int idx) { return mSelTextBoxPosY[idx]; }

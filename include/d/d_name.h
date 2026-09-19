@@ -12,34 +12,6 @@ class J2DTextBox;
 class JUTFont;
 class STControl;
 
-#if TARGET_PC
-struct PaneCache {
-    u64 tag;
-    f32 origTransX;
-    f32 origTransY;
-    bool cached;
-};
-
-static PaneCache l_tagName[] = {
-    {MULTI_CHAR('m_00_0'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_00_1'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_00_2'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_00_3'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_00_4'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_01_0'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_01_1'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_01_2'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_01_3'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('m_01_4'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_02_0'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_02_1'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_02_2'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_02_3'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_02_4'), 0.0f, 0.0f, false}, {MULTI_CHAR('m03_0'), 0.0f, 0.0f, false},  {MULTI_CHAR('m03_1'), 0.0f, 0.0f, false},  {MULTI_CHAR('m03_2'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('m03_3'), 0.0f, 0.0f, false},  {MULTI_CHAR('m03_4'), 0.0f, 0.0f, false},  {MULTI_CHAR('m_04_0'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_04_1'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_04_2'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_04_3'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_04_4'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_05_0'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_05_1'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('m_05_2'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_05_3'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_05_4'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_06_0'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_06_1'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_06_2'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_06_3'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_06_4'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_07_0'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('m_07_1'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_07_2'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_07_3'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_07_4'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_08_0'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_08_1'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_08_2'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_08_3'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_08_4'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('m_09_0'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_09_1'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_09_2'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_09_3'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_09_4'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_10_0'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_10_1'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_10_2'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_10_3'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('m_10_4'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_11_0'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_11_1'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_11_2'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_11_3'), 0.0f, 0.0f, false}, {MULTI_CHAR('m_11_4'), 0.0f, 0.0f, false}, {MULTI_CHAR('m12_0'), 0.0f, 0.0f, false},  {MULTI_CHAR('m12_1'), 0.0f, 0.0f, false},  {MULTI_CHAR('m12_2'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('m12_3'), 0.0f, 0.0f, false},  {MULTI_CHAR('m12_4'), 0.0f, 0.0f, false}, {MULTI_CHAR('p_end_2'), 0.0f, 0.0f, false}, {MULTI_CHAR('p_end_1'), 0.0f, 0.0f, false}, {MULTI_CHAR('p_end_0'), 0.0f, 0.0f, false},
-};                                             
-
-static PaneCache l_nameTagName[] = {
-    {MULTI_CHAR('name_00'), 0.0f, 0.0f, false}, {MULTI_CHAR('name_01'), 0.0f, 0.0f, false}, {MULTI_CHAR('name_02'), 0.0f, 0.0f, false}, {MULTI_CHAR('name_03'), 0.0f, 0.0f, false}, {MULTI_CHAR('name_04'), 0.0f, 0.0f, false}, {MULTI_CHAR('name_05'), 0.0f, 0.0f, false}, {MULTI_CHAR('name_06'), 0.0f, 0.0f, false}, {MULTI_CHAR('name_07'), 0.0f, 0.0f, false},
-};
-
-static PaneCache l_nameCurTagName[] = {
-    {MULTI_CHAR('s__n_00'), 0.0f, 0.0f, false}, {MULTI_CHAR('s__n_01'), 0.0f, 0.0f, false}, {MULTI_CHAR('s__n_02'), 0.0f, 0.0f, false}, {MULTI_CHAR('s__n_03'), 0.0f, 0.0f, false}, {MULTI_CHAR('s__n_04'), 0.0f, 0.0f, false}, {MULTI_CHAR('s__n_05'), 0.0f, 0.0f, false}, {MULTI_CHAR('s__n_06'), 0.0f, 0.0f, false}, {MULTI_CHAR('s__n_07'), 0.0f, 0.0f, false},
-};
-#endif
-
 class dNm_HIO_c {
 public:
     dNm_HIO_c();
@@ -139,9 +111,9 @@ public:
     void menuCursorMove2();
     void selectCursorPosSet(int);
 
-    #if TARGET_PC
+#if TARGET_PC
     void nameWide();
-    #endif
+#endif
 
     void _draw();
     void screenSet();
@@ -158,15 +130,14 @@ public:
     void setNextNameStr(char* i_name) { SAFE_STRCPY(mNextNameStr,i_name); }
     void draw() { _draw(); }
 
-private:
     /* 0x004 */ STControl* stick;
     /* 0x008 */ JKRArchive* archive;
     /* 0x00C */ dDlst_NameIN_c nameIn;
     /* 0x020 */ dSelect_cursor_c* mSelIcon;
     /* 0x024 */ J2DAnmColorKey* mCursorColorKey;
-    /* 0x028 */ int mCurColAnmF;
+    /* 0x028 */ DUSK_IF_ELSE(f32, int) mCurColAnmF;
     /* 0x02C */ J2DAnmTextureSRTKey* mCursorTexKey;
-    /* 0x030 */ int mCurTexAnmF;
+    /* 0x030 */ DUSK_IF_ELSE(f32, int) mCurTexAnmF;
     /* 0x034 */ CPaneMgrAlpha* mNameCursor[8];
     /* 0x054 */ TEXT_SPAN mNameText[8];
     /* 0x074 */ CPaneMgr* mMojiIcon[65];

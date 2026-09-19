@@ -23,6 +23,10 @@ struct dMsgScrnTalk_c : public dMsgScrnBase_c {
     void selectAnimeInit(u8, u8, f32, u8);
     bool selectAnimeMove(u8, u8, bool);
     bool selectAnimeEnd();
+#if TARGET_PC
+    void presentAnims();
+    bool isSelectAnimeActive();
+#endif
     void fukiScale(f32);
     void fukiTrans(f32, f32);
     void fukiAlpha(f32);
@@ -42,7 +46,7 @@ struct dMsgScrnTalk_c : public dMsgScrnBase_c {
     /* 0x0F4 */ f32 field_0xf4;
     /* 0x0F8 */ f32 field_0xf8[150];
     /* 0x350 */ f32 field_0x350[3];
-    /* 0x35C */ s16 field_0x35c[150];
+    /* 0x35C */ DUSK_IF_ELSE(f32, s16) field_0x35c[150];
     /* 0x488 */ u8 field_0x488;
 };
 

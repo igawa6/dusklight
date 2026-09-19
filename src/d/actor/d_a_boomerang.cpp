@@ -14,6 +14,35 @@
 #include "Z2AudioLib/Z2Instances.h"
 #include "SSystem/SComponent/c_math.h"
 
+#if TARGET_PC
+#include "dusk/interp/sight.h"
+
+namespace {
+struct SightFrame {
+    cXyz position;
+    dusk::interp::SightAnimation animation;
+};
+
+void lerp(SightFrame& out, const SightFrame& a, const SightFrame& b, f32 step) {
+    dusk::interp::lerp(out.position, a.position, b.position, step);
+    dusk::interp::lerp(out.animation, a.animation, b.animation, step);
+}
+
+struct SightSamples {
+    dusk::interp::Samples<SightFrame> slots[BOOMERANG_LOCK_MAX + 1];
+};
+
+SightFrame sight_frame(const daBoomerang_sight_c& sight, int i) {
+    return {sight.m_pos[i], {sight.field_0x98[i], sight.field_0xb0[i],
+            static_cast<f32>(sight.m_alpha[i]), static_cast<f32>(sight.m_cursorYellow2Brk->getFrameMax())}};
+}
+}  // namespace
+
+daBoomerang_sight_c::~daBoomerang_sight_c() {
+    dusk::interp::erase_owned_samples(this);
+}
+#endif
+
 int daBoomerang_sight_c::createHeap() {
     void* tmpData;
     JKRArchive* archive = dComIfG_getObjectResInfo(daAlink_c::getAlinkArcName())->getArchive();
@@ -137,17 +166,17 @@ static const u8 lbl_46_rodata_24[6] = {
     0x1E,
 };
 
-const u16 daBoomerang_HIO_c0::m_lockWaitTime = 10;
+DUSK_GAME_DATA const u16 daBoomerang_HIO_c0::m_lockWaitTime = 10;
 
-const f32 daBoomerang_HIO_c0::m_minCircleR = 28.0f;
+DUSK_GAME_DATA const f32 daBoomerang_HIO_c0::m_minCircleR = 28.0f;
 
-const f32 daBoomerang_HIO_c0::m_middleCircleR = 35.0f;
+DUSK_GAME_DATA const f32 daBoomerang_HIO_c0::m_middleCircleR = 35.0f;
 
-const f32 daBoomerang_HIO_c0::m_maxCircleR = 80.0f;
+DUSK_GAME_DATA const f32 daBoomerang_HIO_c0::m_maxCircleR = 80.0f;
 
-const f32 daBoomerang_HIO_c0::m_scale = 3.0f / 5.0f;
+DUSK_GAME_DATA const f32 daBoomerang_HIO_c0::m_scale = 3.0f / 5.0f;
 
-const f32 daBoomerang_HIO_c0::m_lockWindScale = 2.0f;
+DUSK_GAME_DATA const f32 daBoomerang_HIO_c0::m_lockWindScale = 2.0f;
 
 static const u32 l_lockSeFlg[BOOMERANG_LOCK_MAX] = {
     Z2SE_SY_BOOM_LOCK_ON_1,
@@ -158,6 +187,7 @@ static const u32 l_lockSeFlg[BOOMERANG_LOCK_MAX] = {
 };
 
 void daBoomerang_sight_c::initialize() {
+    IF_DUSK(dusk::interp::erase_owned_samples(this);)
     m_cursorYellowAllPane = m_cursorYellowScrn->search(MULTI_CHAR('n_all'));
     m_cursorYellow0Pane = m_cursorYellowScrn->search(MULTI_CHAR('cursor0'));
     m_cursorYellow1Pane = m_cursorYellowScrn->search(MULTI_CHAR('cursor1'));
@@ -300,6 +330,7 @@ int daBoomerang_sight_c::playAnime(int param_0, int param_1) {
 }
 
 void daBoomerang_sight_c::initFrame(int i_no) {
+    IF_DUSK(dusk::interp::get<SightSamples>(this).slots[i_no].reset();)
     m_alpha[i_no] = 0;
     field_0x98[i_no] = 4.0f;
     field_0xb0[i_no] = 0.0f;
@@ -328,6 +359,10 @@ void daBoomerang_sight_c::copyNumData(int i_no) {
     cXyz temp_pos = m_pos[i_no];
     m_pos[i_no] = m_pos[next_no];
     m_pos[next_no] = temp_pos;
+#if TARGET_PC
+    auto& slots = dusk::interp::get<SightSamples>(this).slots;
+    std::swap(slots[i_no], slots[next_no]);
+#endif
 }
 
 void daBoomerang_sight_c::setSight(const cXyz* i_pos, int i_no) {
@@ -337,7 +372,13 @@ void daBoomerang_sight_c::setSight(const cXyz* i_pos, int i_no) {
         }
 
         Vec proj;
-        mDoLib_project(&m_pos[i_no], &proj);
+#if TARGET_PC
+        auto& samples = dusk::interp::get<SightSamples>(this).slots[i_no];
+        const SightFrame current = sight_frame(*this, i_no);
+        samples.capture(&current, 1);
+        cXyz position = samples.read(0, current).position;
+#endif
+        mDoLib_project(DUSK_IF_ELSE(&position, &m_pos[i_no]), &proj);
         m_proj_posX[i_no] = proj.x;
         m_proj_posY[i_no] = proj.y;
     }
@@ -357,11 +398,16 @@ void daBoomerang_sight_c::draw() {
 
     for (int i = 0; i < 6; i++, alpha_p++) {
         if (*alpha_p != 0) {
-            m_cursorYellowBck->setFrame(field_0x98[i]);
-            m_cursorYellowBpk->setFrame(field_0x98[i] > 21.0f ? 21.0f : field_0x98[i]);
+#if TARGET_PC
+            setSight(NULL, i);
+            const auto frame = dusk::interp::get<SightSamples>(this).slots[i].read(0, sight_frame(*this, i)).animation;
+#endif
+            m_cursorYellowBck->setFrame(DUSK_IF_ELSE(frame.bck, field_0x98[i]));
+            m_cursorYellowBpk->setFrame(DUSK_IF_ELSE(frame.bck, field_0x98[i]) > 21.0f
+                                                         ? 21.0f : DUSK_IF_ELSE(frame.bck, field_0x98[i]));
 
             if (i == 5) {
-                m_cursorYellow2Brk->setFrame(field_0xb0[i]);
+                m_cursorYellow2Brk->setFrame(DUSK_IF_ELSE(frame.brk, field_0xb0[i]));
                 cursor0_pane = m_cursorYellow0Pane;
                 cursor1_pane = m_cursorYellow1Pane;
                 cursor2_pane = m_cursorYellow2Pane;
@@ -369,7 +415,7 @@ void daBoomerang_sight_c::draw() {
                 cursorAll_pane = m_cursorYellowAllPane;
                 var_f31 = 80.0f;
             } else if (i == 0 && m_redSight) {
-                m_cursorRed2Brk->setFrame(field_0xb0[i]);
+                m_cursorRed2Brk->setFrame(DUSK_IF_ELSE(frame.brk, field_0xb0[i]));
                 cursor0_pane = m_cursorRed0Pane;
                 cursor1_pane = m_cursorRed1Pane;
                 cursor2_pane = m_cursorRed2Pane;
@@ -377,7 +423,7 @@ void daBoomerang_sight_c::draw() {
                 cursorAll_pane = m_cursorRedAllPane;
                 var_f31 = 35.0f;
             } else {
-                m_cursorOrange2Brk->setFrame(field_0xb0[i]);
+                m_cursorOrange2Brk->setFrame(DUSK_IF_ELSE(frame.brk, field_0xb0[i]));
                 cursor0_pane = m_cursorOrange0Pane;
                 cursor1_pane = m_cursorOrange1Pane;
                 cursor2_pane = m_cursorOrange2Pane;
@@ -389,15 +435,15 @@ void daBoomerang_sight_c::draw() {
             screen->animation();
             cursorAll_pane->scale(0.6f, 0.6f);
             cursorAll_pane->translate(m_proj_posX[i], m_proj_posY[i]);
-            field_0x98[i] = field_0x98[i];
+            IF_NOT_DUSK(field_0x98[i] = field_0x98[i]);
 
-            if (!(field_0x98[i] < 15.0f)) {
-                if (field_0x98[i] < 21.0f) {
-                    var_f30 = var_f31 * (field_0x98[i] - 15.0f) * 0.16666667f;
+            if (!(DUSK_IF_ELSE(frame.bck, field_0x98[i]) < 15.0f)) {
+                if (DUSK_IF_ELSE(frame.bck, field_0x98[i]) < 21.0f) {
+                    var_f30 = var_f31 * (DUSK_IF_ELSE(frame.bck, field_0x98[i]) - 15.0f) * 0.16666667f;
                 } else if (i == 5) {
-                    var_f30 = var_f31 * (*alpha_p * 0.00390625f + 0.5f);
+                    var_f30 = var_f31 * (DUSK_IF_ELSE(frame.alpha, *alpha_p) * 0.00390625f + 0.5f);
                 } else {
-                    var_f30 = var_f31 * (*alpha_p * 0.0019607844f + 0.5f);
+                    var_f30 = var_f31 * (DUSK_IF_ELSE(frame.alpha, *alpha_p) * 0.0019607844f + 0.5f);
                 }
 
                 cursor0_pane->translate(0.0f, -var_f30);
@@ -406,6 +452,10 @@ void daBoomerang_sight_c::draw() {
             }
 
             screen->draw(0.0f, 0.0f, ctx);
+#if TARGET_PC
+        } else {
+            dusk::interp::get<SightSamples>(this).slots[i].reset();
+#endif
         }
     }
 }

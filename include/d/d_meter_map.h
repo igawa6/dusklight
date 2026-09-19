@@ -4,6 +4,10 @@
 #include "d/d_map_path_dmap.h"
 #include "JSystem/JHostIO/JORReflexible.h"
 
+#if TARGET_PC
+#include "global.h"
+#endif
+
 class J2DPicture;
 class dMap_c;
 class dMap_HIO_c;
@@ -103,7 +107,6 @@ public:
     /* 0x04 */ u8 field_0x4_debug;
     /* 0x08 */ int field_0x8_debug;
 #endif
-private:
     /* 0x04 */ J2DPicture* mMapJ2DPicture;
     /* 0x08 */ dMap_c* mMap;
     /* 0x0C */ s32 mIsCompass;
@@ -113,13 +116,16 @@ private:
     /* 0x1C */ f32 mDrawPosY;
     /* 0x20 */ f32 mSizeW;
     /* 0x24 */ f32 mSizeH;
-    /* 0x28 */ s16 mSlidePositionOffset;
+    /* 0x28 */ DUSK_IF_ELSE(f32, s16) mSlidePositionOffset;
     /* 0x2A */ u8 field_0x2a;
     /* 0x2B */ u8 field_0x2b;
     /* 0x2C */ u8 mMapAlpha;
     /* 0x2D */ u8 mMapIsInside;
     /* 0x2E */ u8 field_0x2e;
     /* 0x30 */ int field_0x30;
+#if TARGET_PC
+    f32 mSlidePositionOffsetTarget;
+#endif
 };
 
 #endif /* D_METER_D_METER_MAP_H */

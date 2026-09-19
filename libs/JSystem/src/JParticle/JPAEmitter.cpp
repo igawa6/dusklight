@@ -7,10 +7,15 @@
 #include "JSystem/JParticle/JPABaseShape.h"
 #include <types.h>
 
+#if TARGET_PC
+#include "dusk/interp/particle.h"
+#endif
+
 JPAEmitterCallBack::~JPAEmitterCallBack() {
 }
 
 void JPABaseEmitter::init(JPAEmitterManager* param_0, JPAResource* param_1) {
+    IF_DUSK(dusk::interp::particle::reset(this));
     mpEmtrMgr = param_0;
     pRes = param_1;
     pRes->getDyn()->getEmitterScl(&mLocalScl);

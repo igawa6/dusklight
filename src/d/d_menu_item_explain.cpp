@@ -25,6 +25,11 @@
 #include "d/d_msg_scrn_3select.h"
 #include "d/d_msg_scrn_arrow.h"
 
+#if TARGET_PC
+#include "dusk/game_clock.h"
+#include "dusk/version.hpp"
+#endif
+
 typedef void (dMenu_ItemExplain_c::*initFunc)();
 static initFunc init_process[] = {
     &dMenu_ItemExplain_c::wait_init,      &dMenu_ItemExplain_c::open_init,
@@ -103,7 +108,16 @@ dMenu_ItemExplain_c::dMenu_ItemExplain_c(JKRExpHeap* i_heap, JKRArchive* i_archi
     mDescAlpha = 0.0f;
     field_0x78 = 0;
     mAlphaRatio = 201.0f;
-#if VERSION == VERSION_GCN_JPN
+
+#if TARGET_PC
+    if (dusk::version::isRegionJpn()) {
+        mpInfoText = JKR_NEW CPaneMgr(mpInfoScreen, MULTI_CHAR('i_text4'), 0, NULL);
+        mpInfoScreen->search(MULTI_CHAR('i_text1'))->hide();
+    } else {
+        mpInfoText = JKR_NEW CPaneMgr(mpInfoScreen, MULTI_CHAR('i_text1'), 0, NULL);
+        mpInfoScreen->search(MULTI_CHAR('i_text4'))->hide();
+    }
+#elif VERSION == VERSION_GCN_JPN
     mpInfoText = JKR_NEW CPaneMgr(mpInfoScreen, MULTI_CHAR('i_text4'), 0, NULL);
     mpInfoScreen->search(MULTI_CHAR('i_text1'))->hide();
 #else
@@ -114,7 +128,15 @@ dMenu_ItemExplain_c::dMenu_ItemExplain_c(JKRExpHeap* i_heap, JKRArchive* i_archi
     ((J2DTextBox*)(mpInfoText->getPanePtr()))->setString(0x200, "");
     mpInfoText->show();
     for (int i = 0; i < 4; i++) {
-#if VERSION == VERSION_GCN_JPN
+#if TARGET_PC
+        if (dusk::version::isRegionJpn()) {
+            mpNameText[i] = JKR_NEW CPaneMgr(mpInfoScreen, name_tag[i], 0, NULL);
+            mpInfoScreen->search(fame_tag[i])->hide();
+        } else {
+            mpNameText[i] = JKR_NEW CPaneMgr(mpInfoScreen, fame_tag[i], 0, NULL);
+            mpInfoScreen->search(name_tag[i])->hide();
+        }
+#elif VERSION == VERSION_GCN_JPN
         mpNameText[i] = JKR_NEW CPaneMgr(mpInfoScreen, name_tag[i], 0, NULL);
         mpInfoScreen->search(fame_tag[i])->hide();
 #else
@@ -334,6 +356,7 @@ void dMenu_ItemExplain_c::draw(J2DOrthoGraph* i_graph) {
             // were likely either chosen by hand or had multiple arithmetic
             // operations applied which cannot easily be reverse engineered
             mpSelect_c->translate(486.0f, 209.0f);
+            IF_DUSK(mpSelect_c->presentAnims());
             mpSelect_c->draw(0.0f, 0.0f);
         }
         if (mpArrow != NULL) {
@@ -422,7 +445,7 @@ void dMenu_ItemExplain_c::open_init() {
 }
 
 void dMenu_ItemExplain_c::open_proc() {
-    mAlphaRatio += 2.0f;
+    mAlphaRatio += 2.0f IF_DUSK(* dusk::game_clock::original_frames());
     if (mAlphaRatio >= 201.0f) {
         mAlphaRatio = 201.0f;
         mStatus = 2;

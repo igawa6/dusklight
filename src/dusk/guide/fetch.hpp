@@ -2,10 +2,11 @@
 
 // Background download of a guide page into the store.
 //
-// dusk::http::get is SYNCHRONOUS and blocks until the response completes or
-// times out, so it must never be called from the game loop. Everything here
-// runs on a worker thread and is polled once per frame, mirroring
-// UpdateCheckTask / DiscVerificationTask in src/dusk/ui/prelaunch.cpp.
+// borealis::http::start is async (returns a Task), but network_image_source()
+// blocks its caller until that task is ready, so it must never be called from
+// the game loop. Everything here runs on a worker thread and is polled once
+// per frame, mirroring UpdateCheckTask / DiscVerificationTask in
+// src/dusk/ui/prelaunch.cpp.
 //
 // Requests carry an honest User-Agent identifying Dusklight; nothing here
 // impersonates a browser. Sites that refuse non-browser clients (Cloudflare
@@ -22,7 +23,7 @@ namespace dusk::guide {
 // --- Import, off the game thread ---
 //
 // scan_import_folder() converts pages AND pulls their images over HTTP, and
-// http::get BLOCKS. Calling it from guideOpen() froze the game solid once a
+// that BLOCKS. Calling it from guideOpen() froze the game solid once a
 // multi-page guide was saved: ~23 pages x N images x up to a 10s timeout, all
 // on the thread that draws. It runs on a worker now and the reader polls.
 void begin_import();

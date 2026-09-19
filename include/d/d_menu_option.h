@@ -17,6 +17,20 @@ class dSelect_cursor_c;
 
 class dMenu_Option_c : public dDlst_base_c {
 public:
+    enum {
+        PROC_ATTEN_e,
+#if TARGET_PC || VERSION == VERSION_GCN_JPN
+        PROC_RUBY_e,
+#endif
+        PROC_VIB_e,
+        PROC_SOUND_e,
+        PROC_CHANGE_MOVE_e,
+        PROC_CONFIRM_OPEN_MOVE_e,
+        PROC_CONFIRM_MOVE_MOVE_e,
+        PROC_CONFIRM_SELECT_MOVE_e,
+        PROC_CONFIRM_CLOSE_MOVE_e,
+    };
+
     dMenu_Option_c(JKRArchive*, STControl*);
     void _create();
     void _delete();
@@ -31,7 +45,7 @@ public:
     bool _close();
     void atten_init();
     void atten_move();
-#if VERSION == VERSION_GCN_JPN
+#if TARGET_PC || VERSION == VERSION_GCN_JPN
     void ruby_init();
     void ruby_move();
 #endif
@@ -82,6 +96,8 @@ public:
     bool dpdMenuMove();
 #if TARGET_PC
     bool pointerConfirmSelect();
+    void presentLayoutAnims();
+    void presentAnims();
 #endif
     void paneResize(u64);
     void initialize();
@@ -103,7 +119,6 @@ public:
         return ((u8)mUseFlag & (u8)i_flag) != 0 ? true : false;
     }
 
-private:
     /* 0x004 */ J2DScreen* mpBackScreen;
     /* 0x008 */ J2DScreen* mpScreen;
     /* 0x00C */ J2DScreen* mpClipScreen;
@@ -177,11 +192,11 @@ private:
     /* 0x3B4 */ f32 field_0x3b4;
     /* 0x3B8 */ JUtility::TColor field_0x3b8;
     /* 0x3BC */ JUtility::TColor field_0x3bc;
-    /* 0x3C0 */ int field_0x3c0;
-    /* 0x3C4 */ int field_0x3c4;
-    /* 0x3C8 */ int field_0x3c8[4];
+    /* 0x3C0 */ DUSK_IF_ELSE(f32, int) field_0x3c0;
+    /* 0x3C4 */ DUSK_IF_ELSE(f32, int) field_0x3c4;
+    /* 0x3C8 */ DUSK_IF_ELSE(f32, int) field_0x3c8[4];
     /* 0x3D8 */ s16 mFrame;
-    /* 0x3DA */ s16 field_0x3da;
+    /* 0x3DA */ DUSK_IF_ELSE(f32, s16) field_0x3da;
     /* 0x3DC */ u16 field_0x3dc;
     /* 0x3DE */ u16 field_0x3de;
     /* 0x3E0 */ u8 field_0x3e0;
@@ -189,7 +204,7 @@ private:
     /* 0x3E2 */ u8 field_0x3e2;
     /* 0x3E3 */ u8 field_0x3e3;
     /* 0x3E4 */ u8 field_0x3e4;
-#if VERSION == VERSION_GCN_JPN
+#if TARGET_PC || VERSION == VERSION_GCN_JPN
     /* 0x3E5 */ u8 field_0x3e5_JPN;
 #endif
     /* 0x3E5 */ u8 field_0x3e5;

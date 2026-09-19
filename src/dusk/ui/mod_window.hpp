@@ -1,7 +1,10 @@
 #pragma once
 
+#include "dropdown_button.hpp"
 #include "pane.hpp"
 #include "window.hpp"
+
+#include <borealis/file_select.hpp>
 
 #include <climits>
 
@@ -10,15 +13,22 @@ namespace dusk::ui {
 struct ModControlSpec {
     enum class Kind : u8 {
         Button,
+        Group,
         Toggle,
         Number,
         String,
         Select,
+        Color,
+        FilePicker,
+        IconButton,
+        Dropdown,
     };
 
     Kind kind = Kind::Button;
     Rml::String label;
+    Rml::String icon;
     Rml::String helpRml;
+    Rml::String tooltip;
     std::function<void()> onPressed;
     std::function<bool()> getBool;
     std::function<void(bool)> setBool;
@@ -27,6 +37,7 @@ struct ModControlSpec {
     std::function<void(int)> setInt;
     std::function<Rml::String()> getString;
     std::function<void(Rml::String)> setString;
+    std::function<bool()> isSelected;
     std::function<bool()> isDisabled;
     std::function<bool()> isModified;
     int min = 0;
@@ -35,10 +46,16 @@ struct ModControlSpec {
     Rml::String prefix;
     Rml::String suffix;
     std::vector<Rml::String> options;
+    std::vector<DropdownButton::Option> dropdownOptions;
     int maxLength = -1;
+    bool stringSetOnChange = false;
+    std::vector<Rml::String> colorPresets;
+    bool colorAlpha = false;
+    std::vector<borealis::file_select::Filter> fileFilters;
+    bool directoryMode = false;
 };
 
-Component* build_mod_control(Pane& pane, Pane* helpPane, ModControlSpec spec);
+Component* build_mod_control(Component& container, Pane& pane, Pane* helpPane, ModControlSpec spec);
 
 // A mod-owned tabbed two-pane window.
 class ModWindow : public Window {
@@ -59,7 +76,6 @@ public:
     ~ModWindow() override;
 
     void update() override;
-    void force_close() { Document::hide(true); }
 
 private:
     Desc mDesc;

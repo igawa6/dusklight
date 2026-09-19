@@ -8,9 +8,12 @@
 #include "d/actor/d_a_alink.h"
 #include "d/d_com_inf_game.h"
 #include "d/d_k_wmark.h"
-#include "dusk/gx_helper.h"
 
-const EffParamProc daAlink_c::m_fEffParamProc[] = {
+#if TARGET_PC
+#include "helpers/gx_helper.h"
+#endif
+
+DUSK_GAME_DATA const EffParamProc daAlink_c::m_fEffParamProc[] = {
     &daAlink_c::setEffectFrontRollParam,
     &daAlink_c::setEffectSlipParam,
     &daAlink_c::setEffectSmallLandParam,
@@ -2107,6 +2110,12 @@ void daAlink_blur_c::draw() {
     J3DShape::resetVcdVatCache();
 }
 
+#if TARGET_PC
+daAlink_lockCursor_c::~daAlink_lockCursor_c() {
+    dusk::interp::erase_owned_samples(this);
+}
+#endif
+
 BOOL daAlink_lockCursor_c::create() {
     JKRArchive* arc = dComIfG_getObjectResInfo(l_arcName)->getArchive();
 
@@ -2214,6 +2223,11 @@ void daAlink_lockCursor_c::update() {
     }
 
     cLib_chaseUC(&field_0x4, 0x80, 30);
+#if TARGET_PC
+    const dusk::interp::SightAnimation frame = {mLockCursorAngle, field_0x30,
+        static_cast<f32>(field_0x4), static_cast<f32>(field_0x1c->getFrameMax())};
+    dusk::interp::get<dusk::interp::Samples<dusk::interp::SightAnimation>>(this).capture(&frame, 1);
+#endif
 }
 
 void daAlink_lockCursor_c::draw() {
@@ -2221,28 +2235,28 @@ void daAlink_lockCursor_c::draw() {
         return;
     }
 
-    field_0x28->setFrame(mLockCursorAngle);
+#if TARGET_PC
+    auto& samples = dusk::interp::get<dusk::interp::Samples<dusk::interp::SightAnimation>>(this);
+    const dusk::interp::SightAnimation current = {
+        mLockCursorAngle, field_0x30, static_cast<f32>(field_0x4), static_cast<f32>(field_0x1c->getFrameMax())};
+    const auto frame = samples.read(0, current);
+#endif
+    field_0x28->setFrame(DUSK_IF_ELSE(frame.bck, mLockCursorAngle));
 
-    f32 var_f30;
-    if (mLockCursorAngle > 21.0f) {
-        var_f30 = 21.0f;
-    } else {
-        var_f30 = mLockCursorAngle;
-    }
-
-    field_0x24->setFrame(var_f30);
-    field_0x1c->setFrame(field_0x30);
+    field_0x24->setFrame(DUSK_IF_ELSE(frame.bck, mLockCursorAngle) > 21.0f
+                             ? 21.0f : DUSK_IF_ELSE(frame.bck, mLockCursorAngle));
+    field_0x1c->setFrame(DUSK_IF_ELSE(frame.brk, field_0x30));
 
     mScrn->animation();
     field_0xc->scale(0.6f, 0.6f);
     field_0xc->translate(mPosX, mPosY);
 
     f32 var_f31;
-    if (!(mLockCursorAngle < 15.0f)) {
-        if (mLockCursorAngle < 21.0f) {
-            var_f31 = ((mLockCursorAngle - 15.0f) * 40.0f) * 0.16666667f;
+    if (!(DUSK_IF_ELSE(frame.bck, mLockCursorAngle) < 15.0f)) {
+        if (DUSK_IF_ELSE(frame.bck, mLockCursorAngle) < 21.0f) {
+            var_f31 = ((DUSK_IF_ELSE(frame.bck, mLockCursorAngle) - 15.0f) * 40.0f) * 0.16666667f;
         } else {
-            var_f31 = ((field_0x4 * 0.00390625f) + 0.5f) * 40.0f;
+            var_f31 = ((DUSK_IF_ELSE(frame.alpha, field_0x4) * 0.00390625f) + 0.5f) * 40.0f;
         }
 
         mCursor0->translate(0.0f, -var_f31);
@@ -2264,6 +2278,7 @@ BOOL daAlink_sight_c::create() {
 
 void daAlink_sight_c::draw() {
     if (mLockFlag) {
+        IF_DUSK(setSight(false);)
         mLockCursor.setPos(mProjMtx[0][3], mProjMtx[1][3]);
         mLockCursor.draw();
     } else {
@@ -2276,5 +2291,6 @@ void daAlink_sight_c::onLockFlg() {
         return;
     }
     mLockFlag = true;
+    IF_DUSK(dusk::interp::erase_owned_samples(&mLockCursor);)
     mLockCursor.initFrame();
 }

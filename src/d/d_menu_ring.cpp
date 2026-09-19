@@ -30,11 +30,13 @@
 #include <cstdio>
 
 #if TARGET_PC
-#include "dusk/game_clock.h"
+#include "dusk/interp/menus.h"
+#include "dusk/interp/user_interface.h"
 #include "dusk/menu_pointer.h"
 #include "dusk/settings.h"
 #include "dusk/dualscreen.h"
 #include "dusk/ui/touch_controls.hpp"
+#include "dusk/version.hpp"
 #endif
 
 typedef void (dMenu_Ring_c::*initFunc)();
@@ -111,7 +113,7 @@ dMenu_Ring_c::dMenu_Ring_c(JKRExpHeap* i_heap, STControl* i_stick, CSTControl* i
         mCenterPosX = 0.0f;
         mCenterPosY = -FB_HEIGHT_BASE;
     }
-    if (mRingOrigin == 3) {
+    IF_DUSK(else) if (mRingOrigin == 3) {
         mCenterPosX = FB_WIDTH_BASE;
         mCenterPosY = 0.0f;
     } else if (mRingOrigin == 1) {
@@ -200,23 +202,9 @@ dMenu_Ring_c::dMenu_Ring_c(JKRExpHeap* i_heap, STControl* i_stick, CSTControl* i
         field_0x682 = 0xc000;
         break;
     }
-#if TARGET_PC
-    mCursorInterpPrevX = 0.0f;
-    mCursorInterpPrevY = 0.0f;
-    mCursorInterpCurrX = 0.0f;
-    mCursorInterpCurrY = 0.0f;
-    mCursorInterpPrevAngle = 0;
-    mCursorInterpCurrAngle = 0;
-    mCursorInterpPrevAngular = false;
-    mCursorInterpCurrAngular = false;
-    mCursorInterpInit = false;
-    mPointerTouchPressHoveredCurrent = false;
-#endif
+    IF_DUSK(mPointerTouchPressHoveredCurrent = false);
     for (int i = 0; i < 4; i++) {
         field_0x674[i] = 0;
-#if TARGET_PC
-        mSelectItemSlideElapsed[i] = 0.0f;
-#endif
         field_0x518[i] = 0.0f;
         field_0x528[i] = 0.0f;
         field_0x538[i] = 0.0f;
@@ -347,17 +335,30 @@ dMenu_Ring_c::dMenu_Ring_c(JKRExpHeap* i_heap, STControl* i_stick, CSTControl* i
         mpScreen->search(MULTI_CHAR('yx_te_s3'))->hide();
         mpScreen->search(MULTI_CHAR('yx_te_s4'))->hide();
         mpScreen->search(MULTI_CHAR('yx_text'))->hide();
+        IF_DUSK_BLOCK(dusk::version::getGameVersion() >= dusk::version::GameVersion::WiiJpn)
         mpScreen->search(MULTI_CHAR('fyx_te_1'))->hide();
         mpScreen->search(MULTI_CHAR('fyx_te_2'))->hide();
         mpScreen->search(MULTI_CHAR('fyx_te_3'))->hide();
         mpScreen->search(MULTI_CHAR('fyx_te_4'))->hide();
         mpScreen->search(MULTI_CHAR('fyx_tex'))->hide();
+        IF_DUSK_BLOCK_END
         mpScreen->search(MULTI_CHAR('x_btn_n'))->hide();
         mpScreen->search(MULTI_CHAR('y_btn_n'))->hide();
     }
     mpString = JKR_NEW dMsgString_c();
     for (i = 0; i < 5; i++) {
-#if VERSION == VERSION_GCN_JPN
+#if TARGET_PC
+        J2DTextBox* fxy_TextBox;
+        if (dusk::version::isJpnOrLessThanWiiJpn()) {
+            fxy_TextBox = (J2DTextBox*)mpScreen->search(xy_text[i]);
+            if (dusk::version::getGameVersion() >= dusk::version::GameVersion::WiiJpn) {
+                mpScreen->search(fxy_text[i])->hide();
+            }
+        } else {
+            fxy_TextBox = (J2DTextBox*)mpScreen->search(fxy_text[i]);
+            mpScreen->search(xy_text[i])->hide();
+        }
+#elif VERSION == VERSION_GCN_JPN
         J2DTextBox* fxy_TextBox = (J2DTextBox*)mpScreen->search(xy_text[i]);
         mpScreen->search(fxy_text[i])->hide();
 #else
@@ -369,75 +370,87 @@ dMenu_Ring_c::dMenu_Ring_c(JKRExpHeap* i_heap, STControl* i_stick, CSTControl* i
         field_0x580[0] = mpString->getString(0x380, fxy_TextBox, NULL, NULL, NULL, 0);
     }
     for (i = 0; i < 5; i++) {
-#if VERSION == VERSION_GCN_JPN
-    #if TARGET_PC
+#if TARGET_PC
         J2DTextBox* fc_TextBox;
-        if (dusk::getSettings().game.swapDirectSelect) {
-            fc_TextBox = (J2DTextBox*)mpScreen->search(c_text1[i]);
-            mpScreen->search(fc_text1[i])->hide();
+        if (dusk::version::isJpnOrLessThanWiiJpn()) {
+            if (dusk::getSettings().game.swapDirectSelect) {
+                fc_TextBox = (J2DTextBox*)mpScreen->search(c_text1[i]);
+                if (dusk::version::getGameVersion() >= dusk::version::GameVersion::WiiJpn) {
+                    mpScreen->search(fc_text1[i])->hide();
+                }
+            } else {
+                fc_TextBox = (J2DTextBox*)mpScreen->search(c_text[i]);
+                if (dusk::version::getGameVersion() >= dusk::version::GameVersion::WiiJpn) {
+                    mpScreen->search(fc_text[i])->hide();
+                }
+            }
         } else {
-            fc_TextBox = (J2DTextBox*)mpScreen->search(c_text[i]);
-            mpScreen->search(fc_text[i])->hide();
+            if (dusk::getSettings().game.swapDirectSelect) {
+                fc_TextBox = (J2DTextBox*)mpScreen->search(fc_text1[i]);
+                mpScreen->search(c_text1[i])->hide();
+            } else {
+                fc_TextBox = (J2DTextBox*)mpScreen->search(fc_text[i]);
+                mpScreen->search(c_text[i])->hide();
+            }
         }
-    #else
+#elif VERSION == VERSION_GCN_JPN
         J2DTextBox* fc_TextBox = (J2DTextBox*)mpScreen->search(c_text[i]);
         mpScreen->search(fc_text[i])->hide();
-    #endif
 #else
-    #if TARGET_PC
-        J2DTextBox* fc_TextBox;
-        if (dusk::getSettings().game.swapDirectSelect) {
-            fc_TextBox = (J2DTextBox*)mpScreen->search(fc_text1[i]);
-            mpScreen->search(c_text1[i])->hide();
-        } else {
-            fc_TextBox = (J2DTextBox*)mpScreen->search(fc_text[i]);
-            mpScreen->search(c_text[i])->hide();
-        }
-    #else
         J2DTextBox* fc_TextBox = (J2DTextBox*)mpScreen->search(fc_text[i]);
         mpScreen->search(c_text[i])->hide();
-    #endif
 #endif
         fc_TextBox->setFont(mDoExt_getMesgFont());
         fc_TextBox->setString(0x40, "");
         field_0x580[1] = mpString->getString(0x37F, fc_TextBox, NULL, NULL, NULL, 0);
     }
     for (i = 0; i < 5; i++) {
-#if VERSION == VERSION_GCN_JPN
-    #if TARGET_PC
+#if TARGET_PC
         J2DTextBox* fc1_TextBox;
-        if (dusk::getSettings().game.swapDirectSelect) {
-            fc1_TextBox = (J2DTextBox*)mpScreen->search(c_text[i]);
-            mpScreen->search(fc_text[i])->hide();
+        if (dusk::version::isJpnOrLessThanWiiJpn()) {
+            if (dusk::getSettings().game.swapDirectSelect) {
+                fc1_TextBox = (J2DTextBox*)mpScreen->search(c_text[i]);
+                if (dusk::version::getGameVersion() >= dusk::version::GameVersion::WiiJpn) {
+                    mpScreen->search(fc_text[i])->hide();
+                }
+            } else {
+                fc1_TextBox = (J2DTextBox*)mpScreen->search(c_text1[i]);
+                if (dusk::version::getGameVersion() >= dusk::version::GameVersion::WiiJpn) {
+                    mpScreen->search(fc_text1[i])->hide();
+                }
+            }
         } else {
-            fc1_TextBox = (J2DTextBox*)mpScreen->search(c_text1[i]);
-            mpScreen->search(fc_text1[i])->hide();
+            if (dusk::getSettings().game.swapDirectSelect) {
+                fc1_TextBox = (J2DTextBox*)mpScreen->search(fc_text[i]);
+                mpScreen->search(c_text[i])->hide();
+            } else {
+                fc1_TextBox = (J2DTextBox*)mpScreen->search(fc_text1[i]);
+                mpScreen->search(c_text1[i])->hide();
+            }
         }
-    #else
+#elif VERSION == VERSION_GCN_JPN
         J2DTextBox* fc1_TextBox = (J2DTextBox*)mpScreen->search(c_text1[i]);
         mpScreen->search(fc_text1[i])->hide();
-    #endif
 #else
-    #if TARGET_PC
-        J2DTextBox* fc1_TextBox;
-        if (dusk::getSettings().game.swapDirectSelect) {
-            fc1_TextBox = (J2DTextBox*)mpScreen->search(fc_text[i]);
-            mpScreen->search(c_text[i])->hide();
-        } else {
-            fc1_TextBox = (J2DTextBox*)mpScreen->search(fc_text1[i]);
-            mpScreen->search(c_text1[i])->hide();
-        }
-    #else
         J2DTextBox* fc1_TextBox = (J2DTextBox*)mpScreen->search(fc_text1[i]);
         mpScreen->search(c_text1[i])->hide();
-    #endif
 #endif
         fc1_TextBox->setFont(mDoExt_getMesgFont());
         fc1_TextBox->setString(0x40, "");
         field_0x580[2] = mpString->getString(0x4CD, fc1_TextBox, NULL, NULL, NULL, 0);
     }
     for (int i = 0; i < 5; i++) {
-#if VERSION == VERSION_GCN_JPN
+#if TARGET_PC
+        if (dusk::version::isJpnOrLessThanWiiJpn()) {
+            mpComboOffString[i] = (J2DTextBox*)mpScreen->search(t_on[i]);
+            if (dusk::version::getGameVersion() >= dusk::version::GameVersion::WiiJpn) {
+                mpScreen->search(ft_on[i])->hide();
+            }
+        } else {
+            mpComboOffString[i] = (J2DTextBox*)mpScreen->search(ft_on[i]);
+            mpScreen->search(t_on[i])->hide();
+        }
+#elif VERSION == VERSION_GCN_JPN
         mpComboOffString[i] = (J2DTextBox*)mpScreen->search(t_on[i]);
         mpScreen->search(ft_on[i])->hide();
 #else
@@ -449,7 +462,17 @@ dMenu_Ring_c::dMenu_Ring_c(JKRExpHeap* i_heap, STControl* i_stick, CSTControl* i
         mpString->getString(0x4D2, mpComboOffString[i], NULL, NULL, NULL, 0);
     }
     for (int i = 0; i < 5; i++) {
-#if VERSION == VERSION_GCN_JPN
+#if TARGET_PC
+        if (dusk::version::isJpnOrLessThanWiiJpn()) {
+            mpBowArrowComboString[i] = (J2DTextBox*)mpScreen->search(t_off[i]);
+            if (dusk::version::getGameVersion() >= dusk::version::GameVersion::WiiJpn) {
+                mpScreen->search(ft_off[i])->hide();
+            }
+        } else {
+            mpBowArrowComboString[i] = (J2DTextBox*)mpScreen->search(ft_off[i]);
+            mpScreen->search(t_off[i])->hide();
+        }
+#elif VERSION == VERSION_GCN_JPN
         mpBowArrowComboString[i] = (J2DTextBox*)mpScreen->search(t_off[i]);
         mpScreen->search(ft_off[i])->hide();
 #else
@@ -480,7 +503,33 @@ dMenu_Ring_c::dMenu_Ring_c(JKRExpHeap* i_heap, STControl* i_stick, CSTControl* i
     mpNameParent = JKR_NEW CPaneMgr(mpCenterScreen, MULTI_CHAR('label_n'), 1, NULL);
     mpCircle = JKR_NEW CPaneMgr(mpCenterScreen, MULTI_CHAR('circle_n'), 2, NULL);
     J2DTextBox* textBox[4];
-#if VERSION == VERSION_GCN_JPN
+#if TARGET_PC
+    if (dusk::version::isJpnOrLessThanWiiJpn()) {
+        textBox[0] = (J2DTextBox*)mpCenterScreen->search(MULTI_CHAR('item_n04'));
+        textBox[1] = (J2DTextBox*)mpCenterScreen->search(MULTI_CHAR('item_n05'));
+        textBox[2] = (J2DTextBox*)mpCenterScreen->search(MULTI_CHAR('item_n06'));
+        textBox[3] = (J2DTextBox*)mpCenterScreen->search(MULTI_CHAR('item_n07'));
+        if (dusk::version::getGameVersion() >= dusk::version::GameVersion::WiiJpn) {
+            J2DPane* pane = mpCenterScreen->search(MULTI_CHAR('fitem_n1'));
+            pane->mVisible = false;
+            pane = mpCenterScreen->search(MULTI_CHAR('fitem_n2'));
+            pane->mVisible = false;
+            pane = mpCenterScreen->search(MULTI_CHAR('fitem_n3'));
+            pane->mVisible = false;
+            pane = mpCenterScreen->search(MULTI_CHAR('fitem_n4'));
+            pane->mVisible = false;
+        }
+    } else {
+        textBox[0] = (J2DTextBox*)mpCenterScreen->search(MULTI_CHAR('fitem_n1'));
+        textBox[1] = (J2DTextBox*)mpCenterScreen->search(MULTI_CHAR('fitem_n2'));
+        textBox[2] = (J2DTextBox*)mpCenterScreen->search(MULTI_CHAR('fitem_n3'));
+        textBox[3] = (J2DTextBox*)mpCenterScreen->search(MULTI_CHAR('fitem_n4'));
+        mpCenterScreen->search(MULTI_CHAR('item_n04'));
+        mpCenterScreen->search(MULTI_CHAR('item_n05'));
+        mpCenterScreen->search(MULTI_CHAR('item_n06'));
+        mpCenterScreen->search(MULTI_CHAR('item_n07'));
+    }
+#elif VERSION == VERSION_GCN_JPN
     textBox[0] = (J2DTextBox*)mpCenterScreen->search(MULTI_CHAR('item_n04'));
     textBox[1] = (J2DTextBox*)mpCenterScreen->search(MULTI_CHAR('item_n05'));
     textBox[2] = (J2DTextBox*)mpCenterScreen->search(MULTI_CHAR('item_n06'));
@@ -521,6 +570,7 @@ dMenu_Ring_c::dMenu_Ring_c(JKRExpHeap* i_heap, STControl* i_stick, CSTControl* i
 }
 
 dMenu_Ring_c::~dMenu_Ring_c() {
+    IF_DUSK(dusk::interp::erase_owned_samples(this));
     mpHeap->getTotalFreeSize();
     dMeter2Info_setItemExplainWindowStatus(0);
     for (int i = 0; i < 4; i++) {
@@ -655,9 +705,32 @@ void dMenu_Ring_c::_move() {
         mRingCursorScale = g_ringHIO.mCursorScale;
         mpDrawCursor->setScale(g_ringHIO.mCursorScale);
     }
+    IF_DUSK(captureRenderState());
 }
 
+#if TARGET_PC
+namespace {
+struct RingSelectionSamples {
+    dusk::interp::Samples<f32> frames;
+};
+}
+
+void dMenu_Ring_c::captureRenderState() {
+    dusk::interp::capture_menu_pose(this, {mCenterPosX, mCenterPosY, mAlphaRate});
+    dusk::interp::get<RingSelectionSamples>(this).frames.capture(4, [&](int i) {
+        return (f32)field_0x674[i];
+    });
+}
+#endif
+
 void dMenu_Ring_c::_draw() {
+#if TARGET_PC
+    const auto [mCenterPosX, mCenterPosY, mAlphaRate] =
+        dusk::interp::read_menu_pose(this, {this->mCenterPosX, this->mCenterPosY, this->mAlphaRate});
+    if (mDrawFlag == 0) {
+        dusk::vdt::advance_looping_frame(field_0x684, 1.0f, g_ringHIO.mItemAlphaFlashDuration);
+    }
+#endif
     J2DGrafContext* grafPort = dComIfGp_getCurrentGrafPort();
     grafPort->setup2D();
     if (mDrawFlag == 0) {
@@ -712,71 +785,7 @@ void dMenu_Ring_c::_draw() {
     } else {
         drawSelectItem();
         drawItem2();
-#if TARGET_PC
-        f32 simX = 0.0f;
-        f32 simY = 0.0f;
-        bool restoreSimPos = false;
-        if (dusk::frame_interp::is_enabled() && mAlphaRate >= 1.0f) {
-            simX = mpDrawCursor->getPositionX();
-            simY = mpDrawCursor->getPositionY();
-
-            const bool isAngular = (mStatus == STATUS_MOVE) && !mDirectSelectActive;
-
-            if (dusk::frame_interp::get_ui_tick_pending()) {
-                mCursorInterpPrevX = mCursorInterpCurrX;
-                mCursorInterpPrevY = mCursorInterpCurrY;
-                mCursorInterpPrevAngle = mCursorInterpCurrAngle;
-                mCursorInterpPrevAngular = mCursorInterpCurrAngular;
-
-                mCursorInterpCurrX = simX;
-                mCursorInterpCurrY = simY;
-                mCursorInterpCurrAngle = field_0x66e;
-                mCursorInterpCurrAngular = isAngular;
-
-                // reset prev = curr for first render pass or 
-                // when angle modes prev/curr differ
-                // to prevent arrival jitter
-                if (!mCursorInterpInit ||
-                    mCursorInterpPrevAngular != mCursorInterpCurrAngular) {
-                    mCursorInterpPrevX = mCursorInterpCurrX;
-                    mCursorInterpPrevY = mCursorInterpCurrY;
-                    mCursorInterpPrevAngle = mCursorInterpCurrAngle;
-                    mCursorInterpPrevAngular = mCursorInterpCurrAngular;
-                    mCursorInterpInit = true;
-                }
-            }
-            if (mCursorInterpInit) {
-                const f32 step = dusk::frame_interp::get_interpolation_step();
-                if (mCursorInterpPrevAngular && mCursorInterpCurrAngular) {
-                    const s16 delta = mCursorInterpCurrAngle - mCursorInterpPrevAngle;
-                    const s16 lerpedAngle = mCursorInterpPrevAngle + (s16)(delta * step);
-
-                    // yoinked from stick_move_proc()
-                    const f32 x = g_ringHIO.mItemRingPosX + FB_WIDTH_BASE / 2 +
-                                  ringCenterOffsetX() + mRingRadiusH * cM_ssin(lerpedAngle);
-                    const f32 y = g_ringHIO.mItemRingPosY + FB_HEIGHT_BASE / 2 +
-                                  mRingRadiusV * cM_scos(lerpedAngle);
-                    mpDrawCursor->setPos(x, y);
-                } else {
-                    mpDrawCursor->setPos(
-                        mCursorInterpPrevX + (mCursorInterpCurrX - mCursorInterpPrevX) * step,
-                        mCursorInterpPrevY + (mCursorInterpCurrY - mCursorInterpPrevY) * step
-                    );
-                }
-                restoreSimPos = true;
-            }
-        } else {
-            mCursorInterpInit = false;
-        }
-#endif
         mpDrawCursor->draw();
-#if TARGET_PC
-        // prevents offsetting at destination on the next frame
-        // since stick_wait_proc doesn't call setPos and we clobbered mPositionX/Y
-        if (restoreSimPos) {
-            mpDrawCursor->setPos(simX, simY);
-        }
-#endif
         mpItemExplain->trans(mCenterPosX, mCenterPosY);
         mpItemExplain->draw((J2DOrthoGraph*)grafPort);
         drawFlag0();
@@ -807,7 +816,7 @@ bool dMenu_Ring_c::isOpen() {
         mCenterPosX = (1.0f - mAlphaRate) * -FB_WIDTH_BASE;
         mCenterPosY = 0.0f;
     }
-    if (mOpenCloseFrames >= g_ringHIO.mOpenFrames) { 
+    if (mOpenCloseFrames >= g_ringHIO.mOpenFrames) {
         // Opening is finished, set to g_ringHIO.mCloseFrames as a
         // preparation for when the player closes the item wheel
         mOpenCloseFrames = g_ringHIO.mCloseFrames;
@@ -824,6 +833,7 @@ bool dMenu_Ring_c::isOpen() {
         mpDrawCursor->setParam(1.0f, 1.0f, 0.1f, 0.6f, 0.5f);
     }
 
+    IF_DUSK(captureRenderState());
     return opened;
 }
 
@@ -887,6 +897,7 @@ bool dMenu_Ring_c::isClose() {
         mpDrawCursor->setParam(1.0f, 1.0f, 0.1f, 0.6f, 0.5f);
     }
 
+    IF_DUSK(captureRenderState());
     return closed;
 }
 
@@ -1180,9 +1191,6 @@ void dMenu_Ring_c::setJumpItem(bool i_useVibrationM) {
             field_0x6b8[0] != dComIfGs_getMixItemIndex(0))
         {
             field_0x674[0] = 1;
-#if TARGET_PC
-            mSelectItemSlideElapsed[0] = 0.0f;
-#endif
         }
     } else if (field_0x6b3 == 1) {
         field_0x538[0] = g_ringHIO.mUnselectItemScale;
@@ -1191,9 +1199,6 @@ void dMenu_Ring_c::setJumpItem(bool i_useVibrationM) {
             field_0x6b8[1] != dComIfGs_getMixItemIndex(1))
         {
             field_0x674[1] = 1;
-#if TARGET_PC
-            mSelectItemSlideElapsed[1] = 0.0f;
-#endif
         }
     }
     if (field_0x674[0] == 1) {
@@ -1265,7 +1270,13 @@ void dMenu_Ring_c::setScale() {
 
 void dMenu_Ring_c::setNameString(u32 i_stringID) {
     J2DTextBox* textBox[4];
-#if VERSION == VERSION_GCN_JPN
+#if TARGET_PC
+    const bool useDomestic = dusk::version::isJpnOrLessThanWiiJpn();
+    textBox[0] = (J2DTextBox*)mpCenterScreen->search(useDomestic ? MULTI_CHAR('item_n04') : MULTI_CHAR('fitem_n1'));
+    textBox[1] = (J2DTextBox*)mpCenterScreen->search(useDomestic ? MULTI_CHAR('item_n05') : MULTI_CHAR('fitem_n2'));
+    textBox[2] = (J2DTextBox*)mpCenterScreen->search(useDomestic ? MULTI_CHAR('item_n06') : MULTI_CHAR('fitem_n3'));
+    textBox[3] = (J2DTextBox*)mpCenterScreen->search(useDomestic ? MULTI_CHAR('item_n07') : MULTI_CHAR('fitem_n4'));
+#elif VERSION == VERSION_GCN_JPN
     textBox[0] = (J2DTextBox*)mpCenterScreen->search(MULTI_CHAR('item_n04'));
     textBox[1] = (J2DTextBox*)mpCenterScreen->search(MULTI_CHAR('item_n05'));
     textBox[2] = (J2DTextBox*)mpCenterScreen->search(MULTI_CHAR('item_n06'));
@@ -1411,10 +1422,15 @@ void dMenu_Ring_c::setMixItem() {
 }
 
 void dMenu_Ring_c::drawItem() {
+#if TARGET_PC
+    const auto [mCenterPosX, mCenterPosY, mAlphaRate] =
+        dusk::interp::read_menu_pose(this, {this->mCenterPosX, this->mCenterPosY, this->mAlphaRate});
+#else
     field_0x684++;
     if (field_0x684 >= g_ringHIO.mItemAlphaFlashDuration) {
         field_0x684 = 0;
     }
+#endif
     s32 halfFlashDuration = g_ringHIO.mItemAlphaFlashDuration / 2;
     f32 fVar16;
     if (field_0x684 < halfFlashDuration) {
@@ -1468,6 +1484,10 @@ void dMenu_Ring_c::drawItem() {
 }
 
 void dMenu_Ring_c::drawItem2() {
+#if TARGET_PC
+    const auto [mCenterPosX, mCenterPosY, mAlphaRate] =
+        dusk::interp::read_menu_pose(this, {this->mCenterPosX, this->mCenterPosY, this->mAlphaRate});
+#endif
     s32 idx = mCurrentSlot;
     if (mStatus == STATUS_WAIT || mStatus == STATUS_EXPLAIN || mStatus == STATUS_EXPLAIN_FORCE) {
         J2DDrawFrame(mItemSlotPosX[idx] - 24.0f + mCenterPosX, mItemSlotPosY[idx] - 24.0f + mCenterPosY,
@@ -1755,18 +1775,25 @@ void dMenu_Ring_c::setSelectItem(int i_idx, u8 i_itemNo) {
         mpSelectItemTexBuf[i_idx][field_0x6be[i_idx]][0]->height / 48.0f * texScale;
 }
 
+#if TARGET_PC
+void dMenu_Ring_c::advanceSelectItem() {
+    mpDrawCursor->setPos(mpDrawCursor->getPositionX(), mpDrawCursor->getPositionY());
+    for (int i = 0; i < 4; ++i) {
+        if (field_0x674[i] >= 10) {
+            setSelectItemForce(i);
+        } else if (field_0x674[i] != 0) {
+            ++field_0x674[i];
+        }
+    }
+    captureRenderState();
+}
+#endif
+
 void dMenu_Ring_c::drawSelectItem() {
+    IF_DUSK(const auto mAlphaRate = dusk::interp::read_menu_pose(this, {mCenterPosX, mCenterPosY, this->mAlphaRate}).alpha);
     for (int i = 0; i < 4; i++) {
         if (field_0x674[i] != 0) {
-#if TARGET_PC
-            mSelectItemSlideElapsed[i] += dusk::game_clock::consume_interval(this);
-            const f32 u = std::min(mSelectItemSlideElapsed[i] / dusk::game_clock::period_for_original_frames(10.0f), 1.0f);
-            if (u >= 1.0f) {
-                setSelectItemForce(i);
-            } else {
-#else
-            if (field_0x674[i] < 10) {
-#endif
+            if (DUSK_IF_ELSE(true, field_0x674[i] < 10)) {
 #if TARGET_PC
                 f32 initSizeX;
                 f32 initSizeY;
@@ -1803,7 +1830,9 @@ void dMenu_Ring_c::drawSelectItem() {
 #endif
 
 #if TARGET_PC
-                f32 fVar14 = 0.1f + 0.8f * u;
+                const auto& samples = dusk::interp::get<RingSelectionSamples>(this).frames;
+                const f32 frame = field_0x674[i] == 1 ? 1.0f : samples.read(i, (f32)field_0x674[i]);
+                f32 fVar14 = std::clamp(frame, 1.0f, 9.0f) / 10.0f;
 #else
                 f32 fVar14 = field_0x674[i] / 10.0f;
 #endif
@@ -1842,9 +1871,6 @@ void dMenu_Ring_c::setSelectItemForce(int i_idx) {
         if (field_0x674[i_idx] != 0) {
             dComIfGs_setSelectItemIndex(i_idx, field_0x6b4[i_idx]);
             field_0x674[i_idx] = 0;
-#if TARGET_PC
-            mSelectItemSlideElapsed[i_idx] = 0.0f;
-#endif
         }
     } else if (field_0x674[i_idx] != 0) {
         for (int i = 0; i < 2; i++) {
@@ -1852,9 +1878,6 @@ void dMenu_Ring_c::setSelectItemForce(int i_idx) {
             dComIfGs_setSelectItemIndex(i, field_0x6b4[i]);
         }
         field_0x674[i_idx] = 0;
-#if TARGET_PC
-        mSelectItemSlideElapsed[i_idx] = 0.0f;
-#endif
     }
 }
 
@@ -2067,6 +2090,7 @@ void dMenu_Ring_c::setCombineBomb(int param_0) {
 }
 
 void dMenu_Ring_c::drawNumber(int i_itemNum, int i_itemMaxNum, f32 i_posX, f32 i_posY) {
+    IF_DUSK(const auto mAlphaRate = dusk::interp::read_menu_pose(this, {mCenterPosX, mCenterPosY, this->mAlphaRate}).alpha);
     if (i_itemNum > 100) {
         i_itemNum = 100;
     }

@@ -94,10 +94,6 @@ public:
     void calcCursor();
     void drawCursor();
 
-    #if TARGET_PC
-    void dMapBgWide();
-    #endif
-
     void setDPDFloorSelCurPos(s8 i_pos) { field_0xdd6 = i_pos; }
 
     f32 getMapWidth() { return mMapWidth; }
@@ -111,7 +107,7 @@ public:
     }
 
 #if TARGET_PC
-    void resetScrollArrowMask() { field_0xdda = 0; }
+    void dMapBgWide();
 #endif
 
     /* 0xC98 */ JKRExpHeap* mpHeap;
@@ -177,16 +173,15 @@ public:
     /* 0xDCC */ f32 field_0xdcc;
     /* 0xDD0 */ u8 field_0xdd0;
     /* 0xDD1 */ u8 field_0xdd1;
-    /* 0xDD2 */ u8 field_0xdd2;
+    /* 0xDD2 */ DUSK_IF_ELSE(f32, u8) field_0xdd2;
     /* 0xDD3 */ u8 field_0xdd3;
     /* 0xDD4 */ s8 field_0xdd4;
     /* 0xDD5 */ u8 field_0xdd5;
     /* 0xDD6 */ s8 field_0xdd6;
-    /* 0xDD7 */ u8 field_0xdd7;
+    /* 0xDD7 */ DUSK_IF_ELSE(f32, u8) field_0xdd7;
     /* 0xDD8 */ u8 field_0xdd8;
     /* 0xDD9 */ u8 field_0xdd9;
     /* 0xDDA */ u8 field_0xdda;
-
 #if TARGET_PC
     J2DTextBox* mpPoeCountPane;
     J2DPicture* mpPoeCountIcon;
@@ -216,6 +211,10 @@ public:
     void mapControl();
     bool isOpen();
     bool isClose();
+#if TARGET_PC
+    void presentAnims();
+    void presentMapView();
+#endif
     void _draw();
     void itemInfo_init_proc();
     void itemInfo_proc();
@@ -259,9 +258,8 @@ public:
     s8 getFloorPos(s8 param_0) { return param_0 - mBottomFloor; }
     u16 getCMessageNum() { return mCMessageNum; }
 
-    static dMenu_Dmap_c* myclass;
+    static DUSK_GAME_DATA dMenu_Dmap_c* myclass;
 
-private:
     /* 0x004 */ dMenu_DmapMapCtrl_c* mMapCtrl;
     /* 0x008 */ dMenu_DmapBg_c* mpDrawBg;
     /* 0x00C */ u8 field_0xc[0x10 - 0xC];

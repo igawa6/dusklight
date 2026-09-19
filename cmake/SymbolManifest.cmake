@@ -2,40 +2,50 @@ include_guard(GLOBAL)
 
 get_filename_component(_SYMBOL_MANIFEST_CMAKE_DIR "${CMAKE_CURRENT_LIST_FILE}" DIRECTORY)
 
-set(_SYMGEN_VERSION "1.1.1")
+set(_SYMGEN_VERSION "1.3.6")
 set(_SYMGEN_RELEASE_BASE_URL "https://github.com/encounter/symgen/releases/download/v${_SYMGEN_VERSION}")
 set(SYMGEN_PATH "" CACHE FILEPATH "Path to a symgen executable; empty downloads the pinned release")
 mark_as_advanced(SYMGEN_PATH)
 
-function(symgen_host_asset out_name)
+function(symgen_host_asset out_name out_hash)
     string(TOLOWER "${CMAKE_HOST_SYSTEM_PROCESSOR}" _host_processor)
     set(_asset "")
+    set(_asset_hash "")
 
     if (CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
         if (_host_processor MATCHES "^(arm64|aarch64)$")
             set(_asset "symgen-macos-arm64")
+            set(_asset_hash "SHA256=6b836f4fd7e57fc198ca6bfb3e0161504c98f2be2622819849bfc3f265edf4af")
         elseif (_host_processor MATCHES "^(x86_64|amd64)$")
             set(_asset "symgen-macos-x86_64")
+            set(_asset_hash "SHA256=93218f786d34d3ec58f96624e0494ff605e6102cdb31cd7c9922364cfc7885a5")
         endif ()
     elseif (CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
         if (_host_processor MATCHES "^(aarch64|arm64)$")
             set(_asset "symgen-linux-aarch64")
+            set(_asset_hash "SHA256=7891446505c4dd428f4b84c7ceed1441719d910b3d5a47d3540aa890538449ae")
         elseif (_host_processor MATCHES "^(x86_64|amd64)$")
             set(_asset "symgen-linux-x86_64")
+            set(_asset_hash "SHA256=236bc5cd4bda03a8dd53a4531efff1fec3bcd19b09890893b9b6f8f5ae77f041")
         elseif (_host_processor MATCHES "^(i[3-6]86|x86)$")
             set(_asset "symgen-linux-i686")
+            set(_asset_hash "SHA256=e3b4e8e978d630f07ed6aa58d387145356026116b2e8fa99801902dfac73b2ea")
         endif ()
     elseif (CMAKE_HOST_WIN32)
         if (_host_processor MATCHES "^(arm64|aarch64)$")
             set(_asset "symgen-windows-arm64.exe")
+            set(_asset_hash "SHA256=36e2c68bb4f9e3abea728c4cd7ddc01ff1f462be7156af18baa20621b7d39df8")
         elseif (_host_processor MATCHES "^(x86_64|amd64)$")
             set(_asset "symgen-windows-x86_64.exe")
+            set(_asset_hash "SHA256=171995a33bfd5a5271b5bb78d3f2c1d4aec58721bf3a894aaad5607ff648e2a4")
         elseif (_host_processor MATCHES "^(i[3-6]86|x86)$")
             set(_asset "symgen-windows-x86.exe")
+            set(_asset_hash "SHA256=9ed095a01e05eb05e91472bfa7b95b84dfeaeead0941a80708196199c95188db")
         endif ()
     endif ()
 
     set(${out_name} "${_asset}" PARENT_SCOPE)
+    set(${out_hash} "${_asset_hash}" PARENT_SCOPE)
 endfunction()
 
 function(ensure_symgen required)
@@ -54,7 +64,7 @@ function(ensure_symgen required)
             return()
         endif ()
     else ()
-        symgen_host_asset(_asset)
+        symgen_host_asset(_asset _asset_hash)
         if (_asset STREQUAL "")
             if (required)
                 message(FATAL_ERROR "symgen: no prebuilt binary for host "
@@ -75,7 +85,8 @@ function(ensure_symgen required)
         file(DOWNLOAD "${_url}" "${_symgen}"
                 TLS_VERIFY ON
                 STATUS _download_status
-                SHOW_PROGRESS)
+                SHOW_PROGRESS
+                EXPECTED_HASH "${_asset_hash}")
         list(GET _download_status 0 _download_code)
         if (NOT _download_code EQUAL 0)
             list(GET _download_status 1 _download_message)
@@ -105,21 +116,40 @@ function(setup_symbol_manifest target)
         return()
     endif ()
     add_dependencies(${target} symgen)
+    set_property(TARGET ${target} APPEND PROPERTY LINK_DEPENDS "${SYMGEN_EXE}")
 
-    if (WIN32)
-        set(_input --pdb "$<TARGET_PDB_FILE:${target}>")
-        set(_out "$<TARGET_FILE_DIR:${target}>/dusklight.symdb")
-    else ()
-        set(_input --binary "$<TARGET_FILE:${target}>")
-        if (APPLE)
-            set(_out "$<TARGET_BUNDLE_CONTENT_DIR:${target}>/Resources/dusklight.symdb")
-        else ()
-            set(_out "$<TARGET_FILE_DIR:${target}>/dusklight.symdb")
+    # Reserve an ELF program-header entry when the linker supports it (mold).
+    # symgen can replace the PT_NULL entry without relocating the table, keeping later post-link tools safe.
+    if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        include(CheckLinkerFlag)
+        check_linker_flag(CXX "LINKER:--spare-program-headers=1" _linker_supports_spare_program_headers)
+        if (_linker_supports_spare_program_headers)
+            target_link_options(${target} PRIVATE "LINKER:--spare-program-headers=1")
         endif ()
     endif ()
 
+    if (WIN32)
+        set(_input --pdb "$<TARGET_PDB_FILE:${target}>")
+    else ()
+        set(_input --binary "$<TARGET_FILE:${target}>")
+    endif ()
+
+    if (APPLE)
+        # Room for the symbol manifest and several prepatch arenas.
+        target_link_options(${target} PRIVATE "LINKER:-headerpad,0x1000")
+        # ld64 may update an existing output, which breaks our symdb insertion. Remove it first.
+        add_custom_command(TARGET ${target} PRE_LINK
+                COMMAND "${CMAKE_COMMAND}" -E rm -f "$<TARGET_FILE:${target}>"
+                VERBATIM)
+    endif ()
+
+    # The manifest is embedded into the image as a new section, located at runtime through
+    # the descriptor manifest.cpp reserves. On Apple platforms this command must stay
+    # attached before the ad-hoc codesign POST_BUILD command: the patch removes any existing
+    # signature.
     add_custom_command(TARGET ${target} POST_BUILD
-            COMMAND "${SYMGEN_EXE}" manifest ${_input} --out "${_out}"
-            COMMENT "Generating symbol manifest"
+            COMMAND "${SYMGEN_EXE}" manifest ${_input} --embed "$<TARGET_FILE:${target}>"
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            COMMENT "Embedding symbol manifest"
             VERBATIM)
 endfunction()

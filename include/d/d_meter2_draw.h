@@ -11,6 +11,7 @@ class JKRExpHeap;
 class JKRHeap;
 
 class dKantera_icon_c;
+IF_DUSK(class dMeterMap_c);
 
 class dMeter2Draw_c : public dDlst_base_c {
 public:
@@ -46,7 +47,8 @@ public:
     void playPikariBpkAnimation(f32);
     void playOxygenBpkAnimation(J2DAnmColor*);
     void drawPikari(f32, f32, f32*, f32, JUtility::TColor, JUtility::TColor,
-                                   JUtility::TColor, JUtility::TColor, f32, u8);
+                                   JUtility::TColor, JUtility::TColor, f32, u8
+                                   IF_DUSK_ARG(f32 elapsedFrames = -1.0f));
     void drawPikari(CPaneMgr*, f32*, f32, JUtility::TColor, JUtility::TColor,
                                    JUtility::TColor, JUtility::TColor, f32, u8);
     void drawPikariHakusha(f32, f32, f32, f32, JUtility::TColor, JUtility::TColor,
@@ -59,11 +61,11 @@ public:
     void drawKanteraScreen(u8);
     void drawMagic(s16, s16, f32, f32);
     void setAlphaMagicChange(bool);
-    void drawKantera(s32, s32, f32, f32);
+    void drawKantera(s32, DUSK_IF_ELSE(f32, s32), f32, f32);
     void setAlphaKanteraChange(bool);
     void setAlphaKanteraAnimeMin();
     void setAlphaKanteraAnimeMax();
-    void drawOxygen(s32, s32, f32, f32);
+    void drawOxygen(s32, DUSK_IF_ELSE(f32, s32), f32, f32);
     void setAlphaOxygenChange(bool);
     void setAlphaOxygenAnimeMin();
     void setAlphaOxygenAnimeMax();
@@ -134,7 +136,11 @@ public:
 
     J2DScreen* getMainScreenPtr() { return mpScreen; }
     bool isEmphasisC() { return field_0x766 == 7 ? true : false; }
+#if TARGET_PC
+    f32 getMeterGaugeAlphaRate(u8 i_no);
+#else
     f32 getMeterGaugeAlphaRate(u8 i_no) { return mMeterAlphaRate[i_no]; }
+#endif
     bool isEmphasisA() { return field_0x761 == 7 ? true : false; }
     bool isEmphasisB() { return field_0x762 == 7 ? true : false; }
     bool isEmphasisBin() { return field_0x763 == 7 ? true : false; }
@@ -199,9 +205,29 @@ public:
     f32 getLightDropAlpha();
     void dualScreenSyncPaneVisibility(bool i_dualScreenHud, bool i_mainHudRestored,
         bool i_lowLifeHearts);
+
+    void beginExecution();
+    void endExecution();
+    bool isExecuting() const { return mExecuting; }
+    void setExecuting(bool executing) { mExecuting = executing; }
+
+    void publishKantera(s32 now, s32 max);
+    void publishOxygen(s32 now, s32 max);
+
+    void present();
+    void presentVessel(f32 i_posX, f32 i_posY, f32 i_scale);
+    void presentButtonA(f32 i_posX, f32 i_posY, f32 i_textPosX, f32 i_textPosY, f32 i_scale);
+    void presentButtonB(f32 i_posX, f32 i_posY, f32 i_textPosX, f32 i_textPosY, f32 i_scale);
+    void presentMapAlpha(dMeterMap_c* map);
+
+    void showLightDrop(bool show, bool get_path = false);
+    void showCross(bool show);
+    void showMap(bool show);
+
+    bool lightDropRowUsed() const;
+    void resetRows();
 #endif
 
-private:
     /* 0x004 */ item_params mItemParams[4];
     /* 0x074 */ JKRExpHeap* heap;
     /* 0x078 */ J2DScreen* mpScreen;
@@ -332,7 +358,7 @@ private:
     /* 0x742 */ s16 field_0x742[3];
     /* 0x748 */ u8 field_0x748[0xC];
     /* 0x756 */ u16 field_0x754;
-    /* 0x756 */ s16 field_0x756;
+    /* 0x756 */ DUSK_IF_ELSE(f32, s16) field_0x756;
     /* 0x758 */ u8 field_0x758;
     /* 0x759 */ u8 field_0x759;
     /* 0x75A */ u8 field_0x75a;
@@ -411,6 +437,9 @@ private:
     /* 0x858 */ GXColor mButtonZTextColor;
     /* 0x85C */ GXColor mButtonXYTextColor;
     /* 0x860 */ u8 field_0x860[2];
+#if TARGET_PC
+    bool mExecuting;
+#endif
 };
 
 #endif /* D_METER_D_METER2_DRAW_H */

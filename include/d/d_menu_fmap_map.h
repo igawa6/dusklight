@@ -28,7 +28,7 @@ struct dMfm_prm_res_s {
 struct dMfm_HIO_prm_res_src_s {
     /* 0x0 */ u8 mFlashDuration;
 
-    static const dMfm_HIO_prm_res_src_s m_other;
+    static DUSK_GAME_DATA const dMfm_HIO_prm_res_src_s m_other;
 };
 
 struct dMfm_HIO_prm_res_dst_s {
@@ -172,6 +172,10 @@ public:
     ~dMenu_FmapMap_c();
     void _create(u16, u16, u16, u16, void*);
     void _delete();
+#if TARGET_PC
+    void presentAnims();
+    void presentRendering(dMenu_Fmap_world_data_c*, int, f32, f32, f32, f32);
+#endif
     void draw();
     void rendering(line_class const*);
     int getLineWidth(int);
@@ -224,9 +228,15 @@ public:
     /* 0xDC */ int mStageCursor;
     /* 0xE0 */ int mLastStageCursor;
     /* 0xE4 */ u8 mRegionCursor;
-    /* 0xE5 */ u8 mFlashTimer;
+    /* 0xE5 */ DUSK_IF_ELSE(f32, u8) mFlashTimer;
     /* 0xE8 */ u8* mp_roomList;
     /* 0xEC */ int m_roomListNumber;
+#if TARGET_PC
+    f32 mFlashFrame = 0.0f;
+    f32 mPaletteFrame[2] = {};
+    bool mResetFlashFrame = true;
+    bool mPaletteFrameInitialized = false;
+#endif
 
     static dMenu_FmapMap_c* mMySelfPointer;
 };

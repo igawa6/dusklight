@@ -13,6 +13,20 @@
 #include "JSystem/J3DGraphBase/J3DMaterial.h"
 #include "JSystem/J3DGraphBase/J3DDrawBuffer.h"
 
+#if TARGET_PC
+#include "dusk/interp/samples.h"
+
+namespace {
+constexpr int CHAIN_COUNT = 16;
+struct WchainInterp {
+    dusk::interp::Samples<cXyz> positions;
+    dusk::interp::Samples<csXyz> angles;
+    dusk::interp::Samples<csXyz> rotations;
+};
+
+}
+#endif
+
 static char const l_arcName[7] = "Wchain";
 
 int daObjWchain_c::createHeap() {
@@ -309,6 +323,23 @@ void daObjWchain_shape_c::draw() {
     cXyz* pos = chain->getChainPos();
     csXyz* angle = chain->getChainAngle();
     s16* rotation = chain->getChainAngleZ();
+#if TARGET_PC
+    auto& samples = dusk::interp::get<WchainInterp>(chain);
+    cXyz positions[CHAIN_COUNT];
+    csXyz angles[CHAIN_COUNT];
+    s16 rotations[CHAIN_COUNT];
+    s16 yaw = chain->shape_angle.y;
+    for (int i = 0; i < CHAIN_COUNT; ++i) {
+        positions[i] = samples.positions.read(i, pos[i]);
+        angles[i] = samples.angles.read(i, angle[i]);
+        csXyz orientation = samples.rotations.read(i, csXyz(rotation[i], yaw, 0));
+        rotations[i] = orientation.x;
+    }
+    yaw = samples.rotations.read(0, csXyz(rotation[0], yaw, 0)).y;
+    pos = positions;
+    angle = angles;
+    rotation = rotations;
+#endif
     J3DModelData* model_data = chain->getChainModelData();
     J3DMaterial* material = model_data->getMaterialNodePointer(0);
     dKy_tevstr_c& tevstr = chain->tevStr;
@@ -335,21 +366,22 @@ void daObjWchain_shape_c::draw() {
         mDoMtx_stack_c::copy(j3dSys.getViewMtx());
         mDoMtx_stack_c::transM(*pos);
         mDoMtx_stack_c::ZrotM(*rotation);
-        mDoMtx_stack_c::ZXYrotM(angle->x, chain->shape_angle.y, angle->z);
+        mDoMtx_stack_c::ZXYrotM(angle->x, DUSK_IF_ELSE(yaw, chain->shape_angle.y), angle->z);
         mDoMtx_stack_c::transM(0.0f, 0.0f, -8.75f);
         GXLoadPosMtxImm(mDoMtx_stack_c::get(), 0);
         GXLoadNrmMtxImm(mDoMtx_stack_c::get(), 0);
         material->getShape()->simpleDrawCache();
     }
     cXyz roof_pos(chain->getRoofPos().x, chain->getRealRoofY(), chain->getRoofPos().z);
-    cXyz delta = roof_pos - *chain->getChainPos();
+    IF_DUSK(roof_pos = samples.positions.read(CHAIN_COUNT, roof_pos));
+    cXyz delta = roof_pos - DUSK_IF_ELSE(positions[0], *chain->getChainPos());
     f32 len = delta.abs();
     if (len > 17.5f) {
-        cXyz pos = *chain->getChainPos();
+        cXyz pos = DUSK_IF_ELSE(positions[0], *chain->getChainPos());
         csXyz angle(
             delta.atan2sY_XZ(),
-            chain->getChainAngle()->y,
-            chain->getChainAngle()->z + 0x3000
+            DUSK_IF_ELSE(angles[0].y, chain->getChainAngle()->y),
+            DUSK_IF_ELSE(angles[0].z, chain->getChainAngle()->z) + 0x3000
         );
         delta *= (17.5f / len);
         for (; len > 17.5f; len -= 17.5f, pos += delta, angle.z += 0x3000) {
@@ -371,6 +403,16 @@ int daObjWchain_c::draw() {
     mDoExt_modelUpdateDL(mpHandleModel);
     g_env_light.setLightTevColorType_MAJI(mpChainModelData, &tevStr);
     dComIfGd_getOpaList()->entryImm(&mShape, 0);
+#if TARGET_PC
+    auto& samples = dusk::interp::get<WchainInterp>(this);
+    samples.positions.capture(CHAIN_COUNT + 1, [&](int i) {
+        return i < CHAIN_COUNT ? mChainPos[i] : cXyz(mRoofPos.x, mRealRoofY, mRoofPos.z);
+    });
+    samples.angles.capture(mChainAngle, CHAIN_COUNT);
+    samples.rotations.capture(CHAIN_COUNT, [&](int i) {
+        return csXyz(mChainRotation[i], shape_angle.y, 0);
+    });
+#endif
     return 1;
 }
 

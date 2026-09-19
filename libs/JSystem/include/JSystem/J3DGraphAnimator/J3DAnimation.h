@@ -6,9 +6,9 @@
 #include <mtx.h>
 #include "global.h"
 
-#include "dusk/endian.h"
-
 #if TARGET_PC
+#include "helpers/endian.h"
+
 #define OFFSET_PTR_V0 BE(u32)
 #else
 #define OFFSET_PTR_V0 void*
@@ -478,27 +478,45 @@ struct J3DAnmClusterFullTable {
  */
 class J3DAnmBase {
 public:
+#if TARGET_PC
+    J3DAnmBase();
+#else
     J3DAnmBase() {
         mAttribute = 0;
         field_0x5 = 0;
         mFrameMax = 0;
         mFrame = 0.0f;
     }
+#endif
 
+#if TARGET_PC
+    J3DAnmBase(s16 frameMax);
+#else
     J3DAnmBase(s16 frameMax) {
         mAttribute = 0;
         field_0x5 = 0;
         mFrameMax = frameMax;
         mFrame = 0.0f;
     }
+#endif
 
+#if TARGET_PC
+    virtual ~J3DAnmBase();
+#else
     virtual ~J3DAnmBase() {}
+#endif
     virtual s32 getKind() const = 0;
 
     u8 getAttribute() const { return mAttribute; }
     s16 getFrameMax() const { return mFrameMax; }
     f32 getFrame() const { return mFrame; }
-    void setFrame(f32 frame) { mFrame = frame; }
+#if TARGET_PC
+    void setFrame(f32 frame);
+#else
+    void setFrame(f32 frame) {
+        mFrame = frame;
+    }
+#endif
 
     /* 0x4 */ u8 mAttribute;
     /* 0x5 */ u8 field_0x5;
@@ -960,30 +978,66 @@ public:
     void init(int endFrame) { init((s16)endFrame); }
     BOOL checkPass(f32);
     void update();
+#if TARGET_PC
+    virtual ~J3DFrameCtrl();
+#else
     virtual ~J3DFrameCtrl() {}
+#endif
 
     u8 getAttribute() const { return mAttribute; }
-    void setAttribute(u8 attr) { mAttribute = attr; }
+#if TARGET_PC
+    void setAttribute(u8 attr);
+#else
+    void setAttribute(u8 attr) {
+        mAttribute = attr;
+    }
+#endif
     u8 getState() const { return mState; }
     bool checkState(u8 state) const { return mState & state ? true : false; }
     s16 getStart() const { return mStart; }
+#if TARGET_PC
+    void setStart(s16 start);
+#else
     void setStart(s16 start) {
         mStart = start;
         mFrame = start;
     }
+#endif
     s16 getEnd() const { return mEnd; }
-    void setEnd(s16 end) { mEnd = end; }
+#if TARGET_PC
+    void setEnd(s16 end);
+#else
+    void setEnd(s16 end) {
+        mEnd = end;
+    }
+#endif
     s16 getLoop() const { return mLoop; }
-    void setLoop(s16 loop) { mLoop = loop; }
+#if TARGET_PC
+    void setLoop(s16 loop);
+#else
+    void setLoop(s16 loop) {
+        mLoop = loop;
+    }
+#endif
     f32 getRate() const { return mRate; }
     void setRate(f32 rate) { mRate = rate; }
     f32 getFrame() const { return mFrame; }
-    void setFrame(f32 frame) { mFrame = frame; }
+#if TARGET_PC
+    void setFrame(f32 frame);
+#else
+    void setFrame(f32 frame) {
+        mFrame = frame;
+    }
+#endif
+#if TARGET_PC
+    void reset();
+#else
     void reset() {
         mFrame = mStart;
         mRate = 1.0f;
         mState = 0;
     }
+#endif
 
     /* 0x04 */ u8 mAttribute;
     /* 0x05 */ u8 mState;

@@ -6,7 +6,10 @@
 #include "JSystem/J2DGraph/J2DScreen.h"
 #include "d/d_com_inf_game.h"
 #include "d/d_pane_class.h"
-#include "dusk/frame_interpolation.h"
+
+#if TARGET_PC
+#include "dusk/interp/user_interface.h"
+#endif
 
 class dMsgScrnLight_HIO_c {
 public:
@@ -203,14 +206,9 @@ void dMsgScrnLight_c::draw(f32* i_anmFrame, f32 i_posX, f32 i_posY, f32 i_scaleX
     }
 
     if (mPlayAnim) {
-#ifdef TARGET_PC
-        if (dusk::frame_interp::get_ui_tick_pending())
-#endif
-        {
-            *i_anmFrame += 1.0f;
-            if (*i_anmFrame >= mpBck->getFrameMax()) {
-                *i_anmFrame = 0.0f;
-            }
+        *i_anmFrame += 1.0f IF_DUSK(* dusk::game_clock::original_frames());
+        if (*i_anmFrame >= mpBck->getFrameMax()) {
+            *i_anmFrame = 0.0f;
         }
 
         mBckFrame = *i_anmFrame;
@@ -226,15 +224,9 @@ void dMsgScrnLight_c::draw(f32* i_anmFrame, f32 i_posX, f32 i_posY, f32 i_scaleX
     mpParent_c->setBlackWhite(i_black, i_white);
 
     if (mPlayAnim) {
-#ifdef TARGET_PC
-        if (dusk::frame_interp::get_ui_tick_pending())
-#endif
-        {
-            *i_anmFrame += i_anmRate;
-
-            if (*i_anmFrame >= mpBck->getFrameMax()) {
-                *i_anmFrame = 0.0f;
-            }
+        *i_anmFrame += i_anmRate IF_DUSK(* dusk::game_clock::original_frames());
+        if (*i_anmFrame >= mpBck->getFrameMax()) {
+            *i_anmFrame = 0.0f;
         }
 
         mBckFrame = *i_anmFrame;

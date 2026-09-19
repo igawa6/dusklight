@@ -8,6 +8,9 @@ struct dMsgScrnHowl_c : public dMsgScrnBase_c {
     ~dMsgScrnHowl_c();
     void exec();
     void drawSelf();
+#if TARGET_PC
+    void presentAnims();
+#endif
     void guide_on_init();
     void guide_on_proc();
     void guide_off_init();
@@ -77,7 +80,7 @@ struct dMsgScrnHowl_c : public dMsgScrnBase_c {
     /* 0x1A18 */ f32 field_0x1a18[30];
     /* 0x1A90 */ f32 field_0x1a90[30];
     /* 0x1B08 */ f32 field_0x1b08[3];
-    /* 0x1B14 */ s16 field_0x1b14[0x300];
+    /* 0x1B14 */ DUSK_IF_ELSE(f32, s16) field_0x1b14[0x300];
     /* 0x2114 */ u32 field_0x2114;
     /* 0x2118 */ u32 field_0x2118;
     /* 0x211C */ u32 field_0x211c;
@@ -113,6 +116,8 @@ struct dMsgScrnHowl_c : public dMsgScrnBase_c {
 
 #if TARGET_PC
     u8 showCursor;
+    f32 mSampleAcc;
+    f32 mPulseFrame;
 #endif
 };
 

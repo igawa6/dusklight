@@ -1,14 +1,17 @@
+#include "internal.hpp"
 #include "registry.hpp"
-#include "slot_map.hpp"
 
-#include "aurora/dvd.h"
-#include "aurora/lib/logging.hpp"
 #include "dusk/mods/loader/loader.hpp"
+#include "dusk/utilities.hpp"
 #include "mods/svc/overlay.h"
+
+#include "JSystem/JKernel/JKRArchive.h"
+
+#include <aurora/dvd.h>
+#include <borealis/log.hpp>
 
 #include <algorithm>
 #include <cstdint>
-#include <cstring>
 #include <mutex>
 #include <string_view>
 #include <unordered_map>
@@ -19,12 +22,12 @@ using namespace std::string_literals;
 namespace dusk::mods::svc {
 namespace {
 
-aurora::Module Log("dusk::mods::overlay");
+constexpr borealis::Log Log{"dusk::mods::overlay"};
 
 struct OverlayFileData {
     std::string bundlePath;
     std::shared_ptr<ModBundle> bundle;
-    std::shared_ptr<const std::vector<u8> > buffer;
+    std::shared_ptr<const std::vector<u8>> buffer;
 };
 
 // Keyed by the id passed to Aurora as per-file userdata. Guarded by s_overlayMutex: Aurora may
@@ -98,6 +101,7 @@ void append_runtime_overlays(std::vector<AuroraOverlayFile>& files, LoadedMod& m
 
     for (const auto* slot : slots) {
         const auto id = s_nextOverlayId++;
+
         if (slot->buffer != nullptr) {
             s_overlayFiles.emplace(id, OverlayFileData{{}, nullptr, slot->buffer});
         } else {
@@ -110,7 +114,7 @@ void append_runtime_overlays(std::vector<AuroraOverlayFile>& files, LoadedMod& m
 
 struct OpenOverlayFile {
     std::vector<u8> ownedData;
-    std::shared_ptr<const std::vector<u8> > shared;
+    std::shared_ptr<const std::vector<u8>> shared;
     size_t pos = 0;
 
     [[nodiscard]] const std::vector<u8>& data() const {
@@ -200,6 +204,7 @@ void overlay_sync_files() {
 
     Log.debug("Registering {} overlay file(s).", files.size());
     aurora_dvd_overlay_files(files.data(), files.size(), nullptr);
+    JKRArchive::notifyOverlayFilesChanged();
 
     for (const auto& file : files) {
         std::free(const_cast<char*>(file.fileName));
@@ -220,13 +225,13 @@ uint64_t overlay_add_file(
 
 uint64_t overlay_add_buffer(LoadedMod& mod, std::string discPath, std::vector<u8> data) {
     const auto size = data.size();
-    const auto handle = s_runtimeOverlays.emplace(mod,
-        RuntimeOverlaySlot{
-            .discPath = std::move(discPath),
-            .buffer = std::make_shared<const std::vector<u8>>(std::move(data)),
-            .size = size,
-            .order = s_nextRuntimeOrder++,
-        });
+    const auto handle = s_runtimeOverlays.emplace(
+        mod, RuntimeOverlaySlot{
+                 .discPath = std::move(discPath),
+                 .buffer = std::make_shared<const std::vector<u8>>(std::move(data)),
+                 .size = size,
+                 .order = s_nextRuntimeOrder++,
+             });
     s_overlaysDirty = true;
     return handle;
 }
@@ -251,22 +256,14 @@ bool consume_overlays_dirty() {
 
 constexpr size_t kMaxOverlayFileSize = UINT32_MAX;
 
-bool is_valid_disc_path(const char* discPath) {
-    if (discPath == nullptr) {
-        return false;
-    }
-    const std::string_view path{discPath};
-    return path.starts_with('/') && is_safe_resource_path(path.substr(1));
-}
-
 ModResult overlay_add_file(
     ModContext* context, const char* discPath, const char* bundlePath, OverlayHandle* outHandle) {
     if (outHandle != nullptr) {
         *outHandle = 0;
     }
     auto* mod = mod_from_context(context);
-    if (mod == nullptr || !is_valid_disc_path(discPath) || bundlePath == nullptr ||
-        !is_safe_resource_path(bundlePath))
+    if (mod == nullptr || discPath == nullptr || !utils::is_valid_disc_path(discPath) ||
+        bundlePath == nullptr || !utils::is_safe_resource_path(bundlePath))
     {
         return MOD_INVALID_ARGUMENT;
     }
@@ -275,13 +272,12 @@ ModResult overlay_add_file(
     try {
         size = mod->bundle->getFileSize(bundlePath);
     } catch (const std::exception& e) {
-        Log.error(
-            "[{}] overlay add_file '{}' failed: {}", mod->metadata.id, bundlePath, e.what());
+        Log.error("[{}] overlay add_file '{}' failed: {}", mod->metadata.id, bundlePath, e.what());
         return MOD_UNAVAILABLE;
     }
     if (size > kMaxOverlayFileSize) {
-        Log.error("[{}] overlay add_file '{}' failed: file too large ({} bytes)",
-            mod->metadata.id, bundlePath, size);
+        Log.error("[{}] overlay add_file '{}' failed: file too large ({} bytes)", mod->metadata.id,
+            bundlePath, size);
         return MOD_INVALID_ARGUMENT;
     }
 
@@ -298,8 +294,8 @@ ModResult overlay_add_buffer(ModContext* context, const char* discPath, const vo
         *outHandle = 0;
     }
     auto* mod = mod_from_context(context);
-    if (mod == nullptr || !is_valid_disc_path(discPath) || (data == nullptr && size != 0) ||
-        size > kMaxOverlayFileSize)
+    if (mod == nullptr || discPath == nullptr || !utils::is_valid_disc_path(discPath) ||
+        (data == nullptr && size != 0) || size > kMaxOverlayFileSize)
     {
         return MOD_INVALID_ARGUMENT;
     }

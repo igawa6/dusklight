@@ -9,41 +9,12 @@
 #include "JSystem/J3DGraphLoader/J3DModelLoader.h"
 #include "JSystem/J3DGraphLoader/J3DAnmLoader.h"
 
+#if TARGET_PC
+#include "mods/svc/game_mode.h"
+#endif
+
 class dFile_info_c;
 class J2DPicture;
-
-#if TARGET_PC
-static PaneCache mSelDtPanes[] = {
-    {MULTI_CHAR('tate_n0'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('tate_n1'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('ken_n0'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('ken_n1'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('fuku_n0'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('fuku_n1'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('fuku_n2'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('gray_n'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('b_base'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('b_base1'), 0.0f, 0.0f, false},
-};
-
-static PaneCache fileSelPanes[] = {
-    {MULTI_CHAR('w_uzu00'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('w_uzu01'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('w_uzu02'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('w_uzu03'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('w_uzu04'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('w_uzu05'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('w_uzu06'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('w_uzu07'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('w_uzu08'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('w_uzu09'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('w_er_msg'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('w_er_msE'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('w_er_msR'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('er_for0'), 0.0f, 0.0f, false},
-    {MULTI_CHAR('er_for1'), 0.0f, 0.0f, false},
-};
-#endif
 
 class dDlst_FileSel_c : public dDlst_base_c {
 public:
@@ -414,13 +385,23 @@ public:
     void menuCursorShow();
     void yesnoWakuAlpahAnmInit(u8, u8, u8, u8);
     bool yesnoWakuAlpahAnm(u8);
-    #if TARGET_PC
+#if TARGET_PC
     void fileSelectWide();
     bool pointerDataSelect();
     bool pointerMenuSelect();
     bool pointerCopyDataToSelect();
     bool pointerYesNoSelect(bool errorSelect);
-    #endif
+    void backToDataSelectMove() {
+        headerTxtSet(0x43, 1, 0);
+        fileRecScaleAnmInitSet2(0.0f, 1.0f);
+        nameMoveAnmInitSet(0xd29, 0xd1f);
+        modoruTxtDispAnmInit(0);
+        mDataSelProc = DATASELPROC_NAME_TO_DATA_SELECT_MOVE;
+    }
+    void presentLayoutAnims();
+    void presentAnims();
+    void presentNameInputFade();
+#endif
     void _draw();
     void errorMoveAnmInitSet(int, int);
     bool errorMoveAnm();
@@ -545,7 +526,7 @@ public:
     /* 0x00A0 */ s32 field_0x00a0;
     /* 0x00A4 */ CPaneMgr* mBaseMovePane;
     /* 0x00A8 */ u8 field_0x00a8[0xb0-0xa8];
-    /* 0x00B0 */ s32 mBaseMoveAnmFrame;
+    /* 0x00B0 */ DUSK_IF_ELSE(f32, s32) mBaseMoveAnmFrame;
     /* 0x00B4 */ s32 mBaseMoveAnmFrameMax;
     /* 0x00B8 */ u8 field_0x00b8;
     /* 0x00B9 */ u8 field_0x00b9;
@@ -554,26 +535,26 @@ public:
     /* 0x00BC */ CPaneMgr* mSelFilePanes[3];
     /* 0x00C8 */ f32 field_0x00c8[3];
     /* 0x00D4 */ f32 field_0x00d4[3];
-    /* 0x00E0 */ s32 field_0x00e0[3];
+    /* 0x00E0 */ DUSK_IF_ELSE(f32, s32) field_0x00e0[3];
     /* 0x00EC */ s32 field_0x00ec;
     /* 0x00F0 */ CPaneMgr* mYnSelPane[2];
-    /* 0x00F8 */ s32 field_0x00f8[2];
-    /* 0x0100 */ s32 field_0x0100;
+    /* 0x00F8 */ DUSK_IF_ELSE(f32, s32) field_0x00f8[2];
+    /* 0x0100 */ DUSK_IF_ELSE(f32, s32) field_0x0100;
     /* 0x0104 */ s32 field_0x0104;
     /* 0x0108 */ bool field_0x0108;
     /* 0x0109 */ bool field_0x0109;
     /* 0x010A */ u8 field_0x10a[2];
     /* 0x010C */ J2DPane* mBaseSubPane;
-    /* 0x0110 */ int field_0x0110;
+    /* 0x0110 */ DUSK_IF_ELSE(f32, int) field_0x0110;
     /* 0x0114 */ int field_0x0114;
     /* 0x0118 */ J2DPane* m3mMenuPane;
     /* 0x011C */ J2DPane* mNameBasePane;
-    /* 0x0120 */ int field_0x0120;
+    /* 0x0120 */ DUSK_IF_ELSE(f32, int) field_0x0120;
     /* 0x0124 */ int field_0x0124;
     /* 0x0128 */ bool field_0x0128;
     /* 0x0129 */ u8 field_0x0129[0x012C - 0x0129];
     /* 0x012C */ J2DPane* mErrorMsgPane;
-    /* 0x0130 */ int field_0x0130;
+    /* 0x0130 */ DUSK_IF_ELSE(f32, int) field_0x0130;
     /* 0x0134 */ int field_0x0134;
     /* 0x0138 */ CPaneMgrAlpha* mErrorMsgTxtPane[2];
     /* 0x0140 */ TEXT_SPAN mErrorMsgStringPtr[2];
@@ -600,24 +581,24 @@ public:
     /* 0x01BE */ u8 field_0x01be[2];
     /* 0x01C0 */ CPaneMgr* mYnSelTxtPane[2];
     /* 0x01C8 */ J2DAnmColor* mFileSelBpk;
-    /* 0x01CC */ s32 mSelFileBpkFrame;
+    /* 0x01CC */ DUSK_IF_ELSE(f32, s32) mSelFileBpkFrame;
     /* 0x01D0 */ J2DAnmTextureSRTKey* mFileSel05Btk;
-    /* 0x01D4 */ s32 mSelFileBtk05Frame;
+    /* 0x01D4 */ DUSK_IF_ELSE(f32, s32) mSelFileBtk05Frame;
     /* 0x01D8 */ J2DAnmColor* mSelFileBookBpk;
-    /* 0x01DC */ s32 mSelFileBookBpkFrame;
+    /* 0x01DC */ DUSK_IF_ELSE(f32, s32) mSelFileBookBpkFrame;
     /* 0x01E0 */ J2DAnmTextureSRTKey* mSelFileBookBtk;
-    /* 0x01E4 */ s32 mSelFileBookBtkFrame;
+    /* 0x01E4 */ DUSK_IF_ELSE(f32, s32) mSelFileBookBtkFrame;
     /* 0x01E8 */ J2DAnmTevRegKey* mSelFileBookBrk;
-    /* 0x01EC */ s32 mSelFileBookBrkFrame;
+    /* 0x01EC */ DUSK_IF_ELSE(f32, s32) mSelFileBookBrkFrame;
     /* 0x01F0 */ J2DAnmTextureSRTKey* mDtEffBtk;
-    /* 0x01F4 */ s32 mDtEffBtkFrame;
+    /* 0x01F4 */ DUSK_IF_ELSE(f32, s32) mDtEffBtkFrame;
     /* 0x01F8 */ J2DAnmTextureSRTKey* mCpEffBtk;
-    /* 0x01FC */ s32 mCpEffBtkFrame;
+    /* 0x01FC */ DUSK_IF_ELSE(f32, s32) mCpEffBtkFrame;
     /* 0x0200 */ J2DAnmTevRegKey* mCpDtEffBrk;
-    /* 0x0204 */ s32 mCpDtEffBrkFrame;
+    /* 0x0204 */ DUSK_IF_ELSE(f32, s32) mCpDtEffBrkFrame;
     /* 0x0208 */ u8 field_0x0208;
     /* 0x0209 */ u8 field_0x0209;
-    /* 0x020A */ u8 mFadeTimer;
+    /* 0x020A */ DUSK_IF_ELSE(f32, u8) mFadeTimer;
     /* 0x020B */ u8 field_0x020b;
     /* 0x020C */ CPaneMgrAlpha* mHeaderTxtPane[2];
     /* 0x0214 */ TEXT_SPAN mHeaderStringPtr[2];
@@ -670,7 +651,7 @@ public:
     /* 0x02A0 */ J2DAnmTransform* mCpSelBck2;
     /* 0x02A4 */ CPaneMgr* mCpSelPane[3];
     /* 0x02B0 */ u8 field_0x02b0[0x2b4-0x2b0];
-    /* 0x02B4 */ int field_0x02b4[3];
+    /* 0x02B4 */ DUSK_IF_ELSE(f32, int) field_0x02b4[3];
     /* 0x02C0 */ CPaneMgr* mCpSelPane_moyo[2];
     /* 0x02C8 */ CPaneMgr* mCpSelPane_gold[2];
     /* 0x02D0 */ CPaneMgr* mCpSelPane_gold2[2];
@@ -680,30 +661,30 @@ public:
     /* 0x02E4 */ u8 field_0x02e4[2];
     /* 0x02E4 */ u8 field_0x02e6[0x2e8-0x2e6];
     /* 0x02E8 */ J2DAnmColor* mCpSelBpk;
-    /* 0x02EC */ s32 mCpSelBpkFrame;
+    /* 0x02EC */ DUSK_IF_ELSE(f32, s32) mCpSelBpkFrame;
     /* 0x02F0 */ J2DAnmTextureSRTKey* mCpSel03Btk;
-    /* 0x02F4 */ s32 mCpSel03BtkFrame;
+    /* 0x02F4 */ DUSK_IF_ELSE(f32, s32) mCpSel03BtkFrame;
     /* 0x02F8 */ J2DAnmColor* mCpSelBookBpk;
-    /* 0x02FC */ s32 mCpSelBookBpkFrame;
+    /* 0x02FC */ DUSK_IF_ELSE(f32, s32) mCpSelBookBpkFrame;
     /* 0x0300 */ J2DAnmTextureSRTKey* mCpSelBookBtk;
-    /* 0x0304 */ s32 mCpSelBookBtkFrame;
+    /* 0x0304 */ DUSK_IF_ELSE(f32, s32) mCpSelBookBtkFrame;
     /* 0x0308 */ J2DAnmTevRegKey* mCpSelBookBrk;
-    /* 0x030C */ s32 mCpSelBookBrkFrame;
+    /* 0x030C */ DUSK_IF_ELSE(f32, s32) mCpSelBookBrkFrame;
     /* 0x0310 */ J2DAnmTransform* mYnSelBck;
     /* 0x0314 */ J2DAnmTransform* mYnSelBck2;
     /* 0x0318 */ J2DAnmColor* mYnSelBpk;
-    /* 0x031C */ s32 mYnSelBpkFrame;
+    /* 0x031C */ DUSK_IF_ELSE(f32, s32) mYnSelBpkFrame;
     /* 0x0320 */ J2DAnmTextureSRTKey* mYnSelBtk;
-    /* 0x0324 */ s32 mYnSelBtkFrame;
+    /* 0x0324 */ DUSK_IF_ELSE(f32, s32) mYnSelBtkFrame;
     /* 0x0328 */ J2DAnmTransform* m3mBck;
     /* 0x032C */ J2DAnmTransform* m3mBck2;
     /* 0x0330 */ J2DAnmColor* m3mBpk;
-    /* 0x0334 */ s32 m3mBpkFrame;
+    /* 0x0334 */ DUSK_IF_ELSE(f32, s32) m3mBpkFrame;
     /* 0x0338 */ J2DAnmTextureSRTKey* m3mBtk;
-    /* 0x033C */ s32 m3mBtkFrame;
+    /* 0x033C */ DUSK_IF_ELSE(f32, s32) m3mBtkFrame;
     /* 0x0340 */ CPaneMgr* m3mSelPane[3];
-    /* 0x034C */ s32 field_0x034c[3];
-    /* 0x0358 */ int field_0x0358;
+    /* 0x034C */ DUSK_IF_ELSE(f32, s32) field_0x034c[3];
+    /* 0x0358 */ DUSK_IF_ELSE(f32, int) field_0x0358;
     /* 0x035C */ int field_0x035c;
     /* 0x0360 */ bool field_0x0360;
     /* 0x0361 */ u8 field_0x0361[3];
@@ -716,7 +697,7 @@ public:
     /* 0x0390 */ u8 field_0x0391[3];
     /* 0x0394 */ CPaneMgr* m3mSelTextPane[3];
     /* 0x03A0 */ J2DAnmTextureSRTKey* mSelDtBtk;
-    /* 0x03A4 */ s32 mSelDtBtkFrame;
+    /* 0x03A4 */ DUSK_IF_ELSE(f32, s32) mSelDtBtkFrame;
     /* 0x03A8 */ CPaneMgr* mSelDtPane_mset;
     /* 0x03AC */ s16 mWaitTimer;
     /* 0x03AE */ u8 field_0x03AE[0x03B0 - 0x03AE];
@@ -728,24 +709,24 @@ public:
     /* 0x2374 */ u8 mFadeFlag;
     /* 0x2375 */ bool mHasDrawn;
 
-    #if PLATFORM_GCN
+#if PLATFORM_GCN
     /* 0x2378 */ J2DPicture* mpFadePict;
-    #endif
-#ifdef TARGET_PC
-    dDlst_FileSelFade_c mFadeDlst;
 #endif
 
-    #if PLATFORM_WII || PLATFORM_SHIELD
+#if PLATFORM_WII || PLATFORM_SHIELD
     /* 0x2376 */ u8 field_0x2376[SAVEFILE_SIZE];
     /* 0x4332 */ u8 field_0x4332;
     /* 0x4333 */ u8 field_0x4333;
-    #endif
+#endif
+
+#if TARGET_PC
+    dDlst_FileSelFade_c mFadeDlst;
+    bool mGameModeSaveStartBuildUi = true;
+    GameModeNewSaveState mGameModeNewSaveState = GAME_MODE_STATE_PENDING;
+    bool mNameMoveRequested = false;
+#endif
 };
 
-#ifdef TARGET_PC
-STATIC_ASSERT(sizeof(dFile_select_c) == 0x237C + sizeof(dDlst_FileSelFade_c));
-#else
 STATIC_ASSERT(sizeof(dFile_select_c) == 0x237C);
-#endif
 
 #endif /* D_FILE_D_FILE_SELECT_H */

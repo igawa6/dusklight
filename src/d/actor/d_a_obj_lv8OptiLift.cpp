@@ -11,10 +11,6 @@
 #include "d/d_com_inf_game.h"
 #include "d/d_path.h"
 
-#if TARGET_PC
-#include "dusk/frame_interpolation.h"
-#endif
-
 daOptiLift_HIO_c::daOptiLift_HIO_c() {
     mStopDisappearTime = 30;
     mStartMoveTime = 30;
@@ -38,7 +34,7 @@ void daOptiLift_c::setBaseMtx() {
     mpModel->setBaseTRMtx(mDoMtx_stack_c::get());
 }
 
-const f32 daOptiLift_c::mSpeed[] = {
+DUSK_GAME_DATA const f32 daOptiLift_c::mSpeed[] = {
     5.0f,       6.6666665f, 8.333333f,  10.0f,      11.666667f, 13.333333f, 15.0f,      16.666666f,
     18.333334f, 20.0f,      21.666666f, 23.333334f, 25.0f,      26.666666f, 28.333334f, 3.3333333f,
 };
@@ -416,44 +412,7 @@ void daOptiLift_c::setNextPoint() {
     mCurrentPoint = next_point;
 }
 
-#if TARGET_PC
-static void daOptiLift_interp_callback(bool isSimFrame, void* pUserWork) {
-    daOptiLift_c* lift = static_cast<daOptiLift_c*>(pUserWork);
-    if (lift == NULL || lift->mpModel == NULL) {
-        return;
-    }
-
-    g_env_light.settingTevStruct(0x10, &lift->current.pos, &lift->tevStr);
-    g_env_light.setLightTevColorType_MAJI(lift->mpModel, &lift->tevStr);
-
-    J3DModelData* modelData = lift->mpModel->getModelData();
-    J3DMaterial* materialp = modelData->getMaterialNodePointer(0);
-
-    if (materialp->getTexGenBlock()->getTexMtx(1) != NULL) {
-        J3DTexMtxInfo* mtx_info = &materialp->getTexGenBlock()->getTexMtx(1)->getTexMtxInfo();
-        if (mtx_info != NULL) {
-            Mtx m;
-            C_MTXLightOrtho(m, 100.0f, -100.0f, -100.0f, 100.0f, 1.0f, 1.0f, 0.0f, 0.0f);
-            mDoMtx_stack_c::XrotS(0x4000);
-            mDoMtx_stack_c::transM(-lift->current.pos.x, -lift->current.pos.y, -lift->current.pos.z);
-            cMtx_concat(m, mDoMtx_stack_c::get(), mtx_info->mEffectMtx);
-        }
-    }
-
-    lift->mBtk.entry(modelData);
-
-    J3DGXColor* color = materialp->getTevKColor(1);
-    color->r = l_HIO.mColorR;
-    color->g = l_HIO.mColorG;
-    color->b = l_HIO.mColorB;
-}
-#endif
-
 int daOptiLift_c::Draw() {
-#if TARGET_PC
-    dusk::frame_interp::add_interpolation_callback(&daOptiLift_interp_callback, this);
-#endif
-
     g_env_light.settingTevStruct(0x10, &current.pos, &tevStr);
     g_env_light.setLightTevColorType_MAJI(mpModel, &tevStr);
 

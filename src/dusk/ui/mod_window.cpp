@@ -1,6 +1,9 @@
 #include "mod_window.hpp"
 
 #include "bool_button.hpp"
+#include "color_input.hpp"
+#include "file_button.hpp"
+#include "icon_button.hpp"
 #include "number_button.hpp"
 #include "string_button.hpp"
 
@@ -8,16 +11,56 @@
 
 namespace dusk::ui {
 
-Component* build_mod_control(Pane& pane, Pane* helpPane, ModControlSpec spec) {
+Component* build_mod_control(
+    Component& container, Pane& pane, Pane* helpPane, ModControlSpec spec) {
     const auto shared = std::make_shared<ModControlSpec>(std::move(spec));
     auto& s = *shared;
     Component* control = nullptr;
     switch (s.kind) {
+    case ModControlSpec::Kind::Dropdown:
+        control = &container.add_child<DropdownButton>(DropdownButton::Props{
+            .key = s.label,
+            .options = std::move(s.dropdownOptions),
+            .getValue = s.getInt,
+            .setValue = s.setInt,
+            .isDisabled = s.isDisabled,
+            .isModified = s.isModified,
+        });
+        break;
+    case ModControlSpec::Kind::IconButton:
+        control = &container
+                       .add_child<IconButton>(IconButton::Props{
+                           .icon = s.icon,
+                           .label = s.label,
+                           .isSelected = s.isSelected,
+                           .isDisabled = s.isDisabled,
+                       })
+                       .on_pressed([shared] {
+                           if (shared->onPressed) {
+                               shared->onPressed();
+                           }
+                       });
+        break;
     case ModControlSpec::Kind::Button:
-        control = &pane.add_button(ControlledButton::Props{
-                                       .text = s.label,
-                                       .isDisabled = s.isDisabled,
-                                   })
+        control = &container
+                       .add_child<ControlledButton>(ControlledButton::Props{
+                           .text = s.label,
+                           .isSelected = s.isSelected,
+                           .isDisabled = s.isDisabled,
+                       })
+                       .on_pressed([shared] {
+                           if (shared->onPressed) {
+                               shared->onPressed();
+                           }
+                       });
+        break;
+    case ModControlSpec::Kind::Group:
+        control = &container
+                       .add_child<GroupButton>(GroupButton::Props{
+                           .text = s.label,
+                           .isSelected = s.isSelected,
+                           .isDisabled = s.isDisabled,
+                       })
                        .on_pressed([shared] {
                            if (shared->onPressed) {
                                shared->onPressed();
@@ -25,7 +68,7 @@ Component* build_mod_control(Pane& pane, Pane* helpPane, ModControlSpec spec) {
                        });
         break;
     case ModControlSpec::Kind::Toggle:
-        control = &pane.add_child<BoolButton>(BoolButton::Props{
+        control = &container.add_child<BoolButton>(BoolButton::Props{
             .key = s.label,
             .getValue = s.getBool,
             .setValue = s.setBool,
@@ -34,7 +77,7 @@ Component* build_mod_control(Pane& pane, Pane* helpPane, ModControlSpec spec) {
         });
         break;
     case ModControlSpec::Kind::Number:
-        control = &pane.add_child<NumberButton>(NumberButton::Props{
+        control = &container.add_child<NumberButton>(NumberButton::Props{
             .key = s.label,
             .getValue = s.getInt,
             .setValue = s.setInt,
@@ -48,20 +91,43 @@ Component* build_mod_control(Pane& pane, Pane* helpPane, ModControlSpec spec) {
         });
         break;
     case ModControlSpec::Kind::String:
-        control = &pane.add_child<StringButton>(StringButton::Props{
+        control = &container.add_child<StringButton>(StringButton::Props{
             .key = s.label,
             .getValue = s.getString,
             .setValue = s.setString,
             .isDisabled = s.isDisabled,
             .isModified = s.isModified,
             .maxLength = s.maxLength,
+            .setOnChange = s.stringSetOnChange,
+        });
+        break;
+    case ModControlSpec::Kind::Color:
+        control = &container.add_child<ColorInput>(ColorInput::Props{
+            .key = s.label,
+            .getValue = s.getString,
+            .setValue = s.setString,
+            .isDisabled = s.isDisabled,
+            .isModified = s.isModified,
+            .presets = s.colorPresets,
+            .alpha = s.colorAlpha,
+        });
+        break;
+    case ModControlSpec::Kind::FilePicker:
+        control = &container.add_child<FileButton>(FileButton::Props{
+            .key = s.label,
+            .getValue = s.getString,
+            .setValue = s.setString,
+            .isDisabled = s.isDisabled,
+            .isModified = s.isModified,
+            .filters = s.fileFilters,
+            .directoryMode = s.directoryMode,
         });
         break;
     case ModControlSpec::Kind::Select:
         if (helpPane == nullptr || s.options.empty()) {
             return nullptr;
         }
-        control = &pane.add_child<ControlledSelectButton>(ControlledSelectButton::Props{
+        control = &container.add_child<ControlledSelectButton>(ControlledSelectButton::Props{
             .key = s.label,
             .getValue = [shared]() -> Rml::String {
                 const int index = shared->getInt ? shared->getInt() : -1;
@@ -77,6 +143,9 @@ Component* build_mod_control(Pane& pane, Pane* helpPane, ModControlSpec spec) {
     }
     if (control == nullptr) {
         return nullptr;
+    }
+    if (!s.tooltip.empty()) {
+        control->set_tooltip(s.tooltip);
     }
 
     if (helpPane != nullptr && (s.kind == ModControlSpec::Kind::Select || !s.helpRml.empty())) {

@@ -25,7 +25,6 @@ public:
     void setTextBoxPtr(J2DTextBox* p_textBox) { mpTextBoxPtr = p_textBox; }
     void resetType() { mType = 0x47; }
 
-private:
     /* 0x04 */ J2DTextBox* mpTextBoxPtr;
     /* 0x08 */ f32 mPosX;
     /* 0x0C */ f32 mPosY;
@@ -40,7 +39,7 @@ class COutFont_c {
 public:
     COutFont_c(u8);
     void initialize();
-    void setBlendAnime(J2DPicture*, s16);
+    void setBlendAnime(J2DPicture*, DUSK_IF_ELSE(f32, s16));
     // Static: reads no members, so the companion reader can share the same
     // index -> texture table instead of keeping a copy that drifts.
     static const char* getBtiName(int);
@@ -55,13 +54,12 @@ public:
 
     void setRupeeColor(u8 color) { mRupeeColor = color; }
 
-private:
     /* 0x004 */ COutFontSet_c* mpOfs[35];
     /* 0x090 */ J2DPicture* mpPane[70];
     /* 0x1A8 */ f32 mAlphaRatio;
     /* 0x1AC */ f32 field_0x1ac;
     /* 0x1B0 */ f32 field_0x1b0;
-    /* 0x1B4 */ s16 field_0x1b4[70];
+    /* 0x1B4 */ DUSK_IF_ELSE(f32, s16) field_0x1b4[70];
     /* 0x240 */ bool field_0x240;
     /* 0x241 */ u8 mRupeeColor;
     /* 0x242 */ u8 field_0x242;

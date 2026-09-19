@@ -15,6 +15,10 @@
 #include "d/actor/d_a_midna.h"
 #include "d/actor/d_a_spinner.h"
 
+#if TARGET_PC
+#include "dusk/interp/samples.h"
+#endif
+
 bool daPy_frameCtrl_c::checkAnmEnd() {
     if (getEndFlg() != 0 && getNowSetFlg() == 0) {
         return true;
@@ -64,11 +68,11 @@ void daPy_boomerangMove_c::initOffset(const cXyz* i_pos) {
     field_0x0 = 0;
 }
 
-daMidna_c* daPy_py_c::m_midnaActor;
+DUSK_GAME_DATA daMidna_c* daPy_py_c::m_midnaActor;
 
-s16 daPy_boomerangMove_c::m_dropAngleY;
+DUSK_GAME_DATA s16 daPy_boomerangMove_c::m_dropAngleY;
 
-s16 daPy_boomerangMove_c::m_eventKeepFlg;
+DUSK_GAME_DATA s16 daPy_boomerangMove_c::m_eventKeepFlg;
 
 int daPy_boomerangMove_c::posMove(cXyz* o_pos, s16* o_rotY, fopAc_ac_c* i_objActor, s16 i_rotStep) {
     daBoomerang_c* boomerang_p = daPy_py_c::getThrowBoomerangActor();
@@ -367,35 +371,20 @@ JKRHeap* daPy_anmHeap_c::setAnimeHeap() {
 }
 
 #if !PLATFORM_WII
-#if TARGET_PC
-#include "dusk/dvd_asset.hpp"
-using GameVersion = dusk::version::GameVersion;
-static const u8* l_sightDL_get() { 
-    static u8 buf[0x89];
-    static bool _ = (
-        dusk::LoadDolAsset(
-            buf,
-{
-            {GameVersion::GcnUsa, 0x803BA0C0},
-            {GameVersion::GcnPal, 0x803BBDA0},
-            {GameVersion::GcnJpn, 0x803B4220}
-            },
-            0x89
-        ),
-        true
-    );
-    return buf;
-}
-#define l_sightDL (l_sightDL_get())
-#else
+#if !TARGET_PC
 #include "assets/l_sightDL__d_a_player.h"
+#endif
+
+#if TARGET_PC
+daPy_sightPacket_c::~daPy_sightPacket_c() {
+    dusk::interp::erase_owned_samples(this);
+}
 #endif
 
 void daPy_sightPacket_c::draw() {
     ZoneScoped;
-#if !TARGET_PC
-    TGXTexObj texObj;
-#endif
+    IF_DUSK(setSight(false);)
+    IF_NOT_DUSK(TGXTexObj texObj);
 
     j3dSys.reinitGX();
     GXSetNumIndStages(0);
@@ -431,17 +420,51 @@ void daPy_sightPacket_c::draw() {
     GXLoadPosMtxImm(mProjMtx, GX_PNMTX0);
     GXSetCurrentMtx(0);
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
+#if TARGET_PC
+    GXSetNumTexGens(1);
+    GXSetNumTevStages(1);
+    GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
+    GXSetCullMode(GX_CULL_NONE);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_C1, GX_CC_C0, GX_CC_TEXC, GX_CC_ZERO);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_A0, GX_CA_TEXA, GX_CA_ZERO);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
+    GXSetZMode(GX_FALSE, GX_LEQUAL, GX_FALSE);
+    GXSetColorUpdate(GX_TRUE);
+    GXSetAlphaUpdate(GX_FALSE);
+    GXSetDither(GX_TRUE);
+    GXBegin(GX_TRIANGLESTRIP, GX_VTXFMT0, 4);
+    GXPosition3u8(1, 1, 0);
+    GXTexCoord2u8(1, 1);
+    GXPosition3u8(255, 1, 0);
+    GXTexCoord2u8(0, 1);
+    GXPosition3u8(1, 255, 0);
+    GXTexCoord2u8(1, 0);
+    GXPosition3u8(255, 255, 0);
+    GXTexCoord2u8(0, 0);
+    GXEnd();
+#else
     GXCallDisplayList(l_sightDL, 0x80);
+#endif
     J3DShape::resetVcdVatCache();
 }
 
-void daPy_sightPacket_c::setSight() {
+void daPy_sightPacket_c::setSight(IF_DUSK(bool registerPacket)) {
     Vec proj;
     mDoLib_project(&mPos, &proj);
+#if TARGET_PC
+    auto& positions = dusk::interp::get<dusk::interp::Samples<cXyz>>(this);
+    const cXyz screen(proj);
+    positions.capture(&screen, 1);
+    proj = positions.read(0, screen);
+#endif
     mDoMtx_stack_c::transS(proj.x, proj.y, proj.z);
     mDoMtx_stack_c::scaleM(32.0f, 32.0f, 32.0f);
     mDoMtx_copy(mDoMtx_stack_c::get(), mProjMtx);
+    IF_DUSK_BLOCK(registerPacket)
     dComIfGd_set2DXlu(this);
+    IF_DUSK_BLOCK_END
 }
 
 void daPy_sightPacket_c::setSightImage(ResTIMG* i_img) {

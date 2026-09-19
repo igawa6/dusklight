@@ -3,6 +3,10 @@
 #include "JSystem/J3DGraphAnimator/J3DMaterialAnm.h"
 #include "JSystem/J3DGraphBase/J3DMaterial.h"
 
+#if TARGET_PC
+#include "dusk/interp/material.h"
+#endif
+
 void J3DMaterialAnm::initialize() {
     for (int i = 0; i < ARRAY_SIZE(mMatColorAnm); i++) {
         mMatColorAnm[i].setAnmFlag(false);
@@ -114,3 +118,44 @@ void J3DMaterialAnm::setTevKColorAnm(int idx, J3DTevKColorAnm* pTevKColorAnm) {
         mTevKColorAnm[idx] = *pTevKColorAnm;
     }
 }
+
+#if TARGET_PC
+bool J3DMaterialAnm::hasMaterialAnimation() const {
+    for (const auto& track : mMatColorAnm) {
+        if (track.getAnmFlag()) return true;
+    }
+    for (const auto& track : mTexMtxAnm) {
+        if (track.getAnmFlag()) return true;
+    }
+    for (const auto& track : mTevColorAnm) {
+        if (track.getAnmFlag()) return true;
+    }
+    for (const auto& track : mTevKColorAnm) {
+        if (track.getAnmFlag()) return true;
+    }
+    return false;
+}
+
+void J3DMatColorAnm::calc(GXColor* pColor) const {
+    J3D_ASSERT_NULLPTR(507, pColor != NULL);
+    dusk::interp::material::Sample materialSample(mAnmColor);
+    mAnmColor->getColor(field_0x0, pColor);
+}
+
+void J3DTexMtxAnm::calc(J3DTextureSRTInfo* pSRTInfo) const {
+    J3D_ASSERT_NULLPTR(519, pSRTInfo != NULL);
+    dusk::interp::material::sample_texture(mAnmTransform, field_0x0, pSRTInfo);
+}
+
+void J3DTevColorAnm::calc(GXColorS10* pColor) const {
+    J3D_ASSERT_NULLPTR(545, pColor != NULL);
+    dusk::interp::material::Sample materialSample(mAnmTevReg);
+    mAnmTevReg->getTevColorReg(field_0x0, pColor);
+}
+
+void J3DTevKColorAnm::calc(GXColor* pColor) const {
+    J3D_ASSERT_NULLPTR(558, pColor != NULL);
+    dusk::interp::material::Sample materialSample(mAnmTevReg);
+    mAnmTevReg->getTevKonstReg(field_0x0, pColor);
+}
+#endif

@@ -151,10 +151,10 @@ public:
 
     ResTIMG* getResTIMGPointer(int i_no) const { return dMenu_DmapMap_c::getResTIMGPointer(i_no); }
 
-    static f32 m_zoomCenterMinX;
-    static f32 m_zoomCenterMaxX;
-    static f32 m_zoomCenterMinZ;
-    static f32 m_zoomCenterMaxZ;
+    static DUSK_GAME_DATA f32 m_zoomCenterMinX;
+    static DUSK_GAME_DATA f32 m_zoomCenterMaxX;
+    static DUSK_GAME_DATA f32 m_zoomCenterMinZ;
+    static DUSK_GAME_DATA f32 m_zoomCenterMaxZ;
 
     /* 0x88 */ u8 field_0x88[0x8C - 0x88];
     /* 0x8C */ dTres_c::typeGroupData_c* field_0x8c;
@@ -191,10 +191,10 @@ public:
     /* 0xEE */ s8 field_0xee;
     /* 0xEF */ u8 field_0xef;
     /* 0xF0 */ u8 field_0xf0;
-    /* 0xF1 */ u8 field_0xf1;
-    /* 0xF2 */ u8 field_0xf2;
-    /* 0xF3 */ u8 field_0xf3;
-    /* 0xF4 */ s8 field_0xf4;
+    /* 0xF1 */ DUSK_IF_ELSE(f32, u8) field_0xf1;
+    /* 0xF2 */ DUSK_IF_ELSE(f32, u8) field_0xf2;
+    /* 0xF3 */ DUSK_IF_ELSE(f32, u8) field_0xf3;
+    /* 0xF4 */ DUSK_IF_ELSE(f32, s8) field_0xf4;
     /* 0xF5 */ u8 field_0xf5;
     /* 0xF6 */ u8 field_0xf6;
     /* 0xF7 */ s8 field_0xf7;

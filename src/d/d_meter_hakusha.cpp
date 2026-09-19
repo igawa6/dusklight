@@ -15,6 +15,10 @@
 #include "d/d_pane_class.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "dusk/interp/user_interface.h"
+#endif
+
 dMeterHakusha_c::dMeterHakusha_c(void* i_screen) {
     field_0x004 = (J2DScreen*)i_screen;
     _create();
@@ -115,6 +119,20 @@ void dMeterHakusha_c::draw() {
     mpButtonScreen->draw(0.0f, 0.0f, graf_ctx);
 
     for (int i = 0; i < getHakushaNum(); i++) {
+#if TARGET_PC
+        if (mHakushaAnimFrame[i] > 0.0f) {
+            if (mHakushaStatus[i] == 0) {
+                dusk::vdt::advance_toward_frame(mHakushaAnimFrame[i], 28.0f, g_drawHIO.mSpurIconPikariAnimSpeed);
+            } else {
+                dusk::vdt::advance_toward_frame(mHakushaAnimFrame[i], 28.0f, g_drawHIO.mSpurIconRevivePikariAnimSpeed);
+            }
+
+            if (mHakushaAnimFrame[i] >= 28.0f) {
+                mHakushaAnimFrame[i] = 0.0f;
+            }
+        }
+#endif
+
         if (mHakushaData[i].flags & 1) {
             mpHakushaOn->show();
         } else {
@@ -226,6 +244,7 @@ void dMeterHakusha_c::updateHakusha() {
     }
 
     for (int i = 0; i < getHakushaNum(); i++) {
+#if !TARGET_PC
         if (mHakushaAnimFrame[i] > 0.0f) {
             if (mHakushaStatus[i] == 0) {
                 mHakushaAnimFrame[i] += g_drawHIO.mSpurIconPikariAnimSpeed;
@@ -237,6 +256,7 @@ void dMeterHakusha_c::updateHakusha() {
                 mHakushaAnimFrame[i] = 0.0f;
             }
         }
+#endif
 
         mHakushaData[i].pos_x = abtn_x_offset;
         mHakushaData[i].pos_y = abtn_y_offset;

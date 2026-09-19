@@ -4,6 +4,10 @@
 #include "JSystem/J3DGraphBase/J3DMaterial.h"
 #include "JSystem/JKernel/JKRHeap.h"
 
+#if TARGET_PC
+#include "JSystem/J3DGraphAnimator/J3DMaterialAnm.h"
+#endif
+
 J3DColorBlock* J3DMaterial::createColorBlock(u32 flags) {
     J3DColorBlock* rv = NULL;
     switch (flags) {
@@ -373,6 +377,9 @@ s32 J3DMaterial::newSingleSharedDisplayList(u32 dlSize) {
 
 #if TARGET_PC
 bool J3DMaterial::needsInterpCallBack() const {
+    if (mMaterialAnm != nullptr && mMaterialAnm->hasMaterialAnimation()) {
+        return true;
+    }
     for (int i = 0, n = getTexGenNum(); i < n; i++) {
         J3DTexMtx* pTexMtx = mTexGenBlock->getTexMtx(i);
         if (pTexMtx != NULL) {

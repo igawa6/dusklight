@@ -26,10 +26,16 @@ public:
     dMsgScrn3Select_c();
     virtual ~dMsgScrn3Select_c();
     bool isSelect();
+#if TARGET_PC
+    bool isAnimeActive() { return mProcess < PROC_MAX_e; }
+#endif
     void setString(DUSK_CONST char*, DUSK_CONST char*, DUSK_CONST char*);
     void setRubyString(DUSK_CONST char*, DUSK_CONST char*, DUSK_CONST char*);
     void translate(f32, f32);
     void draw(f32, f32);
+#if TARGET_PC
+    void presentAnims();
+#endif
     void selAnimeInit(u8, u8, u8, f32, u8);
     bool selAnimeMove(u8, u8, bool);
     bool selAnimeEnd();
@@ -60,7 +66,6 @@ public:
     void offAnimeUpdate(int param_0) { field_0x114 &= ~(u8)(1 << param_0); }
     u8 getDPDPoint() { return mDPDPoint; }
 
-private:
     /* 0x004 */ J2DScreen* mpScreen;
     /* 0x008 */ J2DAnmTransform* mpAnmBck;
     /* 0x00C */ J2DAnmColorKey* mpAnmBpk;

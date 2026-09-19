@@ -110,6 +110,9 @@ public:
     /* 0x1CFC */ int field_0x1cfc;
     /* 0x1D00 */ f32 mKankyoBlend;
     /* 0x1D04 */ u8 mInitHIO;
+#if TARGET_PC
+    s8 mDemoCamSyncTicks;
+#endif
 };
 
 STATIC_ASSERT(sizeof(b_gm_class) == 0x1d08);

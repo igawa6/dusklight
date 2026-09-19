@@ -6,7 +6,6 @@
 #include "d/dolzel_rel.h" // IWYU pragma: keep
 
 #include "d/actor/d_a_balloon_2D.h"
-#include "dusk/frame_interpolation.h"
 #include "JSystem/J2DGraph/J2DGrafContext.h"
 #include "JSystem/J2DGraph/J2DScreen.h"
 #include "JSystem/J2DGraph/J2DTextBox.h"
@@ -20,6 +19,13 @@
 #include "m_Do/m_Do_graphic.h"
 #include "m_Do/m_Do_lib.h"
 #include <cstring>
+
+#if TARGET_PC
+#include "dusk/game_clock.h"
+#include "dusk/interp/user_interface.h"
+
+#include <cmath>
+#endif
 
 class daBalloon2D_HIO_c : public mDoHIO_entry_c {
 public:
@@ -229,9 +235,9 @@ int daBalloon2D_c::createHeap() {
     return 1;
 }
 
-daBalloon2D_HIO_c l_HOSTIO;
+DUSK_GAME_DATA daBalloon2D_HIO_c l_HOSTIO;
 
-daBalloon2D_c* daBalloon2D_c::myclass;
+DUSK_GAME_DATA daBalloon2D_c* daBalloon2D_c::myclass;
 
 int daBalloon2D_c::create() {
     int rv = dComIfG_resLoad(this, l_arcName);
@@ -267,12 +273,12 @@ int daBalloon2D_c::draw() {
 
 
 int daBalloon2D_c::execute() {
+#if TARGET_PC
+    updateOnWide();
+#else
     setAllAlpha();
     setComboAlpha();
-
-    #if TARGET_PC
-    updateOnWide();
-    #endif
+#endif
 
     setHIO(false);
     return 1;
@@ -280,6 +286,10 @@ int daBalloon2D_c::execute() {
 
 void daBalloon2D_c::drawMeter() {
     update();
+#if TARGET_PC
+    setAllAlpha();
+    setComboAlpha();
+#endif
     mScreen->draw(0.0f, 0.0f, dComIfGp_getCurrentGrafPort());
     drawAddScore();
 }
@@ -341,7 +351,7 @@ void daBalloon2D_c::setComboNum(u8 comboNum) {
     field_0x5a8[5]->changeTexture(resTimg, 0);
     resTimg = (ResTIMG*)dComIfGp_getMain2DArchive()->getResource('TIMG', dMeter2Info_getNumberTextureName(comboNum % 10));
     field_0x5a8[6]->changeTexture(resTimg, 0);
-    setComboAlpha();
+    IF_NOT_DUSK(setComboAlpha());
 }
 
 void daBalloon2D_c::setBalloonSize(u8 balloonSize) {
@@ -394,10 +404,14 @@ void daBalloon2D_c::setAllAlpha() {
     mAllAlpha = field_0x578->getAlphaRate();
     if (isVisible()) {
         if (mAllAlpha != 1.0f) {
+#if TARGET_PC
+            dusk::vdt::present_addCalc2(&mAllAlpha, 1.0f, 0.4f, 0.5f, 0.1f);
+#else
             cLib_addCalc2(&mAllAlpha, 1.0f, 0.4f, 0.5f);
             if (fabsf(mAllAlpha - 1.0f) < 0.1f) {
                 mAllAlpha = 1.0f;
             }
+#endif
             field_0x578->setAlphaRate(mAllAlpha);
             field_0x580->setAlphaRate(l_HOSTIO.m.m5DNumberAlpha * mAllAlpha);
             field_0x594->setAlphaRate(l_HOSTIO.m.m2DNumberComboAlpha * mAllAlpha);
@@ -406,10 +420,14 @@ void daBalloon2D_c::setAllAlpha() {
             field_0x5a0->setAlphaRate(l_HOSTIO.m.mBalloonSmallAlpha * mAllAlpha);
         }
     } else if (mAllAlpha != 1.0f) {
+#if TARGET_PC
+        dusk::vdt::present_addCalc2(&mAllAlpha, 0.0f, 0.4f, 0.5f, 0.1f);
+#else
         cLib_addCalc2(&mAllAlpha, 0.0f, 0.4f, 0.5f);
         if (fabsf(mAllAlpha) < 0.1f) {
             mAllAlpha = 0.0f;
         }
+#endif
         field_0x578->setAlphaRate(mAllAlpha);
         field_0x580->setAlphaRate(l_HOSTIO.m.m5DNumberAlpha * mAllAlpha);
         field_0x594->setAlphaRate(l_HOSTIO.m.m2DNumberComboAlpha * mAllAlpha);
@@ -424,10 +442,14 @@ void daBalloon2D_c::setComboAlpha() {
     mComboAlpha = field_0x5a4->getAlphaRate() * field_0x578->getAlphaRate();
     if (mComboNum != 0) {
         if (mComboAlpha != 1.0f) {
+#if TARGET_PC
+            dusk::vdt::present_addCalc2(&mComboAlpha, 1.0f, 0.4f, 0.5f, 0.1f);
+#else
             cLib_addCalc2(&mComboAlpha, 1.0f, 0.4f, 0.5f);
             if (fabsf(mComboAlpha - 1.0f) < 0.1f) {
                 mComboAlpha = 1.0f;
             }
+#endif
             field_0x5a4->setAlphaRate(mComboAlpha);
         }
     } else if (mComboAlpha != 0.0f) {
@@ -439,26 +461,20 @@ void daBalloon2D_c::setComboAlpha() {
 void daBalloon2D_c::drawAddScore() {
     for (s32 i = 19; i >= 0; i--) {
         if (field_0x5f8[i].field_0xe != 0) {
-#ifdef TARGET_PC
-            if (dusk::frame_interp::get_ui_tick_pending())
-#endif
-            {
-                field_0x5f8[i].field_0xe--;
-            }
+            DUSK_IF_ELSE(dusk::vdt::advance_toward_frame(field_0x5f8[i].field_0xe, 0.0f, 1.0f), field_0x5f8[i].field_0xe--);
             s32 score3;
             s32 score2;
             s32 score = field_0x5f8[i].field_0xc;
+#if TARGET_PC
+            s16 temp0 = (s16)(fmodf(field_0x5f8[i].field_0xe, 60.0f) * 1024.0f);
+#else
             s16 temp0 = (field_0x5f8[i].field_0xe % 60) * 1024;
+#endif
             u8 local_88 = 0xff;
             f32 dVar11 = 30.0f;
             f32 dVar9 = 30.0f;
-#ifdef TARGET_PC
-            if (dusk::frame_interp::get_ui_tick_pending())
-#endif
-            {
-                field_0x5f8[i].field_0x0.x += cM_ssin(temp0) * 0.3f;
-                field_0x5f8[i].field_0x0.y -= 1.0f;
-            }
+            field_0x5f8[i].field_0x0.x += cM_ssin(temp0) * 0.3f IF_DUSK(* dusk::game_clock::original_frames());
+            field_0x5f8[i].field_0x0.y -= 1.0f IF_DUSK(* dusk::game_clock::original_frames());
             if (field_0x5f8[i].field_0xe < 10) {
                 f32 fVar5 = field_0x5f8[i].field_0xe / 10.0f;
                 local_88 = fVar5 * 255.0f;

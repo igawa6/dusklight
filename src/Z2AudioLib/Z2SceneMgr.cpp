@@ -75,7 +75,7 @@ void Z2SceneMgr::setFadeOutStart(u8 fadeType) {
     Z2GetSeqMgr()->bgmAllMute(33,  3.0f / 10.0f);
     Z2GetSeMgr()->seMoveVolumeAll(0.0f, 33);
     Z2GetSeqMgr()->setBattleBgmOff(true);
-    load1stWait = 40;
+    load1stWait = IF_DUSK(dusk::getSettings().game.fastTransitions ? 1 :) 40;
     timer = -1;
 }
 
@@ -1642,7 +1642,7 @@ void Z2SceneMgr::setSceneName(char* spot, s32 room, s32 layer) {
             JSUList<JAIStream>* stream_list = Z2GetSoundMgr()->getStreamMgr()->getStreamList();
             JSULink<JAIStream>* stream;
             for (stream = stream_list->getFirst(); stream != NULL; stream = stream->getNext()) {
-                if (bVar2 || sound_table->getTypeID(stream->getObject()->getID()) != 0x71) {
+                if (bVar2 || sound_table->getTypeID(stream->getObject()->getID() IF_DUSK_ARG(stream->getObject()->getReplacement())) != SOUND_TYPEID_STREAM) {
                     stream->getObject()->stop(Z2Param::SCENE_CHANGE_BGM_FADEOUT_TIME);
                 }
             }
@@ -1777,7 +1777,7 @@ void Z2SceneMgr::_load1stWaveInner_1() {
     if (field_0x1a && Z2GetSeqMgr()->checkBgmPlaying()) {
         OS_REPORT("[Z2SceneMgr::load1stDynamicWave]bgm StopCount = %d\n", 15);
         Z2GetSeqMgr()->bgmStop(15, 0);
-        load1stWait = -15;
+        load1stWait = IF_DUSK(dusk::getSettings().game.fastTransitions.getValue() ? -1 :) -15;
     } else {
         _load1stWaveInner_2();
     }

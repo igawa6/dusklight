@@ -8,7 +8,9 @@
 #include "JSystem/JUtility/JUTFader.h"
 #include "JSystem/J2DGraph/J2DOrthoGraph.h"
 
-#ifdef TARGET_PC
+#if TARGET_PC
+#include "dusk/game_clock.h"
+
 #include <algorithm>
 #endif
 
@@ -37,6 +39,7 @@ void JUTFader::advance() {
     case FadeIn:
 #if AVOID_UB
         if (mDuration == 0) {
+            IF_DUSK(mColor.a = 0);
             mStatus = Wait;
             break;
         }
@@ -51,6 +54,7 @@ void JUTFader::advance() {
     case FadeOut:
 #if AVOID_UB
         if (mDuration == 0) {
+            IF_DUSK(mColor.a = 0xFF);
             mStatus = None;
             break;
         }
@@ -67,26 +71,26 @@ void JUTFader::advance() {
 
 void JUTFader::control() {
     advance();
+    IF_DUSK_BLOCK(getStatus() != Wait)
     draw();
+    IF_DUSK_BLOCK_END
 }
 
 void JUTFader::draw() {
-    if (mColor.a != 0) {
-#ifdef TARGET_PC
-        if (dusk::frame_interp::is_enabled() && mDuration != 0) {
-            const auto step = dusk::frame_interp::get_interpolation_step();
-            const auto progress = static_cast<f32>(mTimer) / static_cast<f32>(mDuration);
-            const auto timer = mTimer - 1 + step + progress;
-            auto alpha = timer / mDuration;
-            if (mStatus == FadeIn) {
-                alpha = 1.0f - alpha;
-            }
-            alpha = std::clamp(alpha, 0.0f, 1.0f);
-            mColor.a = static_cast<u8>(alpha * 255.0f);
-        }
+#if TARGET_PC
+    JUtility::TColor color = mColor;
+    if (dusk::game_clock::g_frameTiming.separatePresentation && mDuration != 0 &&
+        (mStatus == FadeIn || mStatus == FadeOut))
+    {
+        const f32 timer = std::min(mTimer + dusk::game_clock::sample_interpolation_step(),
+                                   static_cast<f32>(mDuration));
+        const u8 alpha = static_cast<u8>((timer * 0xFF) / mDuration);
+        color.a = mStatus == FadeIn ? 0xFF - alpha : alpha;
+    }
 #endif
+    if (DUSK_IF_ELSE(color, mColor).a != 0) {
         J2DOrthoGraph orthograph;
-        orthograph.setColor(mColor);
+        orthograph.setColor(DUSK_IF_ELSE(color, mColor));
         orthograph.fillBox(mBox);
     }
 }

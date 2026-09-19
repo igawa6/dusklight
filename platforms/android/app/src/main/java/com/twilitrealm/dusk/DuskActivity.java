@@ -10,6 +10,13 @@ import android.hardware.display.DisplayManager;
 import android.os.BatteryManager;
 import android.view.MotionEvent;
 import android.view.SurfaceView;
+import android.view.Display;
+import android.view.Surface;
+import android.view.SurfaceHolder;
+import android.view.View;
+import android.view.Window;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.Context;
@@ -25,29 +32,20 @@ import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
 import android.provider.Settings;
 import android.util.Log;
-import android.view.Display;
-import android.view.Surface;
-import android.view.SurfaceHolder;
-import android.view.View;
-import android.view.Window;
-import android.view.WindowInsets;
-import android.view.WindowInsetsController;
 
 import dev.encounter.aurora.AuroraSurface;
-import org.libsdl.app.SDLActivity;
+import dev.encounter.borealis.BorealisActivity;
 import org.libsdl.app.SDLSurface;
 
 import java.io.File;
-import java.util.ArrayList;
-import java.util.List;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 
-public class DuskActivity extends SDLActivity {
+public class DuskActivity extends BorealisActivity {
     private static final String TAG = "DuskActivity";
     private static final float DEFAULT_SURFACE_FRAME_RATE = 60.0f;
-    private static final int FOLDER_DIALOG_REQUEST_CODE = 0x4455;
-    private static final int MANAGE_STORAGE_REQUEST_CODE = 0x4456;
-    private static final String EXTERNAL_STORAGE_AUTHORITY =
-        "com.android.externalstorage.documents";
     /**
      * Companion render buffer for a bottom panel: 8:7 at 1080p, the AYN Thor's
      * native landscape size. Used directly by the Presentation, and as the
@@ -56,10 +54,6 @@ public class DuskActivity extends SDLActivity {
     static final int COMPANION_PANEL_W = 1240;
     static final int COMPANION_PANEL_H = 1080;
 
-    private long folderDialogUserdata = 0;
-    private boolean awaitingManageStoragePermission = false;
-
-    private static native void nativeFolderDialogResult(long userdata, String path, String error);
     private static native void nativeAuxSurfaceChanged(Surface surface, int width, int height);
     private static native void nativeCompanionTouchEvent(int action, float u, float v);
     private static native void nativeCompanionPinch(float factor);
@@ -88,53 +82,9 @@ public class DuskActivity extends SDLActivity {
     // attached TV cannot steal it across a pause/resume. -1 = none yet.
     private int lastAuxDisplayId = -1;
 
-    private static String[] splitArgs(String raw) {
-        List<String> out = new ArrayList<>();
-        StringBuilder current = new StringBuilder();
-        boolean inSingle = false;
-        boolean inDouble = false;
-        boolean escaped = false;
-
-        for (int i = 0; i < raw.length(); ++i) {
-            char c = raw.charAt(i);
-            if (escaped) {
-                current.append(c);
-                escaped = false;
-                continue;
-            }
-            if (c == '\\' && !inSingle) {
-                escaped = true;
-                continue;
-            }
-            if (c == '"' && !inSingle) {
-                inDouble = !inDouble;
-                continue;
-            }
-            if (c == '\'' && !inDouble) {
-                inSingle = !inSingle;
-                continue;
-            }
-            if (!inSingle && !inDouble && Character.isWhitespace(c)) {
-                if (current.length() > 0) {
-                    out.add(current.toString());
-                    current.setLength(0);
-                }
-                continue;
-            }
-            current.append(c);
-        }
-
-        if (escaped) {
-            current.append('\\');
-        }
-        if (current.length() > 0) {
-            out.add(current.toString());
-        }
-        return out.toArray(new String[0]);
-    }
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        extractBundledMods();
         super.onCreate(savedInstanceState);
         instance = this;
         // Never let the device sleep mid-game: an idle screen-off pauses the
@@ -705,9 +655,6 @@ public class DuskActivity extends SDLActivity {
         super.onResume();
         hideSystemBars();
         showAuxPresentation();
-        if (awaitingManageStoragePermission) {
-            resumeFolderDialogAfterPermissionGrant();
-        }
     }
 
     @Override
@@ -884,332 +831,67 @@ public class DuskActivity extends SDLActivity {
         }
     }
 
-    @Override
-    protected String[] getArguments() {
-        Intent intent = getIntent();
-        if (intent != null) {
-            String[] argv = intent.getStringArrayExtra("dusk_argv");
-            if (argv != null && argv.length > 0) {
-                return argv;
-            }
-
-            String rawArgs = intent.getStringExtra("dusk_args");
-            if (rawArgs != null) {
-                String trimmed = rawArgs.trim();
-                if (!trimmed.isEmpty()) {
-                    return splitArgs(trimmed);
-                }
-            }
-        }
-        return new String[0];
-    }
-
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        if (resultCode == RESULT_OK) {
-            persistUriPermissions(data);
-        }
-        if (requestCode == FOLDER_DIALOG_REQUEST_CODE) {
-            finishFolderDialog(resultCode, data);
-            return;
-        }
-        super.onActivityResult(requestCode, resultCode, data);
-    }
-
-    public boolean showFolderDialog(long userdata) {
-        if (userdata == 0 || folderDialogUserdata != 0) {
-            return false;
-        }
-
-        folderDialogUserdata = userdata;
-        if (requiresManageStoragePermission() && !hasManageStoragePermission()) {
-            if (!requestManageStoragePermission()) {
-                finishFolderDialogWithError("Unable to request Android file access permission");
-                return false;
-            }
-            return true;
-        }
-
-        openFolderDialog();
-        return true;
-    }
-
-    private void openFolderDialog() {
-        runOnUiThread(() -> {
-            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION |
-                Intent.FLAG_GRANT_WRITE_URI_PERMISSION |
-                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION |
-                Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
-
-            try {
-                startActivityForResult(intent, FOLDER_DIALOG_REQUEST_CODE);
-            } catch (ActivityNotFoundException e) {
-                Log.w(TAG, "Unable to open folder dialog.", e);
-                finishFolderDialog(Activity.RESULT_CANCELED, null);
-            }
-        });
-    }
-
-    private boolean requiresManageStoragePermission() {
-        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.R;
-    }
-
-    private boolean hasManageStoragePermission() {
-        return !requiresManageStoragePermission() || Environment.isExternalStorageManager();
-    }
-
-    private boolean requestManageStoragePermission() {
-        if (!requiresManageStoragePermission()) {
-            return true;
-        }
-
-        awaitingManageStoragePermission = true;
-        runOnUiThread(() -> {
-            if (tryStartManageStorageIntent(
-                    new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
-                        .setData(Uri.parse("package:" + getPackageName()))) ||
-                tryStartManageStorageIntent(
-                    new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)))
-            {
+    // Bundled mod packages ship as APK assets, which the native loader cannot read directly;
+    // mirror them into internal storage (the loader's CachePath/bundled_mods search dir)
+    // before SDL_main starts.
+    private void extractBundledMods() {
+        File outDir = new File(getFilesDir(), "bundled_mods");
+        try {
+            deleteRecursively(outDir); // drop packages removed by an app update
+            String[] names = getAssets().list("mods");
+            if (names == null || names.length == 0) {
                 return;
             }
-
-            finishFolderDialogWithError("Unable to request Android file access permission");
-        });
-        return true;
-    }
-
-    private boolean tryStartManageStorageIntent(Intent intent) {
-        try {
-            startActivityForResult(intent, MANAGE_STORAGE_REQUEST_CODE);
-            return true;
-        } catch (ActivityNotFoundException e) {
-            Log.w(TAG, "Unable to open all-files access settings.", e);
-            return false;
-        }
-    }
-
-    private void resumeFolderDialogAfterPermissionGrant() {
-        awaitingManageStoragePermission = false;
-        if (folderDialogUserdata == 0) {
-            return;
-        }
-
-        if (hasManageStoragePermission()) {
-            openFolderDialog();
-            return;
-        }
-
-        finishFolderDialogWithError(
-            "Allow \"All files access\" for Dusklight before choosing a custom data folder");
-    }
-
-    private void finishFolderDialogWithError(String error) {
-        long userdata = folderDialogUserdata;
-        folderDialogUserdata = 0;
-        awaitingManageStoragePermission = false;
-        if (userdata != 0) {
-            nativeFolderDialogResult(userdata, null, error);
-        }
-    }
-
-    private void finishFolderDialog(int resultCode, Intent data) {
-        long userdata = folderDialogUserdata;
-        folderDialogUserdata = 0;
-        if (userdata == 0) {
-            return;
-        }
-
-        if (resultCode == RESULT_OK && data != null && data.getData() != null) {
-            String path = getRealPathForUri(data.getData());
-            if (path != null && !path.isEmpty()) {
-                nativeFolderDialogResult(userdata, path, null);
-            } else {
-                nativeFolderDialogResult(
-                    userdata, null, "Selected folder is not available as a filesystem path");
+            if (!outDir.mkdirs()) {
+                Log.w(TAG, "Unable to create " + outDir);
+                return;
             }
-            return;
-        }
-
-        nativeFolderDialogResult(userdata, null, null);
-    }
-
-    private String getRealPathForUri(Uri uri) {
-        if (uri == null) {
-            return null;
-        }
-
-        String scheme = uri.getScheme();
-        if ("file".equals(scheme)) {
-            return uri.getPath();
-        }
-
-        if (!"content".equals(scheme) ||
-            !EXTERNAL_STORAGE_AUTHORITY.equals(uri.getAuthority()) ||
-            Build.VERSION.SDK_INT < Build.VERSION_CODES.KITKAT)
-        {
-            return null;
-        }
-
-        try {
-            return getExternalStoragePathForDocumentId(getExternalStorageDocumentId(uri));
-        } catch (IllegalArgumentException e) {
-            Log.w(TAG, "Unable to resolve URI: " + uri, e);
-            return null;
-        }
-    }
-
-    private static String getExternalStorageDocumentId(Uri uri) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && isTreeDocumentUri(uri)) {
-            return DocumentsContract.getTreeDocumentId(uri);
-        }
-
-        return DocumentsContract.getDocumentId(uri);
-    }
-
-    private static boolean isTreeDocumentUri(Uri uri) {
-        List<String> segments = uri.getPathSegments();
-        return segments.size() >= 2 && "tree".equals(segments.get(0));
-    }
-
-    private String getExternalStoragePathForDocumentId(String documentId) {
-        if (documentId == null || documentId.isEmpty()) {
-            return null;
-        }
-        if (documentId.startsWith("raw:")) {
-            return documentId.substring("raw:".length());
-        }
-
-        String[] parts = documentId.split(":", 2);
-        String volumeId = parts[0];
-        String relativePath = parts.length > 1 ? parts[1] : "";
-
-        File root = getExternalStorageRoot(volumeId);
-        if (root == null) {
-            return null;
-        }
-
-        return relativePath.isEmpty()
-            ? root.getAbsolutePath()
-            : new File(root, relativePath).getAbsolutePath();
-    }
-
-    private File getExternalStorageRoot(String volumeId) {
-        if ("primary".equalsIgnoreCase(volumeId)) {
-            return Environment.getExternalStorageDirectory();
-        }
-        if ("home".equalsIgnoreCase(volumeId)) {
-            return new File(
-                Environment.getExternalStorageDirectory(), Environment.DIRECTORY_DOCUMENTS);
-        }
-
-        File[] externalFilesDirs = getExternalFilesDirs(null);
-        if (externalFilesDirs != null) {
-            for (File externalFilesDir : externalFilesDirs) {
-                File root = getStorageRootForExternalFilesDir(externalFilesDir);
-                if (root != null && volumeId.equalsIgnoreCase(root.getName())) {
-                    return root;
+            byte[] buffer = new byte[65536];
+            for (String name : names) {
+                if (!name.endsWith(".dusk")) {
+                    continue;
                 }
-            }
-        }
-
-        File fallback = new File("/storage", volumeId);
-        return fallback.exists() ? fallback : null;
-    }
-
-    private File getStorageRootForExternalFilesDir(File externalFilesDir) {
-        if (externalFilesDir == null) {
-            return null;
-        }
-
-        String path = externalFilesDir.getAbsolutePath();
-        int androidDir = path.indexOf("/Android/");
-        if (androidDir <= 0) {
-            return null;
-        }
-
-        return new File(path.substring(0, androidDir));
-    }
-
-    private void persistUriPermissions(Intent data) {
-        if (data == null) {
-            return;
-        }
-
-        int permissionFlags =
-            data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-        if (permissionFlags == 0) {
-            return;
-        }
-
-        Uri uri = data.getData();
-        if (uri != null) {
-            persistUriPermission(uri, permissionFlags);
-        }
-
-        ClipData clipData = data.getClipData();
-        if (clipData == null) {
-            return;
-        }
-        for (int i = 0; i < clipData.getItemCount(); ++i) {
-            Uri itemUri = clipData.getItemAt(i).getUri();
-            if (itemUri != null) {
-                persistUriPermission(itemUri, permissionFlags);
-            }
-        }
-    }
-
-    private void persistUriPermission(Uri uri, int permissionFlags) {
-        if ((permissionFlags & Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0) {
-            persistUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION, "read");
-        }
-        if ((permissionFlags & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) != 0) {
-            persistUriPermission(uri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION, "write");
-        }
-    }
-
-    private void persistUriPermission(Uri uri, int permissionFlag, String permissionName) {
-        try {
-            getContentResolver().takePersistableUriPermission(uri, permissionFlag);
-        } catch (SecurityException | IllegalArgumentException e) {
-            Log.w(TAG, "Unable to persist " + permissionName + " URI permission for " + uri, e);
-        }
-    }
-
-    public String getDisplayNameForUri(String uriString) {
-        if (uriString == null || uriString.isEmpty()) {
-            return "";
-        }
-
-        Uri uri = Uri.parse(uriString);
-        if ("content".equals(uri.getScheme())) {
-            try (Cursor cursor = getContentResolver().query(
-                uri, new String[] { OpenableColumns.DISPLAY_NAME }, null, null, null))
-            {
-                if (cursor != null && cursor.moveToFirst()) {
-                    int displayNameColumn = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
-                    if (displayNameColumn >= 0) {
-                        String displayName = cursor.getString(displayNameColumn);
-                        if (displayName != null && !displayName.isEmpty()) {
-                            return displayName;
-                        }
+                try (InputStream in = getAssets().open("mods/" + name);
+                     OutputStream out = new FileOutputStream(new File(outDir, name)))
+                {
+                    int count;
+                    while ((count = in.read(buffer)) > 0) {
+                        out.write(buffer, 0, count);
                     }
                 }
-            } catch (SecurityException | IllegalArgumentException e) {
-                Log.w(TAG, "Unable to query display name for " + uri, e);
             }
-        } else if ("file".equals(uri.getScheme())) {
-            String path = uri.getPath();
-            if (path != null && !path.isEmpty()) {
-                String name = new File(path).getName();
-                if (!name.isEmpty()) {
-                    return name;
-                }
+        } catch (IOException e) {
+            Log.w(TAG, "Failed to extract bundled mods", e);
+        }
+    }
+
+    private static void deleteRecursively(File file) {
+        File[] children = file.listFiles();
+        if (children != null) {
+            for (File child : children) {
+                deleteRecursively(child);
             }
         }
-
-        String lastSegment = uri.getLastPathSegment();
-        return lastSegment != null ? lastSegment : "";
+        file.delete();
     }
+
+    @Override
+    protected String[] getArguments() {
+        String[] arguments = super.getArguments();
+        if (arguments.length > 0) {
+            return arguments;
+        }
+
+        Intent intent = getIntent();
+        if (intent == null) {
+            return arguments;
+        }
+        String[] argv = intent.getStringArrayExtra("dusk_argv");
+        if (argv != null && argv.length > 0) {
+            return argv;
+        }
+        String rawArgs = intent.getStringExtra("dusk_args");
+        return rawArgs == null ? arguments : splitArguments(rawArgs.trim());
+    }
+
 }

@@ -39,6 +39,8 @@ f32 dGetUserHudScale() {
 }
 
 }  // namespace
+
+#include "d_meter2_vdt.inc"
 #endif
 
 int dMeter2_c::_create() {
@@ -47,6 +49,7 @@ int dMeter2_c::_create() {
     // (the global is set before _create runs); don't leave it uninitialized.
     mpMeterDraw = NULL;
 #endif
+    IF_DUSK(mPresentationTargets = {});
     stage_stag_info_class* stag_info = dComIfGp_getStageStagInfo();
     if (dStage_stagInfo_GetUpButton(stag_info) == 1) {
         mpHeap = fopMsgM_createExpHeap(HEAP_SIZE(0x5A400, 0xA0000), NULL);
@@ -269,10 +272,19 @@ int dMeter2_c::_create() {
     mpHeap->getTotalFreeSize();
     field_0x11c = NULL;
     mDoExt_setCurrentHeap(heap);
+
+    IF_DUSK(base.draw_interp_frame = true);
+
     return cPhs_COMPLEATE_e;
 }
 
 int dMeter2_c::_execute() {
+#if TARGET_PC
+    if (mpMeterDraw != NULL) {
+        mpMeterDraw->beginExecution();
+    }
+#endif
+
     JKRHeap* heap = mDoExt_setCurrentHeap(mpHeap);
 
     if (!dComIfGs_isCollectMirror(0)
@@ -333,6 +345,13 @@ int dMeter2_c::_execute() {
     dComIfGp_setNunCStatus(0, 0);
     dComIfGp_setBottleStatus(0, 0);
     dComIfGp_setCStickStatus(0, 0, 0);
+
+#if TARGET_PC
+    if (mpMeterDraw != NULL) {
+        mPresentationTargets.ready = true;
+        mpMeterDraw->endExecution();
+    }
+#endif
 
     mDoExt_setCurrentHeap(heap);
     return 1;
@@ -657,7 +676,8 @@ void dMeter2_c::moveLife() {
             life_count = (dComIfGs_getMaxLife() / 5) * 4;
         }
 
-        s16 new_life = dComIfGs_getLife() + dComIfGp_getItemLifeCount();
+        DUSK_IF_ELSE(int, s16) new_life = dComIfGs_getLife() + dComIfGp_getItemLifeCount(); // prevent an overflow with really large damage values
+
         if (new_life > life_count) {
             new_life = life_count;
         } else if (new_life < 0) {
@@ -888,11 +908,12 @@ void dMeter2_c::moveKantera() {
     }
 
     if (draw_kantera == true) {
-        mpMeterDraw->drawKantera(mMaxOil, mNowOil, x_pos, y_pos);
+        IF_NOT_DUSK(mpMeterDraw->drawKantera(mMaxOil, mNowOil, x_pos, y_pos));
     }
 
     alphaAnimeKantera();
     dComIfGp_setItemNowOil(mNowOil);
+    IF_DUSK(mpMeterDraw->publishKantera(mNowOil, mMaxOil));
 }
 
 void dMeter2_c::moveOxygen() {
@@ -1009,11 +1030,12 @@ void dMeter2_c::moveOxygen() {
     }
 
     if (draw_oxygen == true) {
-        mpMeterDraw->drawOxygen(mMaxOxygen, mNowOxygen, x_pos, y_pos);
+        IF_NOT_DUSK(mpMeterDraw->drawOxygen(mMaxOxygen, mNowOxygen, x_pos, y_pos));
     }
 
     alphaAnimeOxygen();
     dComIfGp_setNowOxygen(mNowOxygen);
+    IF_DUSK(mpMeterDraw->publishOxygen(mNowOxygen, mMaxOxygen));
 }
 
 void dMeter2_c::moveLightDrop() {
@@ -1070,6 +1092,12 @@ void dMeter2_c::moveLightDrop() {
         alpha = g_drawHIO.mLightDrop.mVesselAlpha[0];
     }
 
+#if TARGET_PC
+    mPresentationTargets.vesselX = pos_x;
+    mPresentationTargets.vesselY = pos_y;
+    mPresentationTargets.vesselScale = scale;
+    mPresentationTargets.vesselAlpha = alpha;
+#else
     if (mVesselPosX != pos_x) {
         cLib_addCalc2(&mVesselPosX, pos_x, 1.0f, 10.0f);
         draw_lightdrop = true;
@@ -1101,6 +1129,7 @@ void dMeter2_c::moveLightDrop() {
             mVesselAlpha = alpha;
         }
     }
+#endif
 
     if (draw_lightdrop == true) {
         mpMeterDraw->drawLightDrop(mLightDropNum, mNeedLightDropNum, mVesselPosX, mVesselPosY,
@@ -1452,6 +1481,33 @@ void dMeter2_c::moveButtonA() {
         var_f31 = 1.0f;
     }
 
+#if TARGET_PC
+    // Functional offsets A's position: 3DS Style keeps only A/B on this
+    // screen (X/Y/Z/Midna live on the companion), so shift the pair AS A
+    // GROUP into the top-right corner. Must land here, before it feeds
+    // mPresentationTargets — presentButtonA(), not drawButtonA(), is what
+    // actually paneTrans()'s the button on PC now, and it only ever sees
+    // the interpolated target this struct holds.
+    // Idle-cluster state only: events and the subject views (hawk, grass
+    // whistle, aiming) reposition the buttons on purpose, and stacking the
+    // corner offset on those pushed them off the top of the screen.
+    const bool aAiming = (mStatus & 0x100) || daPy_getPlayerActorClass()->checkHawkWait() ||
+        daPy_getPlayerActorClass()->checkGrassWhistle();
+    const bool aOffsetState = dusk::dualscreen::mainHudRestored() &&
+        !dComIfGp_event_runCheck() && !mpMeterDraw->getCameraSubject() &&
+        !mpMeterDraw->getItemSubject() && !mpMeterDraw->getPlayerSubject() && !aAiming;
+    if (aOffsetState) {
+        for (int i = 0; i < 2; i++) {
+            pos_x[i] += 43.0f;
+            pos_y[i] -= 48.0f;
+        }
+    }
+
+    for (int i = 0; i < 2; i++) {
+        mPresentationTargets.buttonAX[i] = pos_x[i];
+        mPresentationTargets.buttonAY[i] = pos_y[i];
+    }
+#else
     for (int i = 0; i < 2; i++) {
         if (mButtonATalkPosX[i] != pos_x[i]) {
             cLib_addCalc2(&mButtonATalkPosX[i], pos_x[i], 1.0f, 10.0f);
@@ -1477,30 +1533,12 @@ void dMeter2_c::moveButtonA() {
             field_0x144 = var_f31;
         }
     }
+#endif
 
     if (field_0x200 != dMsgObject_isTalkNowCheck()) {
         field_0x200 = dMsgObject_isTalkNowCheck();
         draw_buttonA = true;
     }
-
-#if TARGET_PC
-    // Functional offsets A's position (drawButtonA): a dual-screen mode
-    // change must force this lazy redraw or the button keeps the other
-    // layout's spot until the next organic change.
-    static bool sARestoredPrev = false;
-    // Mirrors drawButtonA's own offset gate EXACTLY, including its aim term
-    // (hawk/grass-whistle/status-0x100) — an asymmetric predicate here would
-    // miss the redraw when only that term flips.
-    const bool aAiming = (mStatus & 0x100) || daPy_getPlayerActorClass()->checkHawkWait() ||
-        daPy_getPlayerActorClass()->checkGrassWhistle();
-    const bool aOffsetState = dusk::dualscreen::mainHudRestored() &&
-        !dComIfGp_event_runCheck() && !mpMeterDraw->getCameraSubject() &&
-        !mpMeterDraw->getItemSubject() && !mpMeterDraw->getPlayerSubject() && !aAiming;
-    if (sARestoredPrev != aOffsetState) {
-        sARestoredPrev = aOffsetState;
-        draw_buttonA = true;
-    }
-#endif
 
     if (draw_buttonA) {
         mpMeterDraw->drawButtonA(mDoStatus, mButtonATalkPosX[0], mButtonATalkPosY[0],
@@ -1676,6 +1714,25 @@ void dMeter2_c::moveButtonB() {
         draw_buttonB = true;
     }
 
+#if TARGET_PC
+    // See moveButtonA: Functional offsets B's position the same way, before
+    // it feeds mPresentationTargets (presentButtonB() is what actually
+    // paneTrans()'s B on PC now).
+    const bool bOffsetState = dusk::dualscreen::mainHudRestored() &&
+        !dComIfGp_event_runCheck() && !mpMeterDraw->getCameraSubject() &&
+        !mpMeterDraw->getItemSubject() && !mpMeterDraw->getPlayerSubject();
+    if (bOffsetState) {
+        for (int i = 0; i < 2; i++) {
+            pos_x[i] += 43.0f;
+            pos_y[i] -= 48.0f;
+        }
+    }
+
+    for (int i = 0; i < 2; i++) {
+        mPresentationTargets.buttonBX[i] = pos_x[i];
+        mPresentationTargets.buttonBY[i] = pos_y[i];
+    }
+#else
     for (int i = 0; i < 2; i++) {
         if (field_0x148[i] != pos_x[i]) {
             cLib_addCalc2(&field_0x148[i], pos_x[i], 1.0f, 10.0f);
@@ -1701,6 +1758,7 @@ void dMeter2_c::moveButtonB() {
             field_0x158 = var_f31;
         }
     }
+#endif
 
     if (g_drawHIO.mItemScaleAdjustON && field_0x4bc != g_drawHIO.mItemScalePercent) {
         field_0x4bc = g_drawHIO.mItemScalePercent;
@@ -1711,18 +1769,6 @@ void dMeter2_c::moveButtonB() {
         field_0x1c6 = daPy_getPlayerActorClass()->checkGrassWhistle();
         draw_buttonB = true;
     }
-
-#if TARGET_PC
-    // See moveButtonA: Functional offsets B's position (drawButtonB).
-    static bool sBRestoredPrev = false;
-    const bool bOffsetState = dusk::dualscreen::mainHudRestored() &&
-        !dComIfGp_event_runCheck() && !mpMeterDraw->getCameraSubject() &&
-        !mpMeterDraw->getItemSubject() && !mpMeterDraw->getPlayerSubject();
-    if (sBRestoredPrev != bOffsetState) {
-        sBRestoredPrev = bOffsetState;
-        draw_buttonB = true;
-    }
-#endif
 
     if (draw_buttonB) {
         mpMeterDraw->drawButtonB(mAStatus, field_0x128 == 0, field_0x148[0], field_0x150[0],
@@ -2325,6 +2371,10 @@ void dMeter2_c::moveButtonCross() {
 
     temp_f30 = mButtonCrossOFFPosX + (((f32)field_0x1b4 / (f32)g_drawHIO.mButtonCrossMoveFrame) *
                                      (mButtonCrossONPosX - mButtonCrossOFFPosX));
+#if TARGET_PC
+    mPresentationTargets.crossX = temp_f30;
+    mPresentationTargets.crossY = var_f31;
+#else
     if (field_0x15c != var_f31) {
         cLib_addCalc2(&field_0x15c, var_f31, 0.5f, 50.0f);
         if ((f32)fabs(field_0x15c - var_f31) < 0.5f) {
@@ -2332,6 +2382,7 @@ void dMeter2_c::moveButtonCross() {
         }
         draw_cross = true;
     }
+#endif
 
     if (draw_cross == true) {
         mpMeterDraw->drawButtonCross(temp_f30, field_0x15c);
@@ -2985,7 +3036,15 @@ void dMeter2_c::alphaAnimeLightDrop() {
     if (!isShowLightDrop()) {
         mpMeterDraw->setAlphaLightDropAnimeMin();
     } else {
+#if TARGET_PC
+        const bool dropGetPath =
+            dMeter2Info_getLightDropGetFlag(dComIfGp_getStartStageDarkArea()) > 1 &&
+            dMeter2Info_getLightDropGetFlag(dComIfGp_getStartStageDarkArea()) != 0xFF;
+
+        mpMeterDraw->showLightDrop(true, dropGetPath);
+#else
         mpMeterDraw->setAlphaLightDropAnimeMax();
+#endif
     }
 
     mpMeterDraw->setAlphaLightDropChange(false);
@@ -3129,36 +3188,34 @@ void dMeter2_c::alphaAnimeButtonCross() {
     {
         mpMeterDraw->setAlphaButtonCrossAnimeMin();
 
-        if ((!dComIfGp_event_chkEventFlag(0x40) || dMeter2Info_isGameStatus(2) ||
-             (mStatus & 0x100)) &&
-            field_0x190 > 0)
-        {
-            field_0x190--;
+        if ((!dComIfGp_event_chkEventFlag(0x40) || dMeter2Info_isGameStatus(2) || (mStatus & 0x100)) IF_NOT_DUSK(&& field_0x190 > 0)) {
+            DUSK_IF_ELSE(mpMeterDraw->showMap(false), field_0x190--);
         }
     } else if (dMeter2Info_isSub2DStatus(1) || dMeter2Info_isFloatingMessageVisible()) {
         mpMeterDraw->setAlphaButtonCrossAnimeMin();
 
+#if TARGET_PC
+        mpMeterDraw->showMap(true);
+#else
         if (field_0x190 < 5) {
             field_0x190++;
         }
+#endif
     } else {
 #if TARGET_PC
-        if (dusk::getSettings().game.enableTouchControls) {
-            mpMeterDraw->setAlphaButtonCrossAnimeMin();
-        } else {
-            mpMeterDraw->setAlphaButtonCrossAnimeMax();
-        }
+        mpMeterDraw->showCross(!dusk::getSettings().game.enableTouchControls);
+        mpMeterDraw->showMap(true);
 #else
         mpMeterDraw->setAlphaButtonCrossAnimeMax();
-#endif
 
         if (field_0x190 < 5) {
             field_0x190++;
         }
+#endif
     }
 
     if (mpMap != NULL) {
-        mpMap->setMapAlpha((field_0x190 * 255.0f) / 5.0f);
+        IF_NOT_DUSK(mpMap->setMapAlpha((field_0x190 * 255.0f) / 5.0f));
     }
 }
 

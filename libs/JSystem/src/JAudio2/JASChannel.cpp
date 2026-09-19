@@ -12,13 +12,13 @@
 #include "JSystem/JMath/JMATrigonometric.h"
 #include "JSystem/JGeometry.h"
 
-OSMessageQueue JASChannel::sBankDisposeMsgQ;
+DUSK_GAME_DATA OSMessageQueue JASChannel::sBankDisposeMsgQ;
 
-OSMessage JASChannel::sBankDisposeMsg[16];
+DUSK_GAME_DATA OSMessage JASChannel::sBankDisposeMsg[16];
 
-OSMessage JASChannel::sBankDisposeList[16];
+DUSK_GAME_DATA OSMessage JASChannel::sBankDisposeList[16];
 
-int JASChannel::sBankDisposeListSize;
+DUSK_GAME_DATA int JASChannel::sBankDisposeListSize;
 
 JASChannel::JASChannel(Callback i_callback, void* i_callbackData) :
     mStatus(STATUS_STOP),
@@ -26,6 +26,9 @@ JASChannel::JASChannel(Callback i_callback, void* i_callbackData) :
     mCallback(i_callback),
     mCallbackData(i_callbackData),
     mUpdateTimer(0),
+#if TARGET_PC
+    mAramBaseAddress(nullptr),
+#endif
     mBankDisposeID(NULL),
     mKey(0),
     mVelocity(0x7f),
@@ -34,7 +37,7 @@ JASChannel::JASChannel(Callback i_callback, void* i_callbackData) :
     mKeySweepCount(0),
     mSkipSamples(0)
 {
-    field_0xdc.mChannelType = 0;
+    mAnon.mChannelType = 0;
     field_0x104 = 0;
     mMixConfig[0].whole = 0x150;
     mMixConfig[1].whole = 0x210;
@@ -173,11 +176,7 @@ void JASChannel::updateEffectorParam(JASDsp::TChannel* i_channel, u16* i_mixerVo
 
     f32 pan = 0.5f;
     f32 dolby = 0.0f;
-#if TARGET_PC
-    u32 effectiveOutputMode = dusk::audio::EnableHrtf ? JAS_OUTPUT_SURROUND : JASDriver::getOutputMode();
-#else
     u32 effectiveOutputMode = JASDriver::getOutputMode();
-#endif
     switch (effectiveOutputMode) {
     case JAS_OUTPUT_MONO:
         break;
@@ -237,7 +236,7 @@ s32 JASChannel::initialUpdateDSPChannel(JASDsp::TChannel* i_channel) {
         mCallback(CB_START, this, i_channel, mCallbackData);
     }
 
-    if (field_0xdc.mWaveInfo.field_0x20[0] == 0) {
+    if (mAnon.mWaveInfo.mpLoaded[0] == 0) {
         JUT_WARN_DEVICE(346, 2, "%s", "Lost wave data while playing");
         mDspCh->free();
         mDspCh = NULL;
@@ -253,9 +252,12 @@ s32 JASChannel::initialUpdateDSPChannel(JASDsp::TChannel* i_channel) {
         return -1;
     }
 
-    switch (field_0xdc.mChannelType) {
+    switch (mAnon.mChannelType) {
     case 0:
-        i_channel->setWaveInfo(field_0xdc.mWaveInfo, mWaveAramAddress, mSkipSamples);
+        i_channel->setWaveInfo(mAnon.mWaveInfo, mWaveAramAddress, mSkipSamples);
+#if TARGET_PC
+        i_channel->mAramBaseAddress = mAramBaseAddress;
+#endif
         break;
     case 2:
         i_channel->setOscInfo(mOscillatorSomething);
@@ -315,7 +317,7 @@ s32 JASChannel::updateDSPChannel(JASDsp::TChannel* i_channel) {
         mCallback(CB_PLAY, this, i_channel, mCallbackData);
     }
 
-    if (field_0xdc.mWaveInfo.field_0x20[0] == 0) {
+    if (mAnon.mWaveInfo.mpLoaded[0] == 0) {
         JUT_WARN_DEVICE(456, 2, "%s","Lost wave data while playing");
         mDspCh->free();
         mDspCh = NULL;

@@ -23,7 +23,9 @@
 #include <cstring>
 
 #if TARGET_PC
+#include "dusk/game_clock.h"
 #include "dusk/menu_pointer.h"
+#include "dusk/version.hpp"
 #endif
 
 typedef void (dMenu_Insect_c::*initFunc)();
@@ -163,6 +165,11 @@ void dMenu_Insect_c::_move() {
 
 void dMenu_Insect_c::_draw() {
     if (mpArchive != NULL) {
+#if TARGET_PC
+        if (dusk::game_clock::is_presentation_frame()) {
+            mpExpParent->presentAnime();
+        }
+#endif
         J2DGrafContext* grafPort = dComIfGp_getCurrentGrafPort();
         mpBlackTex->setAlpha(0xff);
 
@@ -192,6 +199,7 @@ void dMenu_Insect_c::_draw() {
         // operations applied which cannot easily be reverse engineered
         mpSelect_c->translate(g_drawHIO.mInsectListScreen.mConfirmOptionPosX_4x3 + 486.0f,
                               g_drawHIO.mInsectListScreen.mConfirmOptionPosY_4x3 + 209.0f);
+        IF_DUSK(mpSelect_c->presentAnims());
         mpSelect_c->draw(0.0f, 0.0f);
         mpIconScreen->draw(0.0f, 0.0f, grafPort);
     }
@@ -535,7 +543,16 @@ void dMenu_Insect_c::screenSetBase() {
             }
         }
     }
-#if VERSION == VERSION_GCN_JPN
+#if TARGET_PC
+    J2DTextBox* textBox;
+    if (dusk::version::isRegionJpn()) {
+        textBox = (J2DTextBox*)mpScreen->search(MULTI_CHAR('t_t00'));
+        mpScreen->search(MULTI_CHAR('f_t00'))->hide();
+    } else {
+        textBox = (J2DTextBox*)mpScreen->search(MULTI_CHAR('f_t00'));
+        mpScreen->search(MULTI_CHAR('t_t00'))->hide();
+    }
+#elif VERSION == VERSION_GCN_JPN
     J2DTextBox* textBox = (J2DTextBox*)mpScreen->search(MULTI_CHAR('t_t00'));
     mpScreen->search(MULTI_CHAR('f_t00'))->hide();
 #else
@@ -558,7 +575,19 @@ void dMenu_Insect_c::screenSetExplain() {
     if (field_0xf6 == 0) {
         mpExpSubWin[1]->hide();
     }
-#if VERSION == VERSION_GCN_JPN
+#if TARGET_PC
+    if (dusk::version::isRegionJpn()) {
+        mpInfoText = JKR_NEW CPaneMgr(mpExpScreen, MULTI_CHAR('mg_3line'), 0, NULL);
+        mpExpScreen->search(MULTI_CHAR('n_e4line'))->hide();
+        field_0x5c = (J2DTextBox*)mpExpScreen->search(MULTI_CHAR('w_msg_jp'));
+        mpExpScreen->search(MULTI_CHAR('ms_for_2'))->hide();
+    } else {
+        mpInfoText = JKR_NEW CPaneMgr(mpExpScreen, MULTI_CHAR('mg_e4lin'), 0, NULL);
+        mpExpScreen->search(MULTI_CHAR('n_3line'))->hide();
+        field_0x5c = (J2DTextBox*)mpExpScreen->search(MULTI_CHAR('ms_for_2'));
+        mpExpScreen->search(MULTI_CHAR('w_msg_jp'))->hide();
+    }
+#elif VERSION == VERSION_GCN_JPN
     mpInfoText = JKR_NEW CPaneMgr(mpExpScreen, MULTI_CHAR('mg_3line'), 0, NULL);
     mpExpScreen->search(MULTI_CHAR('n_e4line'))->hide();
     field_0x5c = (J2DTextBox*)mpExpScreen->search(MULTI_CHAR('w_msg_jp'));

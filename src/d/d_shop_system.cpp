@@ -19,6 +19,9 @@
 #include "d/actor/d_a_tag_shop_item.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "dusk/interp/lerp.h"
+#endif
 
 static daTag_ShopItem_c* dShopSystem_itemActor[7] = {
     NULL, NULL, NULL, NULL, NULL, NULL, NULL,
@@ -718,13 +721,21 @@ int dShopSystem_c::itemRotate() {
     return 1;
 }
 
+#if TARGET_PC
+#define D_SHOP_SELECTED_ITEM_NO                                                                    \
+    ((mCursorPos > 0 && mCursorPos <= ITEM_MAX_e) ? dShopSystem_itemNo[mCursorPos - 1] :           \
+                                                    dItemNo_NONE_e)
+#else
+#define D_SHOP_SELECTED_ITEM_NO dShopSystem_itemNo[mCursorPos - 1]
+#endif
+
 int dShopSystem_c::itemZoom(cXyz* param_0) {
     cXyz local_1c;
 
     if (field_0xf60 >= 0) {
         local_1c.set(*param_0);
 
-        if (dShopSystem_itemNo[mCursorPos - 1] == dItemNo_OIL_BOTTLE_e) {
+        if (D_SHOP_SELECTED_ITEM_NO == dItemNo_OIL_BOTTLE_e) {
             mItemCtrl.setZoomAnime(mCursorPos, &local_1c,
                                    g_cursorHIO.mSeraShopObjZoomAngleX + -5000,
                                    isFlag(8) ? true : false);
@@ -775,9 +786,9 @@ int dShopSystem_c::itemZoom(cXyz* param_0) {
                              g_cursorHIO.mObjZoom.z + 150.0f);
             } else {
                 if (mMasterType == 5) {
-                    if (dShopSystem_itemNo[mCursorPos - 1] == dItemNo_ARROW_10_e ||
-                        dShopSystem_itemNo[mCursorPos - 1] == dItemNo_ARROW_20_e ||
-                        dShopSystem_itemNo[mCursorPos - 1] == dItemNo_ARROW_30_e)
+                    if (D_SHOP_SELECTED_ITEM_NO == dItemNo_ARROW_10_e ||
+                        D_SHOP_SELECTED_ITEM_NO == dItemNo_ARROW_20_e ||
+                        D_SHOP_SELECTED_ITEM_NO == dItemNo_ARROW_30_e)
                     {
                         local_34.set(g_cursorHIO.mObjZoom.x, -50.0f + g_cursorHIO.mObjZoom.y + 5.0f,
                                      (g_cursorHIO.mObjZoom.z + 250.0f) - 60.0f);
@@ -808,7 +819,7 @@ int dShopSystem_c::itemZoom(cXyz* param_0) {
 
         u8 dvar1 = mMasterType;
         if (dvar1 == 1) {
-            if (dShopSystem_itemNo[mCursorPos - 1] == dItemNo_OIL_BOTTLE_e) {
+            if (D_SHOP_SELECTED_ITEM_NO == dItemNo_OIL_BOTTLE_e) {
                 mItemCtrl.setZoomAnime(mCursorPos, &local_1c,
                                        g_cursorHIO.mShopObjZoomAngleX + -7000,
                                        isFlag(8) ? true : false);
@@ -817,7 +828,7 @@ int dShopSystem_c::itemZoom(cXyz* param_0) {
                                        isFlag(8) ? true : false);
             }
         } else if (dvar1 == 2) {
-            if (dShopSystem_itemNo[mCursorPos - 1] == dItemNo_RED_BOTTLE_e) {
+            if (D_SHOP_SELECTED_ITEM_NO == dItemNo_RED_BOTTLE_e) {
                 mItemCtrl.setZoomAnime(mCursorPos, &local_1c, g_cursorHIO.mShopObjZoomAngleX - 3000,
                                        isFlag(8) ? true : false);
             } else {
@@ -825,9 +836,9 @@ int dShopSystem_c::itemZoom(cXyz* param_0) {
                                        isFlag(8) ? true : false);
             }
         } else if (dvar1 == 5) {
-            if (dShopSystem_itemNo[mCursorPos - 1] == dItemNo_ARROW_10_e ||
-                dShopSystem_itemNo[mCursorPos - 1] == dItemNo_ARROW_20_e ||
-                dShopSystem_itemNo[mCursorPos - 1] == dItemNo_ARROW_30_e)
+            if (D_SHOP_SELECTED_ITEM_NO == dItemNo_ARROW_10_e ||
+                D_SHOP_SELECTED_ITEM_NO == dItemNo_ARROW_20_e ||
+                D_SHOP_SELECTED_ITEM_NO == dItemNo_ARROW_30_e)
             {
                 mItemCtrl.setZoomAnime(mCursorPos, &local_1c, g_cursorHIO.mShopObjZoomAngleX - 4000,
                                        isFlag(8) ? true : false);
@@ -850,6 +861,8 @@ int dShopSystem_c::itemZoom(cXyz* param_0) {
     return 1;
 }
 
+#undef D_SHOP_SELECTED_ITEM_NO
+
 int dShopSystem_c::seq_wait(fopAc_ac_c* param_0, dMsgFlow_c* param_1) {
     return 0;
 }
@@ -866,10 +879,14 @@ int dShopSystem_c::seq_start(fopAc_ac_c* actor, dMsgFlow_c* i_flow) {
     }
 
     cXyz pos3d;
-    cXyz pos2d;
+    cXyz pos2d IF_DUSK((0.0f, 0.0f, 0.0f));
     pos3d.set(mItemCtrl.getCurrentPos(0));
+#if TARGET_PC
+    mpDrawCursor->setWorldPos(pos3d, 0.0f, g_cursorHIO.mShopCursorOffsetY);
+#else
     pos3Dto2D(&pos3d, &pos2d);
     mpDrawCursor->setPos(pos2d.x, pos2d.y + g_cursorHIO.mShopCursorOffsetY);
+#endif
 
     if (chkSpMode() && !beforeStartSeqAction(i_flow, field_0xf5c)) {
         return 0;
@@ -905,8 +922,18 @@ int dShopSystem_c::seq_start(fopAc_ac_c* actor, dMsgFlow_c* i_flow) {
                 int itemNo;
                 if (mFlow.getEventId(&itemNo) == 1) {
                     if (mItemPartnerId == fpcM_ERROR_PROCESS_ID_e) {
-                        mItemPartnerId = fopAcM_createItemForPresentDemo(&current.pos, itemNo, 0, -1,
-                                                                      -1, NULL, NULL);
+#if TARGET_PC
+                        u32 itemGiveTag = 0;
+                        if (itemNo == dItemNo_HALF_MILK_BOTTLE_e) {
+                            const auto itemCheck =
+                                dusk::mods::item_check_commit("sera_reward", itemNo, actor);
+                            itemNo = itemCheck.itemNo;
+                            itemGiveTag = itemCheck.tag;
+                        }
+#endif
+                        mItemPartnerId =
+                            fopAcM_createItemForPresentDemo(&current.pos, itemNo, 0, -1, -1, NULL,
+                                NULL IF_DUSK_ARG(itemGiveTag));
                     }
 
                     if (fpcEx_IsExist(mItemPartnerId)) {
@@ -1073,9 +1100,9 @@ int dShopSystem_c::seq_select(fopAc_ac_c* actor, dMsgFlow_c* i_flow) {
 
     if (old_cursor != 0) {
         cXyz pos3d;
-        cXyz pos2d;
+        cXyz pos2d IF_DUSK((0.0f, 0.0f, 0.0f));
         pos3d.set(mItemCtrl.getCurrentPos(old_cursor - 1));
-        pos3Dto2D(&pos3d, &pos2d);
+        IF_NOT_DUSK(pos3Dto2D(&pos3d, &pos2d));
 
         if (old_cursor == 7) {
             pos2d.x += g_cursorHIO.mMagicArmorCursorOffsetX;
@@ -1084,7 +1111,11 @@ int dShopSystem_c::seq_select(fopAc_ac_c* actor, dMsgFlow_c* i_flow) {
             pos2d.y += g_cursorHIO.mShopCursorOffsetY;
         }
 
+#if TARGET_PC
+        mpDrawCursor->setWorldPos(pos3d, pos2d.x, pos2d.y);
+#else
         mpDrawCursor->setPos(pos2d.x, pos2d.y);
+#endif
     }
 
     return 0;
@@ -1095,11 +1126,11 @@ int dShopSystem_c::seq_moving(fopAc_ac_c*, dMsgFlow_c*) {
 
     cXyz last_pos3d;
     cXyz pos3d;
-    cXyz last_pos2d;
-    cXyz pos2d;
+    cXyz last_pos2d IF_DUSK((0.0f, 0.0f, 0.0f));
+    cXyz pos2d IF_DUSK((0.0f, 0.0f, 0.0f));
 
     pos3d.set(mItemCtrl.getCurrentPos(mCursorPos - 1));
-    pos3Dto2D(&pos3d, &pos2d);
+    IF_NOT_DUSK(pos3Dto2D(&pos3d, &pos2d));
 
     if (mCursorPos == 7) {
         pos2d.x += g_cursorHIO.mMagicArmorCursorOffsetX;
@@ -1110,7 +1141,7 @@ int dShopSystem_c::seq_moving(fopAc_ac_c*, dMsgFlow_c*) {
 
     if (mLastCursorPos != 0) {
         last_pos3d.set(mItemCtrl.getCurrentPos(mLastCursorPos - 1));
-        pos3Dto2D(&last_pos3d, &last_pos2d);
+        IF_NOT_DUSK(pos3Dto2D(&last_pos3d, &last_pos2d));
 
         if (mLastCursorPos == 7) {
             last_pos2d.x += g_cursorHIO.mMagicArmorCursorOffsetX;
@@ -1120,11 +1151,22 @@ int dShopSystem_c::seq_moving(fopAc_ac_c*, dMsgFlow_c*) {
         }
 
         f32 tmp = (f32)(field_0xf68 * field_0xf68) / 9.0f;
+#if TARGET_PC
+        cXyz position;
+        dusk::interp::lerp(position, last_pos3d, pos3d, tmp);
+        dusk::interp::lerp(pos2d, last_pos2d, pos2d, tmp);
+        mpDrawCursor->setWorldPos(position, pos2d.x, pos2d.y);
+#else
         mpDrawCursor->setPos(last_pos2d.x + tmp * (pos2d.x - last_pos2d.x),
                              last_pos2d.y + tmp * (pos2d.y - last_pos2d.y));
+#endif
 
     } else {
+#if TARGET_PC
+        mpDrawCursor->setWorldPos(pos3d, pos2d.x, pos2d.y);
+#else
         mpDrawCursor->setPos(pos2d.x, pos2d.y);
+#endif
     }
 
     if (field_0xf68 >= 3) {
@@ -1195,8 +1237,14 @@ int dShopSystem_c::seq_decide_yes(fopAc_ac_c* actor, dMsgFlow_c* i_flow) {
     if (mFlow.getEventId(&itemNo) == 1) {
         if (i_flow->doFlow(actor, NULL, 0)) {
             if (mItemPartnerId == fpcM_ERROR_PROCESS_ID_e) {
-                mItemPartnerId =
-                    fopAcM_createItemForPresentDemo(&current.pos, itemNo, 0, -1, -1, NULL, NULL);
+#if TARGET_PC
+                const u32 itemGiveTag = dusk::mods::item_give_tag_shop(itemNo & 0xFF);
+                const auto itemCheck =
+                    dusk::mods::item_check_commit(itemGiveTag, itemNo & 0xFF, actor);
+                itemNo = itemCheck.itemNo;
+#endif
+                mItemPartnerId = fopAcM_createItemForPresentDemo(
+                    &current.pos, itemNo, 0, -1, -1, NULL, NULL IF_DUSK_ARG(itemGiveTag));
             }
 
             if (fpcEx_IsExist(mItemPartnerId)) {

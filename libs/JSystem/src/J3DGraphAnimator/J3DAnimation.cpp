@@ -5,7 +5,12 @@
 #include "JSystem/J3DGraphBase/J3DStruct.h"
 #include "JSystem/JMath/JMath.h"
 
+#if TARGET_PC
+#include "dusk/interp/material.h"
+#endif
+
 void J3DFrameCtrl::init(s16 endFrame) {
+    IF_DUSK(dusk::interp::material::reset(this));
     mAttribute = EMode_LOOP;
     mState = 0;
     mStart = 0;
@@ -134,6 +139,7 @@ int J3DFrameCtrl::checkPass(f32 passFrame) {
 
 
 void J3DFrameCtrl::update() {
+    IF_DUSK(dusk::interp::material::Update materialUpdate(*this));
     mState = 0;
     mFrame += mRate;
 
@@ -1456,3 +1462,67 @@ void J3DAnmTevRegKey::searchUpdateMaterialID(J3DModelData* pModelData) {
     J3D_ASSERT_NULLPTR(2119, pModelData != NULL);
     searchUpdateMaterialID(&pModelData->getMaterialTable());
 }
+
+#if TARGET_PC
+J3DAnmBase::J3DAnmBase() {
+    dusk::interp::material::reset(this);
+    mAttribute = 0;
+    field_0x5 = 0;
+    mFrameMax = 0;
+    mFrame = 0.0f;
+}
+
+J3DAnmBase::J3DAnmBase(s16 frameMax) {
+    dusk::interp::material::reset(this);
+    mAttribute = 0;
+    field_0x5 = 0;
+    mFrameMax = frameMax;
+    mFrame = 0.0f;
+}
+
+J3DAnmBase::~J3DAnmBase() {
+    dusk::interp::material::reset(this);
+}
+
+void J3DAnmBase::setFrame(f32 frame) {
+    dusk::interp::material::reset(this);
+    mFrame = frame;
+}
+
+J3DFrameCtrl::~J3DFrameCtrl() {
+    dusk::interp::material::reset(this);
+}
+
+void J3DFrameCtrl::setAttribute(u8 attr) {
+    dusk::interp::material::reset(this);
+    mAttribute = attr;
+}
+
+void J3DFrameCtrl::setStart(s16 start) {
+    dusk::interp::material::reset(this);
+    mStart = start;
+    mFrame = start;
+}
+
+void J3DFrameCtrl::setEnd(s16 end) {
+    dusk::interp::material::reset(this);
+    mEnd = end;
+}
+
+void J3DFrameCtrl::setLoop(s16 loop) {
+    dusk::interp::material::reset(this);
+    mLoop = loop;
+}
+
+void J3DFrameCtrl::setFrame(f32 frame) {
+    dusk::interp::material::reset(this);
+    mFrame = frame;
+}
+
+void J3DFrameCtrl::reset() {
+    dusk::interp::material::reset(this);
+    mFrame = mStart;
+    mRate = 1.0f;
+    mState = 0;
+}
+#endif

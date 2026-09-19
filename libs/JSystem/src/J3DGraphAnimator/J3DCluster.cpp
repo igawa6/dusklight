@@ -8,7 +8,12 @@
 
 #include "JSystem/JSupport/JSupport.h"
 
+#if TARGET_PC
+#include "dusk/interp/vertex.h"
+#endif
+
 J3DDeformData::J3DDeformData() {
+    IF_DUSK(dusk::interp::vertex::invalidate(this));
     mClusterNum = 0;
     mClusterKeyNum = 0;
     mClusterVertexNum = 0;
@@ -67,6 +72,7 @@ void J3DDeformData::deform(J3DVertexBuffer* buffer) {
 }
 
 void J3DDeformData::setAnm(J3DAnmCluster* anm) {
+    IF_DUSK(dusk::interp::vertex::invalidate(this));
     for (u16 i = 0; i < mClusterNum; i++) {
         DEFORMER(i)->setAnmCluster(anm);
     }

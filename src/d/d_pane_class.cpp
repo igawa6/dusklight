@@ -13,7 +13,16 @@
 #include "m_Do/m_Do_ext.h"
 #include "m_Do/m_Do_graphic.h"
 
+#if TARGET_PC
+#include "dusk/interp/lerp.h"
+#include "dusk/interp/user_interface.h"
+#endif
+
 CPaneMgr::CPaneMgr() {
+#if TARGET_PC
+    mScaleAnimation.active = false;
+    mColorAnimation.active = false;
+#endif
     mpFirstStackAlpha = NULL;
     mpFirstStackSize = NULL;
 }
@@ -45,6 +54,12 @@ void CPaneMgr::setAlpha(u8 alpha) {
 }
 
 void CPaneMgr::reinit() {
+#if TARGET_PC
+    mAlphaAnimation.active = false;
+    mScaleAnimation.active = false;
+    mColorAnimation.active = false;
+#endif
+
     mInitPos.x = getPanePtr()->getBounds().i.x;
     mInitPos.y = getPanePtr()->getBounds().i.y;
 
@@ -66,6 +81,12 @@ void CPaneMgr::reinit() {
 }
 
 void CPaneMgr::initiate(J2DPane* p_pane, JKRExpHeap* p_heap) {
+#if TARGET_PC
+    mAlphaAnimation.active = false;
+    mScaleAnimation.active = false;
+    mColorAnimation.active = false;
+#endif
+
     mPane = p_pane;
 
     if (p_heap) {
@@ -269,7 +290,29 @@ void CPaneMgr::paneScale(f32 x, f32 y) {
     }
 }
 
+#if TARGET_PC
+void CPaneMgr::presentAnime() {
+    presentAlphaAnime();
+    dusk::vdt::present_animation(mScaleAnimation, mScaleAnime, *this, [&](f32 rate) {
+        const f32 scale = dusk::interp::lerp(mScaleAnimation.start, mScaleAnimation.end, rate);
+        getPanePtr()->scale(getInitScaleX() * scale, getInitScaleY() * scale);
+    });
+    dusk::vdt::present_animation(mColorAnimation, mColorAnime, *this, [&](f32 rate) {
+        setBlackWhite(
+            dusk::interp::lerp(mColorAnimation.start.first, mColorAnimation.end.first, rate),
+            dusk::interp::lerp(mColorAnimation.start.second, mColorAnimation.end.second, rate));
+    });
+}
+#endif
+
 bool CPaneMgr::scaleAnime(s16 param_0, f32 param_1, f32 param_2, u8 param_3) {
+#if TARGET_PC
+    if (!dusk::vdt::request_animation(mScaleAnimation, mScaleAnime, param_0, param_1, param_2, param_3)) {
+        return false;
+    }
+    getPanePtr()->scale(mInitScale.x * param_2, mInitScale.y * param_2);
+    return true;
+#else
     if (mScaleAnime < param_0 - 1) {
         mScaleAnime++;
         f32 rate = rateCalc(param_0, mScaleAnime, param_3);
@@ -281,10 +324,20 @@ bool CPaneMgr::scaleAnime(s16 param_0, f32 param_1, f32 param_2, u8 param_3) {
         return true;
     }
     return false;
+#endif
 }
 
 bool CPaneMgr::colorAnime(s16 anmTimer, JUtility::TColor startBlack, JUtility::TColor endBlack,
-                              JUtility::TColor startWhite, JUtility::TColor endWhite, u8 calcType) {
+                          JUtility::TColor startWhite, JUtility::TColor endWhite, u8 calcType) {
+#if TARGET_PC
+    if (!dusk::vdt::request_animation(mColorAnimation, mColorAnime, anmTimer,
+                                      {startBlack, startWhite}, {endBlack, endWhite}, calcType))
+    {
+        return false;
+    }
+    setBlackWhite(endBlack, endWhite);
+    return true;
+#else
     if (mColorAnime < anmTimer - 1) {
         mColorAnime++;
         f32 rate = rateCalc(anmTimer, mColorAnime, calcType);
@@ -349,6 +402,7 @@ bool CPaneMgr::colorAnime(s16 anmTimer, JUtility::TColor startBlack, JUtility::T
     }
 
     return false;
+#endif
 }
 
 Vec CPaneMgr::getGlobalVtx(J2DPane* p_pane, Mtx* param_1, u8 param_2, bool param_3,

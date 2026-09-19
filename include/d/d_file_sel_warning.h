@@ -35,6 +35,9 @@ public:
     void drawSelf();
     void setText(u32);
     void setFontColor(JUtility::TColor, JUtility::TColor);
+#if TARGET_PC
+    void presentAnims();
+#endif
 
     virtual ~dFile_warning_c();
 
@@ -47,7 +50,7 @@ public:
     /* 0x1C */ CPaneMgr* mpRootPane;
     /* 0x20 */ J2DTextBox* field_0x20;
     /* 0x24 */ J2DAnmTransform* field_0x24;
-    /* 0x28 */ int field_0x28;
+    /* 0x28 */ DUSK_IF_ELSE(f32, int) field_0x28;
     /* 0x2C */ int field_0x2c;
     /* 0x30 */ u8 field_0x30[4];
     /* 0x34 */ f32 field_0x34;

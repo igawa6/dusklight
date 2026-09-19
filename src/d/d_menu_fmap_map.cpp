@@ -8,10 +8,11 @@
 #include "d/d_debug_viewer.h"
 #include "d/d_menu_fmap_map.h"
 #include "m_Do/m_Do_graphic.h"
-#if TARGET_PC
-#include <dolphin/gx/GXExtra.h>
-#endif
 #include <cstring>
+
+#if TARGET_PC
+#include "dusk/interp/user_interface.h"
+#endif
 
 static u8 twoValueLineInterpolation(u8 i_value1, u8 i_value2, f32 i_param) {
     return (u8)((f32)i_value1 + i_param * ((f32)i_value2 - (f32)i_value1));
@@ -480,6 +481,10 @@ dMenu_FmapMap_c::~dMenu_FmapMap_c() {
 }
 
 void dMenu_FmapMap_c::_create(u16 i_texWidth, u16 i_texHeight, u16 param_2, u16 param_3, void* i_res) {
+#if TARGET_PC
+    mResetFlashFrame = true;
+    mPaletteFrameInitialized = false;
+#endif
     m_res = (dMfm_prm_res_s*)i_res;
     m_palette = m_res->palette_data;
     field_0xcc = 0x6c;
@@ -505,12 +510,57 @@ void dMenu_FmapMap_c::_delete() {
     }
 }
 
-const dMfm_HIO_prm_res_src_s dMfm_HIO_prm_res_src_s::m_other = {30};
+DUSK_GAME_DATA const dMfm_HIO_prm_res_src_s dMfm_HIO_prm_res_src_s::m_other = {30};
+
+#if TARGET_PC
+void dMenu_FmapMap_c::presentAnims() {
+    const f32 duration = dMfm_HIO_prm_res_src_s::m_other.mFlashDuration;
+    if (mResetFlashFrame) {
+        mFlashFrame = 0.0f;
+        mResetFlashFrame = false;
+    } else {
+        dusk::vdt::advance_looping_frame(mFlashFrame, 1.0f, duration + 1.0f);
+    }
+    mFlashTimer = std::max(0.0f, duration - mFlashFrame);
+
+    const int periods[] = {m_res->field_0x168, m_res->field_0x16a};
+    for (int i = 0; i < 2; ++i) {
+        if (periods[i] <= 0) {
+            mPaletteFrame[i] = 0.0f;
+        } else if (!mPaletteFrameInitialized) {
+            mPaletteFrame[i] = g_Counter.mCounter0 % periods[i];
+        } else {
+            dusk::vdt::advance_looping_frame(mPaletteFrame[i], 1.0f, periods[i]);
+        }
+    }
+    mPaletteFrameInitialized = true;
+}
+
+void dMenu_FmapMap_c::presentRendering(dMenu_Fmap_world_data_c* i_worldData, int i_startStageNo,
+                                       f32 i_posX, f32 i_posY, f32 i_scale, f32 i_zoomRate)
+{
+    mZoomRate = i_zoomRate;
+    mpWorldData = i_worldData;
+    mStartStageNo = i_startStageNo;
+    mPosX = i_posX;
+    mPosZ = i_posY;
+    mCmPerTexel = i_scale;
+    field_0x8 = mCmPerTexel * field_0x20 * mDoGph_gInf_c::getScale();
+    field_0xc = mCmPerTexel * field_0x22;
+}
+#endif
 
 void dMenu_FmapMap_c::draw() {
     { int unused; }
 
     f32 f30 = 0.0f;
+#if TARGET_PC
+    presentAnims();
+    const f32 half = dMfm_HIO_prm_res_src_s::m_other.mFlashDuration / 2;
+    if (half > 0.0f) {
+        f30 = std::clamp(std::fabs(mFlashTimer - half) / half, 0.0f, 1.0f);
+    }
+#else
     if (mFlashTimer < dMfm_HIO_prm_res_src_s::m_other.mFlashDuration / 2) {
         f30 =
             (int)(dMfm_HIO_prm_res_src_s::m_other.mFlashDuration / 2 - mFlashTimer) /
@@ -520,16 +570,19 @@ void dMenu_FmapMap_c::draw() {
             (int)(mFlashTimer - dMfm_HIO_prm_res_src_s::m_other.mFlashDuration / 2) /
             (f32)(int)(dMfm_HIO_prm_res_src_s::m_other.mFlashDuration / 2);
     }
+#endif
     setPointColor(1.0f - f30);
 
     GXColor color;
     f32 f31;
-    f31 = getRateWithFrameCount(m_res->field_0x168);
+    f31 = DUSK_IF_ELSE(dusk::vdt::clamped_fraction(mPaletteFrame[0], m_res->field_0x168),
+                       getRateWithFrameCount(m_res->field_0x168));
     f31 = cM_ssin(f31 * 0x10000 - 0x8000) * 0.5f + 0.5f;
     twoColorLineInterporation(m_res->field_0xd8, m_res->field_0xdc, f31, color);
     setFmapPaletteColor(PALETTE_19, color);
 
-    f31 = getRateWithFrameCount(m_res->field_0x16a);
+    f31 = DUSK_IF_ELSE(dusk::vdt::clamped_fraction(mPaletteFrame[1], m_res->field_0x16a),
+                       getRateWithFrameCount(m_res->field_0x16a));
     f31 = cM_ssin(f31 * 0x10000 - 0x8000) * 0.5f + 0.5f;
     twoColorLineInterporation(m_res->field_0xe0, m_res->field_0xe4, f31, color);
     setFmapPaletteColor(PALETTE_1A, color);
@@ -680,15 +733,18 @@ void dMenu_FmapMap_c::setRendering(dMenu_Fmap_world_data_c* i_worldData, int i_s
                                    f32 i_posX, f32 i_posY, f32 i_scale, f32 i_zoomRate) {
     mZoomRate = i_zoomRate;
     if (mFlash != mLastFlash || mStageCursor != mLastStageCursor) {
+        IF_DUSK(mResetFlashFrame = true);
         mFlashTimer = dMfm_HIO_prm_res_src_s::m_other.mFlashDuration;
         mLastFlash = mFlash;
         mLastStageCursor = mStageCursor;
     } else {
+#if !TARGET_PC
         if (mFlashTimer != 0) {
             mFlashTimer--;
         } else {
             mFlashTimer = dMfm_HIO_prm_res_src_s::m_other.mFlashDuration;
         }
+#endif
     }
     entry(i_worldData, i_startStageNo, i_posX, i_posY, i_scale);
 }

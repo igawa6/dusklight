@@ -25,6 +25,15 @@
 
 #if TARGET_PC
 #include "dusk/action_bindings.h"
+#include "dusk/game_clock.h"
+#include "dusk/interp/user_interface.h"
+#include "dusk/settings.h"
+
+#include "d/d_meter2.h"
+
+#include "JSystem/JUtility/JUTPalette.h"
+
+#include <algorithm>
 
 namespace {
 
@@ -490,15 +499,18 @@ void dMeterMap_c::_create(J2DScreen* unused) {
     if (mMapIsInside != 0) {
         mMapIsInside = 1;
         mSlidePositionOffset = getDispPosInside_OffsetX();
+        IF_DUSK(mSlidePositionOffsetTarget = mSlidePositionOffset);
         dMeter2Info_setMapStatus(1);
     } else {
         mMapIsInside = 0;
         mSlidePositionOffset = getDispPosOutSide_OffsetX();
+        IF_DUSK(mSlidePositionOffsetTarget = mSlidePositionOffset);
         dMeter2Info_setMapStatus(0);
     }
 
     field_0x2e = 0;
     mSlidePositionOffset = 0;
+    IF_DUSK(mSlidePositionOffsetTarget = 0);
     field_0x30 = 0;
                  /* dSv_event_flag_c::M_085 - Twilight Hyrule Field - Midna dialogue right before Boss Bug's Tear of Light appears */
     field_0x2b = dComIfGs_isEventBit(dSv_event_flag_c::saveBitLabels[118]);
@@ -507,11 +519,13 @@ void dMeterMap_c::_create(J2DScreen* unused) {
 void dMeterMap_c::setDispPosOutSide() {
     mMapIsInside = 0;
     mSlidePositionOffset = getDispPosOutSide_OffsetX();
+    IF_DUSK(mSlidePositionOffsetTarget = mSlidePositionOffset);
 }
 
 void dMeterMap_c::setDispPosInSide() {
     mMapIsInside = 1;
     mSlidePositionOffset = getDispPosInside_OffsetX();
+    IF_DUSK(mSlidePositionOffsetTarget = mSlidePositionOffset);
 }
 
 void dMeterMap_c::_delete() {
@@ -573,6 +587,8 @@ void dMeterMap_c::_move(u32 param_0) {
     }
 
     if (mMapIsInside != 0) {
+        IF_DUSK(mSlidePositionOffsetTarget = getDispPosInside_OffsetX());
+#if !TARGET_PC
         if (mSlidePositionOffset != getDispPosInside_OffsetX()) {
             if (!cLib_addCalcAngleS(&mSlidePositionOffset, getDispPosInside_OffsetX(), 2, 60, 10)) {
                 #if DEBUG
@@ -580,8 +596,10 @@ void dMeterMap_c::_move(u32 param_0) {
                 #endif
             }
         }
+#endif
     } else {
-        cLib_addCalcAngleS(&mSlidePositionOffset, getDispPosOutSide_OffsetX(), 2, 60, 10);
+        IF_DUSK(mSlidePositionOffsetTarget = getDispPosOutSide_OffsetX());
+        IF_NOT_DUSK(cLib_addCalcAngleS(&mSlidePositionOffset, getDispPosOutSide_OffsetX(), 2, 60, 10));
     }
 
     Vec map_pos = dMapInfo_n::getMapPlayerPos();
@@ -623,6 +641,13 @@ void dMeterMap_c::_draw() {
 }
 
 void dMeterMap_c::draw() {
+#if TARGET_PC
+    if (dusk::game_clock::is_presentation_frame()) {
+        if (dMeter2_c* meter = dMeter2Info_getMeterClass()) {
+            meter->presentMap();
+        }
+    }
+#endif
     if (
         #if DEBUG
         !g_meter_mapHIO.mMapDisplayProhibited &&
@@ -636,6 +661,12 @@ void dMeterMap_c::draw() {
         f32 drawPosX = mDrawPosX;
         f32 drawPosY = mDrawPosY;
 
+#if TARGET_PC
+        dusk::vdt::present_addCalc(&mSlidePositionOffset, mSlidePositionOffsetTarget, 0.5f, 60.0f, 10.0f);
+        mDrawPosX = mSlidePositionOffset + getMapDispEdgeLeftX_Layout();
+        drawPosX = mDrawPosX;
+#endif
+
         u8 alpha = mMapAlpha;
         #if DEBUG
         if (g_meter_mapHIO.mMapAlphaTest) {
@@ -645,6 +676,11 @@ void dMeterMap_c::draw() {
         mMapJ2DPicture->setAlpha(alpha);
 
         #if TARGET_PC
+        // Ensure minimap palette gets reuploaded since it is modified for the pulsating border
+        // effect.
+        JUTPalette* pPalette = mMapJ2DPicture->getTexture(0)->getPalette();
+        pPalette->dataUploaded();
+
         // Scale the minimap with the user HUD scale and shift down so its bottom-left
         // corner stays anchored to the same screen position as at scale 1.0.
         const f32 userHudScale = dGetUserHudScale();

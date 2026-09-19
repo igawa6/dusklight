@@ -1,19 +1,14 @@
+#include "dusk/logging.h"
+#include "dusk/main.h"
+
 #include <dolphin/dolphin.h>
 #include <dolphin/gx.h>
-#include <stdarg.h>
-#include <stdio.h>
-#include <string.h>
-#include <cstdlib>
-#include <cstdint>
+#include <tracy/Tracy.hpp>
+
+#include <condition_variable>
 #include <memory>
 #include <mutex>
-#include <condition_variable>
 #include <unordered_map>
-#include <memory>
-#include <dusk/logging.h>
-#include <dusk/main.h>
-
-#include "tracy/Tracy.hpp"
 
 #ifndef _WIN32
 #include <sys/time.h>
@@ -244,28 +239,6 @@ void SoundRevID(int a, int b) {
     STUB_LOG();
 }
 
-#pragma mark DC
-
-void DCFlushRange(void* addr, u32 nBytes) {
-    // Not needed on PC.
-}
-
-void DCFlushRangeNoSync(void* addr, u32 nBytes) {
-    // Not needed on PC.
-}
-
-void DCInvalidateRange(void* addr, u32 nBytes) {
-    // Not needed on PC.
-}
-
-void DCStoreRange(void* addr, u32 nBytes) {
-    // Not needed on PC.
-}
-
-void DCStoreRangeNoSync(void* addr, u32 nBytes) {
-    // Not needed on PC.
-}
-
 #pragma mark EXI
 
 BOOL EXIDeselect(int chan) {
@@ -301,12 +274,6 @@ BOOL EXISync(int chan) {
 BOOL EXIUnlock(int chan) {
     STUB_LOG();
     return FALSE;
-}
-
-#pragma mark LC
-
-void LCEnable() {
-    STUB_LOG();
 }
 
 // OS-related functions consolidated under "# pragma mark OS" further up
@@ -1042,11 +1009,6 @@ extern "C" void KPADDisableDPD(s32) {
     STUB_LOG();
 }
 extern "C" void KPADEnableDPD(s32) {
-    STUB_LOG();
-}
-
-// LC (consolidated above)
-void LCDisable(void) {
     STUB_LOG();
 }
 
