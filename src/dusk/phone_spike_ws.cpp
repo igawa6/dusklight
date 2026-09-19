@@ -59,7 +59,15 @@ const ws = new WebSocket(`ws://${location.host}/${location.search}`);
 ws.binaryType = 'arraybuffer';
 let lastFrameAt = 0;
 let intervals = [];
-ws.onopen = () => { stats.textContent = 'connected, waiting for first frame...'; };
+ws.onopen = () => {
+  stats.textContent = 'connected, waiting for first frame...';
+  // Native device pixels, not CSS logical pixels — this is what should
+  // actually get rendered, matching computeAuxCanvas()'s native-resolution
+  // path on the PC side (see dualscreen.cpp).
+  const w = Math.round(window.innerWidth * (window.devicePixelRatio || 1));
+  const h = Math.round(window.innerHeight * (window.devicePixelRatio || 1));
+  ws.send(JSON.stringify({type: 'hello', width: w, height: h}));
+};
 ws.onclose = () => { stats.textContent = 'disconnected'; };
 ws.onerror = (e) => { stats.textContent = 'error (see console)'; console.error(e); };
 ws.onmessage = async (ev) => {
@@ -125,6 +133,11 @@ int g_clientFd = -1;
 std::thread g_acceptThread;
 std::atomic<bool> g_running{false};
 int g_listenFd = -1;
+
+std::mutex g_resizeMutex;
+bool g_resizePending = false;
+uint32_t g_pendingResizeW = 0;
+uint32_t g_pendingResizeH = 0;
 
 bool read_http_headers(int fd, std::string& out) {
     // Cap well above any real browser request's header size; anything past
@@ -310,6 +323,12 @@ void dispatch_message(std::string_view json) {
         companion::touchEvent(msg.value("action", 0), msg.value("u", 0.0f), msg.value("v", 0.0f));
     } else if (type == "pinch") {
         companion::pinchZoom(msg.value("factor", 1.0f));
+    } else if (type == "hello") {
+        // Native device pixels, already multiplied by devicePixelRatio on
+        // the JS side — see the test page's sendHello(). Bounds/sanity
+        // clamping happens on the game thread when this is consumed (see
+        // dualscreen.cpp), not here; this just hands the raw report off.
+        request_resize(msg.value("width", 0u), msg.value("height", 0u));
     } else {
         DuskLog.warn("phone spike: unknown input message type '{}'", type);
     }
@@ -566,6 +585,24 @@ bool send_binary_frame(const void* data, size_t size) {
         }
         sent += static_cast<size_t>(n);
     }
+    return true;
+}
+
+void request_resize(uint32_t width, uint32_t height) {
+    std::lock_guard lock{g_resizeMutex};
+    g_pendingResizeW = width;
+    g_pendingResizeH = height;
+    g_resizePending = true;
+}
+
+bool take_pending_resize(uint32_t& width, uint32_t& height) {
+    std::lock_guard lock{g_resizeMutex};
+    if (!g_resizePending) {
+        return false;
+    }
+    width = g_pendingResizeW;
+    height = g_pendingResizeH;
+    g_resizePending = false;
     return true;
 }
 

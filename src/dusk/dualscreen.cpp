@@ -148,10 +148,19 @@ void updateAuxWindow(bool enabled) {
 
 // Canvas geometry limits: logical canvas width clamp and the accepted
 // native aux-surface size range (fallback to 2x supersample outside it).
+// kMaxNativeDim was 2048 — too small for a lot of real hardware: a modern
+// phone's long edge commonly exceeds it (e.g. 1080x2400, 1440x3200), and so
+// does an ordinary 4K second monitor (3840x2160), meaning EITHER would have
+// silently fallen back to the lower-res supersampled canvas instead of true
+// native 1:1. Raised for both cases, not just the phone spike. Tradeoff:
+// this bounds the aux render target AND its capture/staging buffer (see
+// aux_window.cpp's ensure_capture_locked) each at up to ~4096x4096 RGBA8,
+// ~67MB apiece — fine for anything that can run this game, but worth
+// knowing before raising it further.
 constexpr u32 kMinCanvasW = 320;
 constexpr u32 kMaxCanvasW = 1024;
 constexpr u32 kMinNativeDim = 320;
-constexpr u32 kMaxNativeDim = 2048;
+constexpr u32 kMaxNativeDim = 4096;
 
 // Match the dashboard canvas to the second screen's aspect ratio (e.g. 8:7
 // on the AYN Thor) so the blit fills it edge to edge without skew, and
@@ -298,6 +307,45 @@ static void pollAndPushSpikeFrame() {
         if (s_spikeServerStarted) {
             const std::string qrPath = (data::configured_data_path() / "phone-pairing-qr.png").string();
             phone_spike::start_pairing(kSpikePort, qrPath);
+        }
+    }
+
+    // Runs BEFORE updateAuxWindow() below (called later in beginHudCapture):
+    // if this creates/resizes the aux target here, updateAuxWindow() sees
+    // is_open() already true and leaves it alone instead of recreating it
+    // at the generic default size. create()/destroy() are main/game-thread
+    // only (aux_window.hpp) — this is why the WS receive thread hands the
+    // request off via request_resize() instead of acting on it directly.
+    u32 reqW = 0;
+    u32 reqH = 0;
+    if (phone_spike::take_pending_resize(reqW, reqH)) {
+        if (reqW < kMinNativeDim) {
+            reqW = kMinNativeDim;
+        } else if (reqW > kMaxNativeDim) {
+            reqW = kMaxNativeDim;
+        }
+        if (reqH < kMinNativeDim) {
+            reqH = kMinNativeDim;
+        } else if (reqH > kMaxNativeDim) {
+            reqH = kMaxNativeDim;
+        }
+        u32 curW = 0;
+        u32 curH = 0;
+        const bool haveCur = aurora::auxwin::get_surface_size(&curW, &curH);
+        if (!haveCur || curW != reqW || curH != reqH) {
+            DuskLog.info("phone spike: resizing aux target to {}x{} (phone-reported)", reqW, reqH);
+            if (aurora::auxwin::is_open()) {
+                aurora::auxwin::destroy();
+            }
+            const aurora::auxwin::CreateInfo info{
+                .title = "Dusklight — Phone Spike",
+                .width = reqW,
+                .height = reqH,
+                .hidden = true,
+            };
+            if (!aurora::auxwin::create(info)) {
+                DuskLog.warn("phone spike: failed to recreate aux target at {}x{}", reqW, reqH);
+            }
         }
     }
 

@@ -36,4 +36,15 @@ bool has_client();
 // irrecoverably. Returns false if there is no client or the send failed.
 bool send_binary_frame(const void* data, size_t size);
 
+// Set by the WS receive thread when a "hello" message reports the phone's
+// native pixel resolution; consumed by the game thread (dualscreen.cpp),
+// never acted on directly here — aurora::auxwin::create()/destroy() are
+// documented main/game-thread-only, and the receive thread is neither.
+void request_resize(uint32_t width, uint32_t height);
+
+// True and fills width/height if a resize is pending, clearing the pending
+// flag in the same call. False (leaves width/height untouched) if nothing
+// is pending. Game thread only, by convention with the above.
+bool take_pending_resize(uint32_t& width, uint32_t& height);
+
 }  // namespace dusk::phone_spike

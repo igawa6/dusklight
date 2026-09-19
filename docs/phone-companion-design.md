@@ -1,11 +1,12 @@
 # Phone-as-Companion-Screen: Design Sketch
 
-**Status: phases 1 (capture → encode → push), 2 (QR pairing), and 3 (touch
-input) built and verified end-to-end on Linux; DPI-clamp loosening and
-gamepad passthrough not started.** This documents a feasibility sketch for
-letting a phone act as a network-connected companion ("bottom screen")
-display for desktop (Windows/Linux/macOS) dusklight, paired by QR code,
-mirroring what the AYN Thor already gets for free from having two physical
+**Status: phases 1 (capture → encode → push), 2 (QR pairing), 3 (touch
+input), and 4 (native resolution) built and verified end-to-end on Linux;
+gamepad passthrough not started, blocked on a real product question (see
+Open Questions).** This documents a feasibility sketch for letting a phone
+act as a network-connected companion ("bottom screen") display for desktop
+(Windows/Linux/macOS) dusklight, paired by QR code, mirroring what the AYN
+Thor already gets for free from having two physical
 displays on one device.
 
 Not a commitment to build this — written to have a concrete plan to work
@@ -365,6 +366,55 @@ scanning it end-to-end (verified the QR decodes correctly and the pairing
 mechanics work, but the full "point a phone camera at a screen and have it
 open a browser" loop wasn't physically exercised).
 
+## Phase 4 results (built and verified) — native resolution
+
+Two parts: loosening the shared clamp, and actually wiring up phone-reported
+resolution so the aux target resizes to match (the clamp alone doesn't get
+you real native res without something driving the surface to the right
+size in the first place).
+
+**`kMaxNativeDim` raised 2048 → 4096.** This constant isn't phone-spike-only
+— it's shared with the plain desktop second-monitor feature, so this also
+fixes an existing gap for anyone using a 4K second monitor (3840×2160 also
+exceeded the old clamp and silently fell back to the lower-res supersampled
+canvas). Tradeoff documented in the code: bounds the aux render target and
+its capture/staging buffer at up to ~4096×4096 RGBA8, ~67MB apiece.
+
+**New: dynamic resize on connect.** The test page now sends
+`{type: "hello", width, height}` right after the WS handshake — native
+device pixels (`window.innerWidth * devicePixelRatio`, already multiplied
+client-side). The WS receive thread can't act on this directly
+(`aurora::auxwin::create()`/`destroy()` are documented main/game-thread
+only), so it hands the request off via a small mutex-guarded pending-resize
+slot (`request_resize()`/`take_pending_resize()` in `phone_spike_ws.{h,cpp}`);
+`pollAndPushSpikeFrame()` on the game thread consumes it, clamps to
+`[kMinNativeDim, kMaxNativeDim]`, and — if it actually differs from the
+current surface size — destroys and recreates the hidden aux target at the
+new size, deliberately running *before* `updateAuxWindow()` in the same
+frame so that function sees `is_open()` already true and doesn't stomp the
+resize back to the generic default.
+
+**Verified with a resolution the OLD clamp would have rejected:**
+simulated an iPhone-15-Pro-Max-class report (1290×2796 — 2796 exceeds the
+old 2048 ceiling) over a real WS connection. Got back a frame at exactly
+1290×2796, genuinely native (not a supersampled fallback), showing the
+companion dashboard correctly *reflowed* for a tall narrow aspect — side
+columns narrower, tab labels truncating ("COL..."), item grid down to 3
+columns instead of 5. This is the existing `computeAuxCanvas()` /
+companion-draw resolution-independence (built for the Thor's own two
+different panel shapes) doing real work for a shape it had never
+specifically been tested against before.
+
+**Touch re-verified at the new resolution, with an honest wrinkle:** the
+first two tap attempts (aimed at the ITEMS tab by eye, reusing intuition
+from the wide 1216×896 layout) missed — the reflowed tall layout puts the
+tab bar in a narrow center strip, not full width, so the on-screen position
+is nothing like the wide layout's. Not a code bug: pixel-sampled the actual
+frame to find the tab's real bounding box, retried at the corrected
+coordinate, and it switched tabs correctly. Confirms the normalized 0–1
+coordinate convention itself is genuinely resolution/aspect-independent, as
+designed — the failure was my manual coordinate guess, not the mechanism.
+
 ## Suggested phasing
 
 1. ~~**Spike:** headless aux_window target + WS server + raw frame push to
@@ -377,7 +427,9 @@ open a browser" loop wasn't physically exercised).
 3. ~~**Add touch input** (`companion::touchEvent` wiring, since this is
    also the first time desktop gets *any* aux_window input path).~~ **Done
    — see Phase 3 results above.**
-4. **Loosen `kMaxNativeDim`, verify true native-res on a real phone.**
+4. ~~**Loosen `kMaxNativeDim`, verify true native-res on a real phone.**~~
+   **Done — see Phase 4 results above** (verified with a simulated report,
+   not yet a real phone — see "not yet tested" notes throughout).
 5. **Phone gamepad passthrough** — blocked on the open question below.
 
 ## Open questions / risks
