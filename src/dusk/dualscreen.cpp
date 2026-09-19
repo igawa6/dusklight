@@ -23,6 +23,12 @@
 
 #include "miniz.h"
 
+#if DUSK_PHONE_SPIKE
+#include "dusk/phone_spike_ws.h"
+
+#include <chrono>
+#endif
+
 namespace dusk::dualscreen {
 namespace {
 
@@ -123,6 +129,11 @@ void updateAuxWindow(bool enabled) {
             .posX = getSettings().game.dualScreenPosX.getValue(),
             .posY = getSettings().game.dualScreenPosY.getValue(),
             .displayIndex = getSettings().game.dualScreenDisplay.getValue(),
+#if DUSK_PHONE_SPIKE
+            // The spike pushes frames over the network instead of showing a
+            // local window — see docs/phone-companion-design.md phase 1.
+            .hidden = true,
+#endif
         };
         s_auxWindowFailed = !aurora::auxwin::create(info);
     } else if (!enabled) {
@@ -183,6 +194,25 @@ bool s_shotPending = false;
 // session.
 int s_shotWaited = 0;
 constexpr int kShotTimeoutFrames = 240;
+#endif
+
+#if DUSK_PHONE_SPIKE
+constexpr uint16_t kSpikePort = 8765;
+// ~15fps ceiling: the design doc's target rate for a HUD/menu stream,
+// deliberately not 60fps. Measured on real hardware this gate turned out to
+// be inert — aux_window's request_capture()/take_capture() is a single-slot,
+// one-shot-screenshot-shaped API (not built for continuous streaming), and
+// its own async GPU read-back latency (measured 55-132ms under Xvfb+llvmpipe)
+// already exceeds this interval, so a new request always fires the instant
+// the previous one is consumed regardless of this constant. Kept anyway: on
+// faster hardware where read-back completes well under 66ms, this is what
+// stops the loop from streaming faster than a HUD ever needs, wasting
+// bandwidth/battery for no visible benefit. See docs/phone-companion-design.md
+// Phase 1 results for the full writeup.
+constexpr double kSpikeIntervalMs = 66.0;
+std::chrono::steady_clock::time_point s_spikeLastRequest{};
+bool s_spikeCaptureArmed = false;
+bool s_spikeServerStarted = false;
 #endif
 
 }  // namespace
@@ -258,9 +288,56 @@ static void pollScreenshot() {
 
 #endif  // DUSK_COMPANION_CAPTURE
 
+#if DUSK_PHONE_SPIKE
+// File-local: one caller (beginHudCapture), no header declaration — same
+// shape as pollScreenshot above, continuous instead of one-shot.
+static void pollAndPushSpikeFrame() {
+    if (!s_spikeServerStarted) {
+        s_spikeServerStarted = phone_spike::start_server(kSpikePort);
+    }
+
+    if (s_spikeCaptureArmed) {
+        std::vector<u8> pixels;
+        u32 width = 0;
+        u32 height = 0;
+        if (aurora::auxwin::take_capture(pixels, &width, &height) && width != 0 && height != 0) {
+            s_spikeCaptureArmed = false;
+            if (phone_spike::has_client()) {
+                // Same level-1 tradeoff as the screenshot path above, except
+                // this runs every ~66ms instead of once — that per-frame cost
+                // is exactly what this spike exists to measure, not assume.
+                size_t pngSize = 0;
+                void* png = tdefl_write_image_to_png_file_in_memory_ex(pixels.data(), (int)width,
+                    (int)height, 4, &pngSize, 1, MZ_FALSE);
+                if (png != NULL) {
+                    phone_spike::send_binary_frame(png, pngSize);
+                    mz_free(png);
+                } else {
+                    DuskLog.warn("phone spike: PNG encode failed");
+                }
+            }
+        }
+    }
+
+    if (!s_spikeCaptureArmed && phone_spike::has_client()) {
+        const auto now = std::chrono::steady_clock::now();
+        const double elapsedMs =
+            std::chrono::duration<double, std::milli>(now - s_spikeLastRequest).count();
+        if (elapsedMs >= kSpikeIntervalMs) {
+            s_spikeLastRequest = now;
+            aurora::auxwin::request_capture();
+            s_spikeCaptureArmed = true;
+        }
+    }
+}
+#endif  // DUSK_PHONE_SPIKE
+
 void beginHudCapture() {
 #if DUSK_COMPANION_CAPTURE
     pollScreenshot();
+#endif
+#if DUSK_PHONE_SPIKE
+    pollAndPushSpikeFrame();
 #endif
     const bool wanted = getSettings().game.dualScreen.getValue() && s_displayAvailable;
     const bool enabled = isEnabled();

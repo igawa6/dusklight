@@ -1466,6 +1466,9 @@ set(DUSK_FILES
         src/dusk/companion_dmap.cpp
         src/dusk/dualscreen.h
         src/dusk/dualscreen.cpp
+        src/dusk/phone_spike_sha1.h
+        src/dusk/phone_spike_ws.h
+        src/dusk/phone_spike_ws.cpp
         #src/dusk/m_Do_ext_dusk.cpp
         src/dusk/hq_minimap.cpp
         src/dusk/imgui/ImGuiActorSpawner.cpp

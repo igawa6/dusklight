@@ -18,6 +18,16 @@
 #define DUSK_COMPANION_CAPTURE 0
 #endif
 
+// Phase-1 spike for docs/phone-companion-design.md: pushes the companion
+// frame over a raw local WebSocket to a browser tab instead of a real second
+// window, to get a real capture->encode->push latency number before building
+// the rest of that design (pairing, input, DPI). No QR, no input, one
+// hardcoded port. POSIX sockets only (see phone_spike_ws.cpp) — off by
+// default, and not meant to survive past the spike in this form.
+#ifndef DUSK_PHONE_SPIKE
+#define DUSK_PHONE_SPIKE 0
+#endif
+
 namespace dusk::dualscreen {
 
 // Renders the companion dashboard (HUD, map, inventory, ...) into an offscreen
