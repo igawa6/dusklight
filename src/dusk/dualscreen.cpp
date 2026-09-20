@@ -449,11 +449,22 @@ static void pollAndPushSpikeFrame() {
         }
     }
 
-    bool iconOwnsCaptureSlot = false;
+    bool iconWantsCaptureSlot = false;
 #if DUSK_PHONE_SPIKE_STATE
-    iconOwnsCaptureSlot = s_iconCaptureArmed;
+    // Not just "icon capture already armed" — also "an icon_request is
+    // waiting to be served". Without yielding for a genuinely pending
+    // request too, this path re-arms within the SAME tick it frees the
+    // slot (no frame-rate cap since it was removed), so
+    // pollAndServeIconRequests() — called right after this, same
+    // beginHudCapture() tick — almost never observes the slot free and a
+    // request can starve indefinitely. Found via live testing (hud_state
+    // worked, icon_request never got a response at all). Skipping exactly
+    // one re-arm here costs nothing the phone would notice (one frame late
+    // at streaming rates), and pollAndServeIconRequests() takes the slot
+    // right back over to streaming once it's done.
+    iconWantsCaptureSlot = s_iconCaptureArmed || phone_spike::has_pending_icon_request();
 #endif
-    if (!s_spikeCaptureArmed && !iconOwnsCaptureSlot && phone_spike::has_client()) {
+    if (!s_spikeCaptureArmed && !iconWantsCaptureSlot && phone_spike::has_client()) {
         aurora::auxwin::request_capture();
         s_spikeCaptureArmed = true;
     }

@@ -810,6 +810,11 @@ bool take_pending_icon_request(uint8_t& itemNo) {
     return true;
 }
 
+bool has_pending_icon_request() {
+    std::lock_guard lock{g_iconRequestMutex};
+    return !g_pendingIconRequests.empty();
+}
+
 }  // namespace dusk::phone_spike
 
 #endif  // DUSK_PHONE_SPIKE

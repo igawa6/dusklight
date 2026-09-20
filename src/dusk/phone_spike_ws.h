@@ -90,6 +90,18 @@ void request_icon(uint8_t itemNo);
 // otherwise. Game thread only, by convention with the resize pair above.
 bool take_pending_icon_request(uint8_t& itemNo);
 
+// Non-consuming: true if a request is waiting, without removing it. The
+// binary frame path (pollAndPushSpikeFrame() in dualscreen.cpp) checks this
+// before re-arming its own capture — with the frame-rate cap removed, it
+// re-arms within the same tick it frees the capture slot, so without this
+// check pollAndServeIconRequests() (called right after, same tick) almost
+// never observes the slot free and an icon_request can starve indefinitely.
+// This makes the binary path skip exactly one re-arm when something is
+// genuinely waiting, handing the now-free slot to the icon path instead —
+// found via live testing (zero icon responses ever arrived despite
+// hud_state working fine), not anticipated in the original design.
+bool has_pending_icon_request();
+
 // Gamepad passthrough (phase 5) lives in phone_spike_pad.h — a controller
 // connected to the phone, forwarded as a real second controller for the
 // main game via dolphin::PAD's existing virtual-status injection point.
