@@ -608,7 +608,16 @@ int dMeter2Draw_c::getHeartState(int i_no) {
             for (int q = 0; q < 4; q++) {
                 J2DPane* quarterPane = mpScreen->search(tag_bigh[q]);
                 if (quarterPane != NULL && quarterPane->isVisible()) {
-                    return q;  // 0=empty(0/4 remaining), 1/2/3=quarter/half/three-quarter
+                    // bigh_00 is NOT an empty heart: drawLife() sets
+                    // heart_quarters = life % 4 and then decrements heart_cnt
+                    // whenever that is 0, so the slot showing bigh_00 is
+                    // always the LAST COMPLETE heart, drawn through the
+                    // quarter-texture path instead of mpLifeTexture[][1].
+                    // Confirmed visually during live testing — a capture of
+                    // this state came back as a solid full heart. A genuinely
+                    // empty heart shows no fill layer at all and falls through
+                    // to the `return 0` below.
+                    return q == 0 ? 4 : q;
                 }
             }
         }

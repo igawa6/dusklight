@@ -209,15 +209,18 @@ public:
     // states getHeartPictures() itself can't distinguish (it just hands
     // back whichever picture happens to be visible). Returns -1 if the slot
     // isn't currently a valid/visible heart (i_no out of range, or
-    // i_no >= the current max heart count). Otherwise 0=empty (base only,
-    // no fill layer — this also covers the quarterNum=0 "bigh_00" case,
-    // life%4==0 meaning 0/4 remaining on the currently-depleting heart,
-    // which is visually/semantically empty too), 1/2/3=quarter/half/three-
-    // quarter (bigh_01/02/03 — heart_quarters, i.e. life%4, used directly
-    // as the tag_bigh index in changeTextureLife()/drawLife()), 4=full
-    // (mpLifeTexture[i_no][1] visible). Never mutates anything (no show()/
-    // hide()/changeTexture() calls) — pure inspection of state the game's
-    // own drawLife()/changeTextureLife() already set this frame.
+    // i_no >= the current max heart count). Otherwise 0=empty (no fill
+    // layer visible at all), 1/2/3=quarter/half/three-quarter (bigh_01/02/
+    // 03 — heart_quarters, i.e. life%4, used directly as the tag_bigh index
+    // in changeTextureLife()/drawLife()), 4=full — either
+    // mpLifeTexture[i_no][1] is visible, OR bigh_00 is: drawLife()
+    // decrements heart_cnt whenever heart_quarters is 0, so the slot
+    // showing bigh_00 is the last COMPLETE heart drawn through the
+    // quarter-texture path, not an empty one (confirmed visually in live
+    // testing — that capture came back a solid full heart). Never mutates
+    // anything (no show()/hide()/changeTexture() calls) — pure inspection
+    // of state the game's own drawLife()/changeTextureLife() already set
+    // this frame.
     int getHeartState(int i_no);
     f32 getLightDropAlpha();
     void dualScreenSyncPaneVisibility(bool i_dualScreenHud, bool i_mainHudRestored,

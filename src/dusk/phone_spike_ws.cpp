@@ -234,6 +234,15 @@ bool g_wantedHeartStates[5] = {};
 constexpr int kHeartProbeIntervalFrames = 30;
 int g_heartProbeCounter = 0;
 bool g_heartProbeDueThisTick = false;
+// Round-robin start index for the want-list scan. A plain 0..4 scan
+// head-of-line-blocks: whichever wanted state has the LOWEST index is
+// retried forever, and the states behind it are never probed at all while
+// it stays unavailable. That isn't hypothetical — state 0 (a genuinely
+// empty heart container) simply does not exist on screen while the player
+// is at full health, so a client asking for all 5 states got none of them,
+// not four of them. Rotating the scan start past each state taken means one
+// permanently-unavailable state costs a probe slot, not the whole feature.
+uint8_t g_heartProbeCursor = 0;
 
 bool read_http_headers(int fd, std::string& out) {
     // Cap well above any real browser request's header size; anything past
@@ -886,9 +895,12 @@ bool take_next_wanted_heart_state(uint8_t& state) {
     if (!g_heartProbeDueThisTick) {
         return false;
     }
-    for (uint8_t i = 0; i < 5; i++) {
+    // Rotating scan, not 0..4 — see g_heartProbeCursor.
+    for (uint8_t n = 0; n < 5; n++) {
+        const uint8_t i = (uint8_t)((g_heartProbeCursor + n) % 5);
         if (g_wantedHeartStates[i]) {
             state = i;
+            g_heartProbeCursor = (uint8_t)((i + 1) % 5);
             return true;
         }
     }
