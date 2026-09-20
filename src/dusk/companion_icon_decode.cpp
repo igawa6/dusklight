@@ -231,13 +231,12 @@ bool decodeItemIconRgba(
     return true;
 }
 
-bool decodeMapIconRgba(
-    uint8_t iconKind, std::vector<uint8_t>& out, uint32_t& outWidth, uint32_t& outHeight) {
-    const ResTIMG* timg = dmapIconTimg(iconKind);
-    if (timg == NULL) {
-        return false;
-    }
-    aurora::gfx::ConvertedTexture decoded = decodeTimg(timg);
+// Flattens a decoded texture over the dashboard background and forces it
+// opaque. Every FULL-COLOUR icon kind travels this way, because the icons the
+// phone already receives are opaque for the same reason and keeping that
+// uniform means the client needs no per-kind special case.
+bool flattenOpaque(const aurora::gfx::ConvertedTexture& decoded, std::vector<uint8_t>& out,
+    uint32_t& outWidth, uint32_t& outHeight) {
     if (decoded.data.empty() || decoded.width == 0 || decoded.height == 0) {
         return false;
     }
@@ -246,8 +245,6 @@ bool decodeMapIconRgba(
     out.assign(static_cast<size_t>(width) * height * 4, 0);
     const uint8_t* src = static_cast<const uint8_t*>(decoded.data.data());
     for (size_t i = 0; i < out.size(); i += 4) {
-        // Straight over the dashboard background, then opaque — same
-        // reasoning as the item path.
         uint8_t* dst = out.data() + i;
         dst[0] = COL_BG.r;
         dst[1] = COL_BG.g;
@@ -259,6 +256,49 @@ bool decodeMapIconRgba(
     }
     outWidth = width;
     outHeight = height;
+    return true;
+}
+
+bool decodeMapIconRgba(
+    uint8_t iconKind, std::vector<uint8_t>& out, uint32_t& outWidth, uint32_t& outHeight) {
+    return flattenOpaque(decodeTimg(dmapIconTimg(iconKind)), out, outWidth, outHeight);
+}
+
+bool decodeCollectIconRgba(
+    int slot, std::vector<uint8_t>& out, uint32_t& outWidth, uint32_t& outHeight) {
+    return flattenOpaque(decodeTimg(collectIconTimg(slot)), out, outWidth, outHeight);
+}
+
+bool decodeRawItemIconRgba(
+    int resIdx, std::vector<uint8_t>& out, uint32_t& outWidth, uint32_t& outHeight) {
+    // Slot 0 is the only raw cache slot and the dashboard uses it too (the
+    // quiver tier). Sharing it is safe rather than merely tolerable —
+    // rawArchiveIcon() re-reads whenever the index differs — and the cost is
+    // nil in practice because the phone fetches each identity once per
+    // session and caches it client-side.
+    return flattenOpaque(decodeTimg(rawArchiveIcon(0, resIdx)), out, outWidth, outHeight);
+}
+
+bool decodeDecoRgba(int slot, std::vector<uint8_t>& out, uint32_t& outWidth, uint32_t& outHeight) {
+    // Deliberately NOT flattened, unlike every other kind. These are
+    // INTENSITY textures that the dashboard tints per call site — the same
+    // plate is drawn selected and unselected, the same rule at three
+    // different white points. Pre-tinting here would turn six textures into a
+    // dozen and still be wrong somewhere, so the raw texel values go over the
+    // wire and the phone applies lerp(black, white, texel) itself.
+    //
+    // That makes this the one kind carrying real transparency. aurora decodes
+    // an intensity format to R=G=B=intensity with alpha in A, which is
+    // exactly the pair the tint formula consumes.
+    aurora::gfx::ConvertedTexture decoded = decodeTimg(decoTimg(slot));
+    if (decoded.data.empty() || decoded.width == 0 || decoded.height == 0) {
+        return false;
+    }
+    const uint8_t* src = static_cast<const uint8_t*>(decoded.data.data());
+    const size_t bytes = static_cast<size_t>(decoded.width) * decoded.height * 4;
+    out.assign(src, src + bytes);
+    outWidth = decoded.width;
+    outHeight = decoded.height;
     return true;
 }
 

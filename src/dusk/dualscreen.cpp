@@ -1179,13 +1179,13 @@ static void pollAndServeIconRequests() {
     // frame stream, so every icon fetched the old way cost the stream a
     // frame, which is exactly the hitch that showed up whenever art loaded.
     // Served before anything else because it costs nothing to serve.
-    auto sendDecodedIcon = [](const char* kind, u8 id, const std::vector<u8>& rgba, u32 w,
+    auto sendDecodedIcon = [](const char* kind, int32_t id, const std::vector<u8>& rgba, u32 w,
                                u32 h) {
         size_t pngSize = 0;
         void* png = tdefl_write_image_to_png_file_in_memory_ex(
             rgba.data(), (int)w, (int)h, 4, &pngSize, 1, MZ_FALSE);
         if (png == NULL) {
-            DuskLog.warn("phone spike: PNG encode failed for {} {}", kind, (int)id);
+            DuskLog.warn("phone spike: PNG encode failed for {} {}", kind, id);
             return;
         }
         const u8* pngBytes = static_cast<const u8*>(png);
@@ -1224,6 +1224,40 @@ static void pollAndServeIconRequests() {
             sendDecodedIcon("map_icon", mapIconKind, rgba, iconW, iconH);
         } else {
             DuskLog.warn("phone spike: map icon {} could not be decoded", (int)mapIconKind);
+        }
+        return;
+    }
+    u8 artKind = 0;
+    int32_t artId = 0;
+    if (phone_spike::take_pending_art_request(artKind, artId)) {
+        // Collection-page art. All three kinds are plain archive buffers
+        // already in CPU memory, so all three decode without touching the
+        // capture slot the video stream shares.
+        std::vector<u8> rgba;
+        u32 artW = 0;
+        u32 artH = 0;
+        bool ok = false;
+        const char* kindName = "art";
+        switch (artKind) {
+        case phone_spike::ART_CLCT:
+            kindName = "clct";
+            ok = companion::decodeCollectIconRgba((int)artId, rgba, artW, artH);
+            break;
+        case phone_spike::ART_RAW:
+            kindName = "raw";
+            ok = companion::decodeRawItemIconRgba((int)artId, rgba, artW, artH);
+            break;
+        case phone_spike::ART_DECO:
+            kindName = "deco";
+            ok = companion::decodeDecoRgba((int)artId, rgba, artW, artH);
+            break;
+        default:
+            break;
+        }
+        if (ok && artW != 0 && artH != 0) {
+            sendDecodedIcon(kindName, artId, rgba, artW, artH);
+        } else {
+            DuskLog.warn("phone spike: {} {} could not be decoded", kindName, artId);
         }
         return;
     }

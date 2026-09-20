@@ -213,6 +213,17 @@ void request_action(const CompanionAction& action);
 // is queued. Game thread only, by convention with the pairs above.
 bool take_pending_action(CompanionAction& out);
 
+// Art kinds the collection page needs, carried on the same icon_request
+// channel. ART_RAW's id is an ItemIcon archive resource INDEX rather than an
+// itemNo, which is why the id is signed and wider than the other kinds'.
+enum ArtKind : uint8_t {
+    ART_CLCT = 0,
+    ART_RAW = 1,
+    ART_DECO = 2,
+};
+void request_art(uint8_t artKind, int32_t id);
+bool take_pending_art_request(uint8_t& artKind, int32_t& id);
+
 void request_map_icon(uint8_t kind);
 bool take_pending_map_icon_request(uint8_t& kind);
 

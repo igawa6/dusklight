@@ -61,4 +61,18 @@ bool decodeItemIconRgba(uint8_t itemNo, std::vector<uint8_t>& out, uint32_t& out
 bool decodeMapIconRgba(uint8_t iconKind, std::vector<uint8_t>& out, uint32_t& outWidth,
     uint32_t& outHeight);
 
+// Collection-page art (clct archive) and raw ItemIcon-archive resources by
+// index. Both are already copied into owned CPU buffers, so both decode the
+// same way item and map icons do, and neither touches a GPU capture slot.
+bool decodeCollectIconRgba(int slot, std::vector<uint8_t>& out, uint32_t& outWidth,
+    uint32_t& outHeight);
+bool decodeRawItemIconRgba(int resIdx, std::vector<uint8_t>& out, uint32_t& outWidth,
+    uint32_t& outHeight);
+
+// Pause-menu plate art (DECO_* slot). Unlike every other kind this is NOT
+// flattened opaque: these are intensity textures the dashboard tints
+// differently at each call site, so the raw texel values travel and the phone
+// applies the tint. This is the one kind that carries real transparency.
+bool decodeDecoRgba(int slot, std::vector<uint8_t>& out, uint32_t& outWidth, uint32_t& outHeight);
+
 }  // namespace dusk::companion

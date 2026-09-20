@@ -247,6 +247,19 @@ std::atomic<uint32_t> g_clientOwnedPages{0};
 // a small cap is plenty.
 std::deque<uint8_t> g_pendingMapIconRequests;
 
+// Art kinds added for the collection page, in one queue keyed by kind rather
+// than a third and fourth and fifth deque. The item and map-icon queues above
+// are deliberately left alone: they are verified working, and folding them in
+// here is a cleanup worth doing on its own rather than riding along with new
+// functionality.
+std::deque<std::pair<uint8_t, int32_t>> g_pendingArtRequests;
+// Deliberately far larger than the item queue's 16. A page does not trickle
+// its art in: the collection page asks for six plates, thirteen clct icons
+// and a couple of raw archive entries the moment it first needs to draw, and
+// at 16 the oldest requests were silently dropped by overflow. Found while
+// testing, where exactly the first five of twenty-one requests vanished.
+constexpr size_t kMaxPendingArtRequests = 64;
+
 // Actions the phone has decided on (see CompanionAction in the header). Its
 // own mutex, not g_iconRequestMutex: the icon queues are drained by the
 // capture state machine inside the painter's tick, this one by
@@ -503,6 +516,12 @@ void dispatch_parsed_message(const nlohmann::json& msg) {
             request_icon(static_cast<uint8_t>(msg.value("id", 0)));
         } else if (kind == "heart") {
             request_heart_icon(static_cast<uint8_t>(msg.value("id", 0)));
+        } else if (kind == "clct") {
+            request_art(ART_CLCT, msg.value("id", 0));
+        } else if (kind == "raw") {
+            request_art(ART_RAW, msg.value("id", 0));
+        } else if (kind == "deco") {
+            request_art(ART_DECO, msg.value("id", 0));
         } else if (kind == "map_icon") {
             request_map_icon(static_cast<uint8_t>(msg.value("id", 0)));
         } else if (kind == "map_base") {
@@ -1052,7 +1071,8 @@ bool take_pending_icon_request(uint8_t& itemNo) {
 
 bool has_pending_icon_request() {
     std::lock_guard lock{g_iconRequestMutex};
-    if (!g_pendingIconRequests.empty() || !g_pendingMapIconRequests.empty()) {
+    if (!g_pendingIconRequests.empty() || !g_pendingMapIconRequests.empty() ||
+        !g_pendingArtRequests.empty()) {
         return true;
     }
     // Must also check the heart want-list (Phase 3), not just the item
@@ -1100,6 +1120,25 @@ void set_client_owned_pages(uint32_t mask) {
 
 uint32_t client_owned_pages() {
     return g_clientOwnedPages.load();
+}
+
+void request_art(uint8_t artKind, int32_t id) {
+    std::lock_guard lock{g_iconRequestMutex};
+    if (g_pendingArtRequests.size() >= kMaxPendingArtRequests) {
+        g_pendingArtRequests.pop_front();
+    }
+    g_pendingArtRequests.push_back({artKind, id});
+}
+
+bool take_pending_art_request(uint8_t& artKind, int32_t& id) {
+    std::lock_guard lock{g_iconRequestMutex};
+    if (g_pendingArtRequests.empty()) {
+        return false;
+    }
+    artKind = g_pendingArtRequests.front().first;
+    id = g_pendingArtRequests.front().second;
+    g_pendingArtRequests.pop_front();
+    return true;
 }
 
 void request_map_icon(uint8_t kind) {
