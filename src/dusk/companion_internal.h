@@ -730,6 +730,11 @@ extern f32 s_mapResetRect[4];
 // The render target is DMAP_TEX_SIZE logical texels square — all world <->
 // canvas math uses this, NOT the timg's (resolution-boosted) pixel size.
 constexpr int DMAP_TEX_SIZE = 448;
+// Fraction of that square the dungeon's own extents are fitted into at zoom
+// 1, leaving a margin so edge rooms aren't flush against the border. Paired
+// with DMAP_TEX_SIZE in every world<->texture conversion, so it lives here
+// beside it rather than staying private to companion_dmap.cpp.
+constexpr f32 DMAP_FIT = 0.92f;
 const ResTIMG* dmapTimg();
 // Bumped whenever the dungeon renderer (and its ResTIMG) is destroyed, so
 // the page's blit cache can't key on a stale/reallocated texture pointer.

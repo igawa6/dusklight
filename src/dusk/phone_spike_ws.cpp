@@ -180,6 +180,12 @@ int g_listenFd = -1;
 // visibly stall the game thread if done synchronously there).
 std::mutex g_pendingFrameMutex;
 std::condition_variable g_pendingFrameCv;
+// Small JSON state messages waiting to go out, sharing the frame sender's
+// thread and mutex. They must NOT be sent straight from the game thread the
+// way the rare hud_state messages are: map_player is sent every frame the
+// player moves, and a blocking send() at that rate is precisely what made
+// the binary frame path stall the game before it was moved off-thread.
+std::deque<std::string> g_pendingTexts;
 std::vector<uint8_t> g_pendingFramePixels;
 uint32_t g_pendingFrameWidth = 0;
 uint32_t g_pendingFrameHeight = 0;
@@ -777,18 +783,39 @@ bool send_text_frame(std::string_view json) {
 void sender_loop() {
     for (;;) {
         std::vector<uint8_t> pixels;
+        std::deque<std::string> texts;
         uint32_t width = 0;
         uint32_t height = 0;
+        bool haveFrame = false;
         {
             std::unique_lock lock{g_pendingFrameMutex};
-            g_pendingFrameCv.wait(lock, [] { return g_pendingFrameReady || !g_running.load(); });
+            g_pendingFrameCv.wait(lock, [] {
+                return g_pendingFrameReady || !g_pendingTexts.empty() || !g_running.load();
+            });
             if (!g_running.load()) {
                 return;
             }
-            pixels = std::move(g_pendingFramePixels);
-            width = g_pendingFrameWidth;
-            height = g_pendingFrameHeight;
-            g_pendingFrameReady = false;
+            texts.swap(g_pendingTexts);
+            haveFrame = g_pendingFrameReady;
+            if (haveFrame) {
+                pixels = std::move(g_pendingFramePixels);
+                width = g_pendingFrameWidth;
+                height = g_pendingFrameHeight;
+                g_pendingFrameReady = false;
+            }
+        }
+        // Texts first, and before the encode below: these are the tiny,
+        // latency-critical state messages (map_player is sent every frame the
+        // player moves), while a queued frame costs a multi-millisecond PNG
+        // encode. Letting an encode run ahead of them would add exactly the
+        // lag this whole state path exists to remove.
+        for (const std::string& text : texts) {
+            if (!send_text_frame(text)) {
+                break;  // client gone; send_text_frame already tore it down
+            }
+        }
+        if (!haveFrame) {
+            continue;
         }
         // Level 1, not 6: same tradeoff dualscreen.cpp's screenshot path
         // documents — level 6 costs several hundred extra ms per encode,
@@ -803,6 +830,20 @@ void sender_loop() {
         send_binary_frame(png, pngSize);
         mz_free(png);
     }
+}
+
+void queue_text_frame(std::string json) {
+    std::lock_guard lock{g_pendingFrameMutex};
+    // Bounded, and drops the OLDEST on overflow. These carry live state
+    // (player position, map layers) where the newest message supersedes the
+    // older ones, so if the sender ever falls behind, stale positions are
+    // exactly what should be thrown away.
+    constexpr size_t kMaxPendingTexts = 32;
+    if (g_pendingTexts.size() >= kMaxPendingTexts) {
+        g_pendingTexts.pop_front();
+    }
+    g_pendingTexts.push_back(std::move(json));
+    g_pendingFrameCv.notify_one();
 }
 
 void queue_raw_frame(std::vector<uint8_t> pixels, uint32_t width, uint32_t height) {

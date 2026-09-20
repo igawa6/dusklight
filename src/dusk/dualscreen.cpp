@@ -33,6 +33,7 @@
 
 #if DUSK_PHONE_SPIKE_STATE
 #include "dusk/companion_state.h"
+#include "dusk/companion_map_state.h"
 #include "dusk/utilities.hpp"
 
 #include <nlohmann/json.hpp>
@@ -594,6 +595,98 @@ static void pollAndPushSpikeState() {
     phone_spike::send_text_frame(j.dump());
 }
 
+// Phase 4: the dungeon map, split by update frequency. Unlike
+// pollAndPushSpikeState() above, the player half of this genuinely changes
+// every frame the player moves, so it goes out through the background
+// sender (queue_text_frame) rather than inline — a blocking send() at frame
+// rate on the game thread is the exact mistake the binary path already made
+// once. See companion_map_state.h for why the map decomposes this way and
+// why the base image is framed independently of the dashboard's own
+// following view.
+static void pollAndPushMapState() {
+    if (!phone_spike::has_client()) {
+        return;
+    }
+    static companion::MapState s_lastMap;
+    static bool s_haveLastMap = false;
+
+    companion::MapState state;
+    if (!companion::gatherMapState(state)) {
+        // Gone inactive (left the dungeon, map page closed, renderer torn
+        // down): tell the phone once so it drops the layer, rather than
+        // leaving it drawing a stale map forever.
+        if (s_haveLastMap && s_lastMap.active) {
+            s_lastMap = companion::MapState{};
+            nlohmann::json off;
+            off["type"] = "map_state";
+            off["active"] = false;
+            phone_spike::queue_text_frame(off.dump());
+        }
+        s_haveLastMap = true;
+        return;
+    }
+
+    // Quantize the player position before diffing, for the same reason the
+    // gauges are quantized: these are floats derived from an interpolated
+    // position, so they jitter in the low bits even when the player is
+    // standing still, and an exact compare would send every single frame
+    // forever. A 1/4096 step is far below one pixel of any phone-sized map.
+    auto quantU = [](f32 value) { return (int)(value * 4096.0f + 0.5f); };
+    const bool playerMoved = !s_haveLastMap ||
+        quantU(state.playerU) != quantU(s_lastMap.playerU) ||
+        quantU(state.playerV) != quantU(s_lastMap.playerV) ||
+        (int)(state.playerHeadingDeg * 4.0f) != (int)(s_lastMap.playerHeadingDeg * 4.0f);
+    const bool structureChanged = !s_haveLastMap || !s_lastMap.active ||
+        state.floor != s_lastMap.floor || state.baseGen != s_lastMap.baseGen ||
+        state.playerFloor != s_lastMap.playerFloor ||
+        state.playerFloorKnown != s_lastMap.playerFloorKnown;
+    bool iconsChanged = !s_haveLastMap || state.iconCount != s_lastMap.iconCount;
+    for (int i = 0; !iconsChanged && i < state.iconCount; i++) {
+        const companion::MapIconState& a = state.icons[i];
+        const companion::MapIconState& b = s_lastMap.icons[i];
+        iconsChanged = a.kind != b.kind || quantU(a.u) != quantU(b.u) ||
+            quantU(a.v) != quantU(b.v) || a.rotDeg != b.rotDeg;
+    }
+    if (!playerMoved && !structureChanged && !iconsChanged) {
+        return;
+    }
+    s_lastMap = state;
+    s_haveLastMap = true;
+
+    nlohmann::json j;
+    j["type"] = "map_state";
+    j["active"] = true;
+    j["floor"] = state.floor;
+    j["playerFloor"] = state.playerFloorKnown ? nlohmann::json(state.playerFloor)
+                                              : nlohmann::json(nullptr);
+    j["baseGen"] = state.baseGen;
+    j["player"] = {
+        {"u", state.playerU},
+        {"v", state.playerV},
+        {"heading", state.playerHeadingDeg},
+    };
+    // The icon list rides along only when it actually changed. Several icons
+    // track carried objects (a light ball, an iron ball, a pushed statue)
+    // and move at actor rate, so this is not always the rare case the plan
+    // assumed — but it is still far cheaper than a re-rendered image, and
+    // omitting it entirely on a pure-movement frame keeps the common case
+    // to three numbers.
+    if (iconsChanged || structureChanged) {
+        nlohmann::json icons = nlohmann::json::array();
+        for (int i = 0; i < state.iconCount; i++) {
+            const companion::MapIconState& icon = state.icons[i];
+            icons.push_back({
+                {"kind", icon.kind},
+                {"u", icon.u},
+                {"v", icon.v},
+                {"rot", icon.rotDeg},
+            });
+        }
+        j["icons"] = std::move(icons);
+    }
+    phone_spike::queue_text_frame(j.dump());
+}
+
 // Phase 2/3 of the state-streaming path: serves one icon_request (item or
 // heart) at a time, across as many frames as its capture cycle needs (arm
 // this tick, drain a frame or more later once take_capture() succeeds) —
@@ -787,6 +880,7 @@ void beginHudCapture() {
 #endif
 #if DUSK_PHONE_SPIKE_STATE
     pollAndPushSpikeState();
+    pollAndPushMapState();
     pollAndServeIconRequests();
 #endif
     const bool wanted = getSettings().game.dualScreen.getValue() && s_displayAvailable;

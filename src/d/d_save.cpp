@@ -1279,20 +1279,53 @@ void dSv_memory_c::init() {
     mBit.init();
 }
 
+#if TARGET_PC
+// Bumped on every change to any stage's visited-room bits. The phone
+// companion streams the dungeon map as a rarely-changing base image plus
+// frequently-changing overlays, and a room becoming (or ceasing to be)
+// visited is one of the few things that genuinely changes that base image:
+// it alters room colours and line widths and gates whether a room is drawn
+// at all. Diffing the bits themselves would mean snapshotting every stage's
+// 8 bytes every frame; a counter at the mutation sites costs nothing.
+//
+// Deliberately covers all three mutators, not just onVisitedRoom: rooms are
+// genuinely un-visited again by the room-bit switch actor (d_a_tag_rmbit_sw
+// calls offVisitedRoom), and init() wipes them on a new file. It still
+// cannot see the two bulk memcpy paths that rewrite an entire dSv_save_c
+// wholesale (save-file load, and the dev state-share import) — those bypass
+// every accessor. The companion tolerates that because those also tear the
+// map renderer down, which bumps a separate generation source it already
+// mixes in.
+static u32 s_visitedRoomGen = 0;
+
+u32 dSv_visitedRoomGeneration() {
+    return s_visitedRoomGen;
+}
+#endif
+
 void dSv_memory2_c::init() {
     for (int i = 0; i < 2; i++) {
         mVisitedRoom[i] = 0;
     }
+#if TARGET_PC
+    s_visitedRoomGen++;
+#endif
 }
 
 void dSv_memory2_c::onVisitedRoom(int i_no) {
     JUT_ASSERT(3279, 0 <= i_no && i_no < 64);
     mVisitedRoom[i_no >> 5] |= 1 << (i_no & 0x1F);
+#if TARGET_PC
+    s_visitedRoomGen++;
+#endif
 }
 
 void dSv_memory2_c::offVisitedRoom(int i_no) {
     JUT_ASSERT(3293, 0 <= i_no && i_no < 64);
     mVisitedRoom[i_no >> 5] &= ~u32(1 << (i_no & 0x1F));
+#if TARGET_PC
+    s_visitedRoomGen++;
+#endif
 }
 
 BOOL dSv_memory2_c::isVisitedRoom(int i_no) {

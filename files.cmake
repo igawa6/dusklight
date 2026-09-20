@@ -1466,6 +1466,8 @@ set(DUSK_FILES
         src/dusk/companion_dmap.cpp
         src/dusk/companion_state.h
         src/dusk/companion_state.cpp
+        src/dusk/companion_map_state.h
+        src/dusk/companion_map_state.cpp
         src/dusk/dualscreen.h
         src/dusk/dualscreen.cpp
         src/dusk/phone_spike_sha1.h

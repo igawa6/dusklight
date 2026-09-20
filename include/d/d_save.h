@@ -737,6 +737,12 @@ public:
 
 STATIC_ASSERT(sizeof(dSv_memory_c) == 0x20);
 
+#if TARGET_PC
+// Generation counter over the visited-room bits — see its definition in
+// d_save.cpp for exactly what it covers and what it deliberately cannot.
+u32 dSv_visitedRoomGeneration();
+#endif
+
 class dSv_memory2_c {
 public:
     dSv_memory2_c() { this->init(); }

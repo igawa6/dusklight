@@ -27,10 +27,10 @@ namespace {
 
 #include "companion_dmap_icons.inc"
 
-// Fraction of the target left as margin around the whole-floor fit. The
-// logical target size is DMAP_TEX_SIZE (the PC render-size boost scales the
-// real pixel resolution on top, exactly as for the minimap texture).
-constexpr f32 DMAP_FIT = 0.92f;
+// DMAP_FIT (the whole-floor fit margin) moved to companion_internal.h,
+// beside DMAP_TEX_SIZE — the phone-companion map state needs the same
+// constant to publish positions normalized to that same framing, and the
+// two are only ever meaningful together.
 
 dMenu_DmapMap_c* s_inst;
 mDoDvdThd_mountArchive_c* s_mount;

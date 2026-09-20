@@ -64,6 +64,21 @@ bool send_text_frame(std::string_view json);
 // growing backlog of stale ones if the sender falls behind.
 void queue_raw_frame(std::vector<uint8_t> pixels, uint32_t width, uint32_t height);
 
+// Queues one JSON text message onto that same background sender, instead of
+// sending it inline the way send_text_frame() does. Use this for anything
+// sent at frame rate — map_player goes out every frame the player moves, and
+// a blocking send() at that rate on the game thread is exactly what made the
+// binary frame path stall before it was moved off-thread. The rare,
+// change-only hud_state messages still send inline; that stays fine
+// precisely because they are rare.
+//
+// The queue is bounded and drops the OLDEST message on overflow: these carry
+// live state where a newer message supersedes an older one, so stale
+// positions are the right thing to discard if the sender falls behind.
+// Queued texts go out ahead of any queued frame, since a frame costs a
+// multi-millisecond PNG encode first.
+void queue_text_frame(std::string json);
+
 // Set by the WS receive thread when a "hello" message reports the phone's
 // native pixel resolution; consumed by the game thread (dualscreen.cpp),
 // never acted on directly here — aurora::auxwin::create()/destroy() are
