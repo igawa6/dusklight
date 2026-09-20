@@ -629,15 +629,13 @@ bool has_client() {
     return g_clientFd >= 0;
 }
 
-bool send_binary_frame(const void* data, size_t size) {
-    std::lock_guard lock{g_clientMutex};
-    if (g_clientFd < 0) {
-        return false;
-    }
-
-    uint8_t header[10];
-    size_t headerLen = 2;
-    header[0] = 0x82;  // FIN=1, opcode=2 (binary)
+// Shared by send_binary_frame/send_text_frame: RFC 6455 length-prefix
+// encoding is identical for both opcodes, only header[0]'s opcode nibble
+// differs. Server-to-client frames MUST NOT be masked (RFC 6455 §5.1) —
+// header[1]'s top bit stays 0, no masking key follows, for either.
+static void encode_frame_header(uint8_t opcode, size_t size, uint8_t (&header)[10], size_t& headerLen) {
+    headerLen = 2;
+    header[0] = static_cast<uint8_t>(0x80 | opcode);  // FIN=1
     if (size <= 125) {
         header[1] = static_cast<uint8_t>(size);
     } else if (size <= 0xFFFF) {
@@ -652,8 +650,14 @@ bool send_binary_frame(const void* data, size_t size) {
         }
         headerLen = 10;
     }
-    // Server-to-client frames MUST NOT be masked (RFC 6455 §5.1) — header[1]'s
-    // top bit stays 0, no masking key follows.
+}
+
+// Shared by send_binary_frame/send_text_frame: caller already holds
+// g_clientMutex and has validated g_clientFd >= 0.
+static bool send_frame_locked(uint8_t opcode, const void* data, size_t size) {
+    uint8_t header[10];
+    size_t headerLen = 0;
+    encode_frame_header(opcode, size, header, headerLen);
 
     const ssize_t hn = send(g_clientFd, header, headerLen, 0);
     if (hn != static_cast<ssize_t>(headerLen)) {
@@ -678,6 +682,22 @@ bool send_binary_frame(const void* data, size_t size) {
         sent += static_cast<size_t>(n);
     }
     return true;
+}
+
+bool send_binary_frame(const void* data, size_t size) {
+    std::lock_guard lock{g_clientMutex};
+    if (g_clientFd < 0) {
+        return false;
+    }
+    return send_frame_locked(0x2, data, size);  // opcode 2 = binary
+}
+
+bool send_text_frame(std::string_view json) {
+    std::lock_guard lock{g_clientMutex};
+    if (g_clientFd < 0) {
+        return false;
+    }
+    return send_frame_locked(0x1, json.data(), json.size());  // opcode 1 = text
 }
 
 // Background sender thread's body: blocks on new raw captures, does the

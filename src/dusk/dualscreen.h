@@ -28,6 +28,19 @@
 #define DUSK_PHONE_SPIKE 0
 #endif
 
+// Phase-6+ addition to the same spike: streams small state updates (hearts,
+// rupees, keys, equipped items, map layers) instead of pushing whole
+// rendered frames for values that change rarely — see
+// docs/phone-companion-design.md and the state-streaming design plan. A
+// sub-flag of DUSK_PHONE_SPIKE: meaningless without it, so it can never end
+// up effectively on while the base spike is off, whatever CMake is passed.
+#ifndef DUSK_PHONE_SPIKE_STATE
+#define DUSK_PHONE_SPIKE_STATE 0
+#elif !DUSK_PHONE_SPIKE
+#undef DUSK_PHONE_SPIKE_STATE
+#define DUSK_PHONE_SPIKE_STATE 0
+#endif
+
 namespace dusk::dualscreen {
 
 // Renders the companion dashboard (HUD, map, inventory, ...) into an offscreen

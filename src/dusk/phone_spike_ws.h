@@ -18,6 +18,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 #include <vector>
 
 namespace dusk::phone_spike {
@@ -43,6 +44,14 @@ bool has_client();
 // would desync the client's WS byte stream irrecoverably. Returns false if
 // there is no client or the send failed.
 bool send_binary_frame(const void* data, size_t size);
+
+// Push one text WS frame (a JSON state message — see companion_state.h).
+// Same framing/locking/error-handling as send_binary_frame (opcode 1 vs 2),
+// but intended to be called DIRECTLY from the game thread: these messages
+// are tiny and sent only on actual state changes, unlike the per-frame
+// binary path, so a direct blocking send is an intentional v1 choice, not
+// an oversight — revisit if it's ever measured to stall the game thread.
+bool send_text_frame(std::string_view json);
 
 // Game-thread entry point: hands a raw RGBA8 capture off to the background
 // sender thread (PNG encode included) and returns immediately, touching

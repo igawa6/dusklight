@@ -31,6 +31,12 @@
 #include <chrono>
 #endif
 
+#if DUSK_PHONE_SPIKE_STATE
+#include "dusk/companion_state.h"
+
+#include <nlohmann/json.hpp>
+#endif
+
 namespace dusk::dualscreen {
 namespace {
 
@@ -412,12 +418,67 @@ static void pollAndPushSpikeFrame() {
 }
 #endif  // DUSK_PHONE_SPIKE
 
+#if DUSK_PHONE_SPIKE_STATE
+// Phase-1 of the state-streaming fast path (see
+// docs/phone-companion-design.md and the state-streaming design plan):
+// sends small hud_state diffs instead of pushing whole rendered frames for
+// values that change rarely. File-local: one caller (beginHudCapture), no
+// header declaration — same shape as pollAndPushSpikeFrame above, but a
+// clearly separate, additive path: it never touches capture/encode/send,
+// only reads companion::gatherHudState() and diffs it.
+static void pollAndPushSpikeState() {
+    if (!phone_spike::has_client()) {
+        return;
+    }
+    companion::HudState state;
+    if (!companion::gatherHudState(state)) {
+        return;
+    }
+    // Sent directly/synchronously on the game thread, NOT through the
+    // background sender thread queue_raw_frame() uses for binary frames:
+    // these messages are tiny (well under 200 bytes) and sent only on
+    // actual change (rare relative to 15-60fps frame pushes), so a single
+    // blocking send_text_frame() call — already bounded by the existing
+    // 2-second SO_SNDTIMEO in phone_spike_ws.cpp — is very unlikely to be
+    // felt. If live testing ever shows otherwise, move this off-thread too,
+    // mirroring the lesson already learned for the binary path.
+    static companion::HudState s_lastSent;
+    static bool s_haveLastSent = false;
+    if (s_haveLastSent && state == s_lastSent) {
+        return;
+    }
+    s_lastSent = state;
+    s_haveLastSent = true;
+
+    auto slotOrNull = [](u8 itemNo) -> nlohmann::json {
+        return itemNo == 0xFF ? nlohmann::json(nullptr) : nlohmann::json(itemNo);
+    };
+    nlohmann::json j;
+    j["type"] = "hud_state";
+    j["life"] = state.life;
+    j["maxLife"] = state.maxLife;
+    j["rupees"] = state.rupees;
+    j["maxRupees"] = state.maxRupees;
+    j["keys"] = state.keys;
+    j["equip"] = {
+        {"x", slotOrNull(state.equipX)},
+        {"y", slotOrNull(state.equipY)},
+        {"slot1", slotOrNull(state.equipSlot1)},
+        {"slot2", slotOrNull(state.equipSlot2)},
+    };
+    phone_spike::send_text_frame(j.dump());
+}
+#endif  // DUSK_PHONE_SPIKE_STATE
+
 void beginHudCapture() {
 #if DUSK_COMPANION_CAPTURE
     pollScreenshot();
 #endif
 #if DUSK_PHONE_SPIKE
     pollAndPushSpikeFrame();
+#endif
+#if DUSK_PHONE_SPIKE_STATE
+    pollAndPushSpikeState();
 #endif
     const bool wanted = getSettings().game.dualScreen.getValue() && s_displayAvailable;
     const bool enabled = isEnabled();

@@ -94,6 +94,7 @@ option(DUSK_GFX_DEBUG_GROUPS "Report debug groups to the native graphics API" ${
 option(DUSK_ENABLE_CODE_MODS "Enable code mods" ON)
 option(DUSK_ENABLE_OPUS "Enable loading Opus audio files for mods" OFF)
 option(DUSK_PHONE_SPIKE "Build the phone-companion-display network spike (see docs/phone-companion-design.md); throwaway, off by default" OFF)
+option(DUSK_PHONE_SPIKE_STATE "Add the phone-companion state-streaming fast path (hearts/rupees/keys/items as small diffs instead of rendered frames); requires DUSK_PHONE_SPIKE, off by default" OFF)
 
 
 set(DUSK_HAS_FUNCHOOK OFF)
@@ -300,6 +301,9 @@ if (DUSK_ENABLE_OPUS)
 endif ()
 if (DUSK_PHONE_SPIKE)
     list(APPEND GAME_COMPILE_DEFS DUSK_PHONE_SPIKE=1)
+endif ()
+if (DUSK_PHONE_SPIKE_STATE)
+    list(APPEND GAME_COMPILE_DEFS DUSK_PHONE_SPIKE_STATE=1)
 endif ()
 
 if (WIN32)
