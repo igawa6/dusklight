@@ -54,7 +54,38 @@ f32 s_gearBoxX[7];
 f32 s_gearBoxY[7];
 f32 s_gearBoxS = 0.0f;
 
-std::atomic<uint32_t> s_pendingTouch{~0u};
+std::mutex s_tapMutex;
+uint32_t s_tapQueue[TAP_QUEUE_MAX] = {};
+int s_tapCount = 0;
+
+void pushPendingTap(uint32_t packed) {
+    std::lock_guard lock{s_tapMutex};
+    if (s_tapCount >= TAP_QUEUE_MAX) {
+        for (int i = 1; i < TAP_QUEUE_MAX; i++) {
+            s_tapQueue[i - 1] = s_tapQueue[i];
+        }
+        s_tapCount = TAP_QUEUE_MAX - 1;
+    }
+    s_tapQueue[s_tapCount++] = packed;
+}
+
+bool popPendingTap(uint32_t& packed) {
+    std::lock_guard lock{s_tapMutex};
+    if (s_tapCount <= 0) {
+        return false;
+    }
+    packed = s_tapQueue[0];
+    for (int i = 1; i < s_tapCount; i++) {
+        s_tapQueue[i - 1] = s_tapQueue[i];
+    }
+    s_tapCount--;
+    return true;
+}
+
+void clearPendingTaps() {
+    std::lock_guard lock{s_tapMutex};
+    s_tapCount = 0;
+}
 std::atomic<uint32_t> s_touchPos{~0u};
 std::atomic<int> s_touchPhase{0};
 
@@ -562,7 +593,7 @@ void drawContextTab(f32 x0, f32 y0, f32 x1, f32 y1) {
 void drawSplash(f32 w, f32 h) {
     // No dashboard, no touch pass: drop queued taps so one from the title
     // screen can't land on stale rects the first frame gameplay resumes.
-    s_pendingTouch.exchange(~0u);
+    clearPendingTaps();
     drawBackdrop(w, h);
     const ResTIMG* logo = dusklightLogoTimg();
     if (logo != NULL) {
@@ -700,13 +731,13 @@ void touchEvent(int action, float u, float v) {
             lx <= s_contentRect[2] && ly >= s_contentRect[1] && ly <= s_contentRect[3];
         s_touchPhase.store(1);
         // Taps still feed the legacy single-point path (tabs etc.).
-        s_pendingTouch.store(packed);
+        pushPendingTap(packed);
     } else if (action == 2) {
         s_touchPhase.store(2);
     } else if (action == 3) {
         // Cancel (a pinch took over): drop the gesture without a tap.
         s_touchPhase.store(3);
-        s_pendingTouch.store(~0u);
+        clearPendingTaps();
     }
 }
 

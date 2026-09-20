@@ -1,5 +1,5 @@
 // Companion dashboard: second-screen touch input. Tab/page taps arrive as
-// one-shot normalized points (s_pendingTouch); drag & drop equipping
+// one-shot normalized points (a small tap queue); drag & drop equipping
 // consumes the live DOWN/MOVE/UP stream (s_touchPos/s_touchPhase). Both
 // run at the END of drawDashboard so they hit-test against the geometry
 // this frame's draw just published (s_invCells, s_gearBox*, s_dropRect).
@@ -658,8 +658,8 @@ u8 gearItemFor(int idx) {
 }
 
 void handleTouch(f32 w, f32 h) {
-    const uint32_t packed = s_pendingTouch.exchange(~0u);
-    if (packed == ~0u) {
+    uint32_t packed = ~0u;
+    if (!popPendingTap(packed)) {
         return;
     }
     // Cutscene: the tap is consumed (not queued for later) and ignored —

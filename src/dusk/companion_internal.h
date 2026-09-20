@@ -15,6 +15,7 @@
 //                         definitions of all shared state below
 
 #include <atomic>
+#include <mutex>
 #include <cstdint>
 
 #include "dolphin/types.h"
@@ -291,7 +292,25 @@ extern f32 s_gearBoxY[7];
 extern f32 s_gearBoxS;
 
 // Touch stream (see companion.h touchAt/touchEvent for the packing).
-extern std::atomic<uint32_t> s_pendingTouch;
+// Taps waiting to be handled, oldest first. A QUEUE rather than the single
+// slot this used to be: touchEvent runs on the WebSocket receive thread and
+// handleTouch drains one per companion frame, so a second tap arriving
+// inside the same frame used to overwrite the first and silently lose it.
+// Draining stays at one per frame — handleTouch carries drag state that is
+// not safe to re-enter — so a fast second tap is delayed by a frame rather
+// than dropped.
+constexpr int TAP_QUEUE_MAX = 8;
+extern std::mutex s_tapMutex;
+extern uint32_t s_tapQueue[TAP_QUEUE_MAX];
+extern int s_tapCount;
+
+// Pushes one packed tap, dropping the OLDEST if the queue is full (a backlog
+// that deep means the game thread is stalled, and the newest tap is the one
+// the player is waiting on).
+void pushPendingTap(uint32_t packed);
+// Fills `packed` with the oldest queued tap and removes it; false if none.
+bool popPendingTap(uint32_t& packed);
+void clearPendingTaps();
 extern std::atomic<uint32_t> s_touchPos;
 extern std::atomic<int> s_touchPhase;
 
