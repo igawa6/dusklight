@@ -109,39 +109,6 @@ bool gatherHudState(HudState& out) {
     return true;
 }
 
-void drawPhoneRequestedIcon(u8 itemNo, f32 canvasW, f32 canvasH) {
-    // Explicit flat-color clear FIRST — found missing via live testing:
-    // without it, this draws into whatever the aux render target's
-    // pooled/reused texture already held (the last real dashboard frame's
-    // detailed content), and the small icon ends up composited over that
-    // stale, highly-detailed background instead of a blank one. Every
-    // normal dashboard draw path (drawDashboard()/drawSplash()) starts
-    // with its own full-canvas fillRect() for exactly this reason
-    // (companion_hud.cpp:566's `fillRect(0.0f, 0.0f, w, h, COL_BG)`) — this
-    // path was missing that step. Fixed the rupee gem capture from ~650KB
-    // down to ~130KB (confirmed: both captures are the same real
-    // resolution — the phone's negotiated aux surface size, e.g. 800x1200,
-    // not the clamped logical canvasW/canvasH — so the size difference
-    // really is compression efficiency, not resolution).
-    //
-    // (A second, unrelated cause of oversized captures — every heart and the
-    // key item returning a byte-identical copy of the whole dashboard — was
-    // a capture/presentation race, since fixed; see
-    // s_iconCaptureDrawnFrames in dualscreen.cpp.)
-    fillRect(0.0f, 0.0f, canvasW, canvasH, COL_BG);
-
-    // Small FIXED size, not a fraction of the canvas: the capture still
-    // reads back the whole aux surface (whatever resolution the phone's
-    // own hello negotiated, e.g. ~1270x2416) — this just keeps the drawn
-    // region itself small too, on top of the flat-fill fix above.
-    constexpr f32 kIconSize = 128.0f;
-    const f32 size = kIconSize < canvasW && kIconSize < canvasH
-        ? kIconSize
-        : (canvasW < canvasH ? canvasW : canvasH) * 0.9f;
-    const f32 x = (canvasW - size) * 0.5f;
-    const f32 y = (canvasH - size) * 0.5f;
-    drawItemIcon(ICON_SLOT_PHONE_REQUEST, itemNo, x, y, size);
-}
 
 bool drawWantedHeartIcon(u8 wantedState, f32 canvasW, f32 canvasH) {
     dMeter2Draw_c* md = meterDraw();
@@ -164,9 +131,9 @@ bool drawWantedHeartIcon(u8 wantedState, f32 canvasW, f32 canvasH) {
         return false;  // raced with the game's own state changing between the two calls above
     }
 
-    // Same flat clear + small fixed size as drawPhoneRequestedIcon() — see
-    // its doc comment for why (uncleared stale background, wrong-resolution
-    // sizing).
+    // Flat clear first: the aux render target's colour texture is pooled by
+    // size and never cleared between uses, so without this the heart would
+    // composite over whatever dashboard frame was last drawn into it.
     fillRect(0.0f, 0.0f, canvasW, canvasH, COL_BG);
     constexpr f32 kIconSize = 128.0f;
     const f32 size = kIconSize < canvasW && kIconSize < canvasH

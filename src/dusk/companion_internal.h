@@ -78,13 +78,7 @@ constexpr int ICON_SLOT_BUGPROG = ICON_SLOT_RUPEE + 1;  // left-column progress 
 constexpr int ICON_SLOT_FN1 = ICON_SLOT_BUGPROG + 1;  // I / II corner slot items
 constexpr int ICON_SLOT_FN2 = ICON_SLOT_FN1 + 1;
 constexpr int ICON_SLOT_OOCCOO = ICON_SLOT_FN2 + 1;  // map quick-use button
-// Dedicated to companion_state.cpp's drawPhoneRequestedIcon() (see
-// DUSK_PHONE_SPIKE_STATE's icon-fetch-on-demand path) — a phone can request
-// ANY itemNo, so this slot's cached itemNo changes on every distinct
-// request. Never reused for a live-dashboard icon, so those slots' own
-// caches can't be corrupted by phone requests landing on an unrelated item.
-constexpr int ICON_SLOT_PHONE_REQUEST = ICON_SLOT_OOCCOO + 1;
-constexpr int ICON_SLOT_COUNT = ICON_SLOT_PHONE_REQUEST + 1;
+constexpr int ICON_SLOT_COUNT = ICON_SLOT_OOCCOO + 1;
 
 // Collect-archive icon slots (clctres BTIs): 0 fish journal, 1 skills
 // scroll, 2 letter, 3-7 scents (medicine/children/fish/iria/poe), 8

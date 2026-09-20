@@ -76,30 +76,6 @@ struct HudState {
 // call every frame.
 bool gatherHudState(HudState& out);
 
-// Phase-2 addition: draws ONE item's icon (any itemNo a phone requested,
-// see phone_spike_ws.h's request_icon()) into the CURRENT 2D render
-// context, sized to fill most of the given canvas — dualscreen.cpp's
-// endHudCapture() calls this INSTEAD OF drawDashboard() for one substituted
-// frame per icon-fetch request, borrowing the exact same
-// capture/encode/send pipeline the whole-dashboard frame stream already
-// uses (see docs and the state-streaming design plan's "icon rendering
-// mechanism" section — this draws and reads the GPU surface back
-// rather than decoding the texture on the CPU. NOTE: an earlier version of
-// this comment claimed no CPU-side texture decoder existed anywhere in the
-// codebase, and used that to justify this approach. That was wrong —
-// aurora::convert_texture()/convert_texture_palette()
-// (extern/aurora/lib/gfx/texture_convert.hpp) handle every GX format
-// including the CI8 these icons use, and their source bytes are already in
-// CPU memory. Decoding directly would avoid stealing a capture slot from
-// the frame stream, which is why fetching art visibly drops the frame rate.
-// Left as-is for now because it is working and proven, but it is the
-// obvious thing to replace). Uses the dedicated ICON_SLOT_PHONE_REQUEST cache slot
-// (companion_internal.h) so it can never corrupt a live dashboard icon
-// slot's cache, no matter what itemNo is requested. Caller (dualscreen.cpp)
-// is responsible for the surrounding render-pass/ortho-context setup —
-// this function only issues the draw call itself, same division of
-// responsibility drawDashboard() already has with its own caller.
-void drawPhoneRequestedIcon(u8 itemNo, f32 canvasW, f32 canvasH);
 
 // Phase-3 addition: hearts. Unlike items, heart container art isn't a
 // static archive texture loadable by identity — it's live, currently-
@@ -113,7 +89,7 @@ void drawPhoneRequestedIcon(u8 itemNo, f32 canvasW, f32 canvasH);
 // these map to the game's internal quarter-texture tags), and if found,
 // draws that slot's live picture(s) into the CURRENT 2D render context
 // (same flat-clear + small-fixed-size treatment as
-// drawPhoneRequestedIcon(), see its doc comment for why) — never mutates
+// a flat background clear and a small fixed draw size) — never mutates
 // the live panes' visibility/texture, only reads their current state and
 // draws (with the pane's transform matrix saved/restored around the draw,
 // same as companion_hud.cpp's drawHeartsRow() already does for the exact

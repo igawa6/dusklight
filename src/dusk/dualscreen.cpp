@@ -237,11 +237,12 @@ bool s_spikeServerStarted = false;
 #if DUSK_PHONE_SPIKE_STATE
 // Icon-fetch-on-demand (Phase 2): borrows the SAME single-slot
 // aurora::auxwin capture the binary frame path above uses, for one
-// substituted frame per icon request, since no CPU-side texture decoder
-// exists anywhere in this codebase (see companion_state.h's
-// drawPhoneRequestedIcon() doc comment) — getting RGBA8 pixels for any
-// icon means drawing it and reading the GPU surface back, same as every
-// other capture in this feature.
+// substituted frame per request. Only HEARTS and the dungeon map's base
+// image still need this: items and map overlay icons now decode on the CPU
+// (companion_icon_decode.h), which is both far cheaper and does not steal a
+// frame from the video stream. The map base has no choice — its pixels
+// exist only as a GPU copy-texture — and hearts are live animating panes
+// that would need per-pane transforms applied to move across.
 //
 // s_iconCaptureArmed mutually excludes s_spikeCaptureArmed from using the
 // capture slot on the same tick (see pollAndPushSpikeFrame()'s re-arm
@@ -280,7 +281,6 @@ bool s_iconCaptureDrawPending = false;
 // that pipeline delay.
 int s_iconCaptureDrawnFrames = 0;
 constexpr int kIconSubstitutionWarmupFrames = 2;
-u8 s_iconCaptureItemNo = 0;
 // Safety net: endHudCapture() can bail out early (companion not active/
 // ready, e.g. a stage transition landing between the arm and the draw)
 // without ever fulfilling an armed capture — take_capture() would then
@@ -293,7 +293,7 @@ int s_iconCaptureWaited = 0;
 constexpr int kIconCaptureTimeoutFrames = 240;
 
 // Phase 3: hearts. Unlike items (always immediately drawable by identity —
-// see drawPhoneRequestedIcon()), a heart state might not have a LIVE match
+// decoded on the CPU by identity), a heart state might not have a LIVE match
 // on the current frame at all (see companion_state.h's
 // drawWantedHeartIcon() doc comment — it's opportunistic, not forced). This
 // capture is armed optimistically as soon as a heart state is wanted, but
@@ -806,9 +806,7 @@ static void pollAndServeIconRequests() {
                         DuskLog.warn(
                             "phone spike: icon capture ({} {}) suspiciously large ({} bytes, "
                             "limit {}), dropping rather than sending likely-wrong content",
-                            s_iconCaptureIsHeart ? "heart" : "item",
-                            s_iconCaptureIsHeart ? s_iconCaptureHeartState : s_iconCaptureItemNo,
-                            pngSize, maxSaneIconPngBytes);
+                            "heart", s_iconCaptureHeartState, pngSize, maxSaneIconPngBytes);
                         mz_free(png);
                         return;
                     }
@@ -845,15 +843,13 @@ static void pollAndServeIconRequests() {
                         companion::setMapBaseCanonicalView(false);
                         return;
                     }
+                    // Hearts are the only kind still served through a
+                    // capture: items and map icons decode on the CPU, and
+                    // the map base returns above.
                     j["type"] = "icon";
-                    if (s_iconCaptureIsHeart) {
-                        j["kind"] = "heart";
-                        j["id"] = s_iconCaptureHeartState;
-                        phone_spike::clear_wanted_heart_state(s_iconCaptureHeartState);
-                    } else {
-                        j["kind"] = "item";
-                        j["id"] = s_iconCaptureItemNo;
-                    }
+                    j["kind"] = "heart";
+                    j["id"] = s_iconCaptureHeartState;
+                    phone_spike::clear_wanted_heart_state(s_iconCaptureHeartState);
                     j["png"] = b64;
                     // Queued for the same reason as the map base above: an
                     // icon's base64 payload is far too large for the inline
@@ -862,8 +858,7 @@ static void pollAndServeIconRequests() {
                     mz_free(png);
                 } else {
                     DuskLog.warn("phone spike: icon PNG encode failed ({} {})",
-                        s_iconCaptureIsHeart ? "heart" : "item",
-                        s_iconCaptureIsHeart ? s_iconCaptureHeartState : s_iconCaptureItemNo);
+                        "heart", s_iconCaptureHeartState);
                 }
             }
         } else if (++s_iconCaptureWaited > kIconCaptureTimeoutFrames) {
@@ -874,8 +869,7 @@ static void pollAndServeIconRequests() {
             // pollAndPushSpikeFrame() above) forever over one request that
             // can just be asked for again.
             DuskLog.warn("phone spike: icon capture ({} {}) never completed, giving up",
-                s_iconCaptureIsHeart ? "heart" : "item",
-                s_iconCaptureIsHeart ? s_iconCaptureHeartState : s_iconCaptureItemNo);
+                s_iconCaptureIsHeart ? "heart" : "map base", s_iconCaptureHeartState);
             s_iconCaptureArmed = false;
             s_iconCaptureDrawPending = false;
             // Whatever ended this cycle, the canonical-view override must not
@@ -1199,9 +1193,6 @@ void endHudCapture() {
                 // discard path.
                 s_iconCaptureHeartMissed = true;
             }
-        } else {
-            companion::drawPhoneRequestedIcon(s_iconCaptureItemNo, (f32)canvasW, (f32)canvasH);
-            drewIcon = true;
         }
         if (drewIcon) {
             // Counts frames where the substitution genuinely drew and (via

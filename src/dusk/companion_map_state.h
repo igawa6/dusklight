@@ -126,7 +126,7 @@ void setMapBaseCanonicalView(bool enabled);
 // no player cursor — into the CURRENT 2D render context. Called from
 // dualscreen.cpp's endHudCapture() in place of the dashboard for the few
 // substituted frames of a base-image capture, exactly like
-// drawPhoneRequestedIcon() and drawWantedHeartIcon(), because the pixels
+// drawWantedHeartIcon() does, because the pixels
 // exist only on the GPU and the aux capture is the codebase's sole readback
 // path.
 //

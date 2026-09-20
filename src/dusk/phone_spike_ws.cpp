@@ -471,7 +471,7 @@ void dispatch_message(std::string_view json) {
         // "item" (Phase 2): equipped X/Y/slot-I/II items, plus the rupee
         // gem and key icon, which are confirmed to already be ordinary
         // archive item icons — see companion_state.cpp's
-        // drawPhoneRequestedIcon(). "heart" (Phase 3): one of the 5
+        // companion_icon_decode.h. "heart" (Phase 3): one of the 5
         // heart-container states — see companion_state.cpp's
         // drawWantedHeartIcon(). "map_icon" is reserved for a later phase;
         // silently ignored for now rather than warned on, since a phone
