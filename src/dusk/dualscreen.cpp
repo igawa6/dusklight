@@ -209,19 +209,18 @@ constexpr int kShotTimeoutFrames = 240;
 
 #if DUSK_PHONE_SPIKE
 constexpr uint16_t kSpikePort = 8765;
-// ~15fps ceiling: the design doc's target rate for a HUD/menu stream,
-// deliberately not 60fps. Measured on real hardware this gate turned out to
-// be inert — aux_window's request_capture()/take_capture() is a single-slot,
-// one-shot-screenshot-shaped API (not built for continuous streaming), and
-// its own async GPU read-back latency (measured 55-132ms under Xvfb+llvmpipe)
-// already exceeds this interval, so a new request always fires the instant
-// the previous one is consumed regardless of this constant. Kept anyway: on
-// faster hardware where read-back completes well under 66ms, this is what
-// stops the loop from streaming faster than a HUD ever needs, wasting
-// bandwidth/battery for no visible benefit. See docs/phone-companion-design.md
-// Phase 1 results for the full writeup.
-constexpr double kSpikeIntervalMs = 66.0;
-std::chrono::steady_clock::time_point s_spikeLastRequest{};
+// No artificial rate cap: a prior ~15fps (66ms) interval gate here was
+// measured inert on the original (llvmpipe/Xvfb) test box — GPU read-back
+// latency alone already exceeded it — so it was kept as a ceiling for
+// faster hardware. On real GPU hardware, with the game-thread stalls from
+// the capture/encode/send pipeline already fixed (see
+// docs/phone-companion-design.md), the user still felt visible latency, and
+// this cap was the next suspect: it's now removed entirely so a new capture
+// is always requested the instant the previous one is consumed, as fast as
+// aux_window's request_capture()/take_capture() pipeline actually allows.
+// If this doesn't meaningfully help, the real fix is architectural (stream
+// UI state and render natively on the phone instead of pushing rendered
+// frames) — see the doc's latency section.
 bool s_spikeCaptureArmed = false;
 bool s_spikeServerStarted = false;
 #endif
@@ -407,14 +406,8 @@ static void pollAndPushSpikeFrame() {
     }
 
     if (!s_spikeCaptureArmed && phone_spike::has_client()) {
-        const auto now = std::chrono::steady_clock::now();
-        const double elapsedMs =
-            std::chrono::duration<double, std::milli>(now - s_spikeLastRequest).count();
-        if (elapsedMs >= kSpikeIntervalMs) {
-            s_spikeLastRequest = now;
-            aurora::auxwin::request_capture();
-            s_spikeCaptureArmed = true;
-        }
+        aurora::auxwin::request_capture();
+        s_spikeCaptureArmed = true;
     }
 }
 #endif  // DUSK_PHONE_SPIKE
