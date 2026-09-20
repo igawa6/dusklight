@@ -4,6 +4,12 @@
 #include "dusk/companion_strings.h"
 #include "dusk/dualscreen.h"
 #include "dusk/settings.h"
+
+#if DUSK_PHONE_SPIKE
+#include "dusk/phone_spike_ws.h"
+
+#include <string>
+#endif
 #include <aurora/gfx.h>
 
 #include "imgui.h"
@@ -1459,6 +1465,31 @@ void flushQueuedSounds() {
     if (haptic == HAPTIC_NONE || !getSettings().game.dualScreenHaptics.getValue()) {
         return;
     }
+
+#if DUSK_PHONE_SPIKE
+    // Forward the cue to a connected phone companion. aurora::device::rumble
+    // below is an Android-only implementation — on every desktop build it is
+    // an empty stub, so on the PC port this whole switch has always been dead
+    // code, and a phone driving the companion over WebSocket has never felt
+    // anything at all. (companion_internal.h's note that the companion "has
+    // no touch input there anyway" predates the WebSocket client and is no
+    // longer true.)
+    //
+    // Sent as a semantic weight rather than the raw frequency/duration pair:
+    // those numbers are tuned for SDL's rumble API, and Android's vibrator
+    // wants an amplitude and a millisecond count, so the phone maps the four
+    // weights to its own effects instead of being handed values it would have
+    // to reinterpret. This one site covers every queueSound()/queueHaptic()
+    // call in the companion, so nothing needs touching per call site.
+    if (phone_spike::has_client()) {
+        const char* weight = haptic == HAPTIC_LIGHT     ? "light"
+                             : haptic == HAPTIC_PRESS   ? "press"
+                             : haptic == HAPTIC_CONFIRM ? "confirm"
+                                                        : "deny";
+        std::string json = std::string(R"({"type":"haptic","weight":")") + weight + R"("})";
+        phone_spike::queue_text_frame(std::move(json));
+    }
+#endif
     switch (haptic) {
     case HAPTIC_LIGHT:
         aurora::device::rumble(0x2000, 0x3800, 12);
