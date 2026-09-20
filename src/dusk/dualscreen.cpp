@@ -362,6 +362,21 @@ static void pollAndPushSpikeFrame() {
             if (!aurora::auxwin::create(info)) {
                 DuskLog.warn("phone spike: failed to recreate aux target at {}x{}", reqW, reqH);
             }
+            // destroy() silently abandons any capture that was
+            // Armed/InFlight against the OLD surface (aux_window.cpp's
+            // release_capture_locked() resets ITS internal state to Idle)
+            // — but this file's own s_spikeCaptureArmed has no way to know
+            // that happened and was left stuck true, since nothing else
+            // ever clears it except a successful take_capture(). With it
+            // stuck true, the re-arm branch below (`if
+            // (!s_spikeCaptureArmed && has_client())`) never runs again:
+            // no capture is ever requested against the NEW surface, so no
+            // frame is ever pushed again — a real bug, caught by live
+            // testing (looked like "waiting for first frame" forever after
+            // the phone's resize on connect). Reset it here so the next
+            // tick starts a fresh request against the surface that
+            // actually exists now.
+            s_spikeCaptureArmed = false;
         }
     }
 
