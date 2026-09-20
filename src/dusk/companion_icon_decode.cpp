@@ -231,6 +231,37 @@ bool decodeItemIconRgba(
     return true;
 }
 
+bool decodeMapIconRgba(
+    uint8_t iconKind, std::vector<uint8_t>& out, uint32_t& outWidth, uint32_t& outHeight) {
+    const ResTIMG* timg = dmapIconTimg(iconKind);
+    if (timg == NULL) {
+        return false;
+    }
+    aurora::gfx::ConvertedTexture decoded = decodeTimg(timg);
+    if (decoded.data.empty() || decoded.width == 0 || decoded.height == 0) {
+        return false;
+    }
+    const uint32_t width = decoded.width;
+    const uint32_t height = decoded.height;
+    out.assign(static_cast<size_t>(width) * height * 4, 0);
+    const uint8_t* src = static_cast<const uint8_t*>(decoded.data.data());
+    for (size_t i = 0; i < out.size(); i += 4) {
+        // Straight over the dashboard background, then opaque — same
+        // reasoning as the item path.
+        uint8_t* dst = out.data() + i;
+        dst[0] = COL_BG.r;
+        dst[1] = COL_BG.g;
+        dst[2] = COL_BG.b;
+        dst[3] = 255;
+        const std::array<uint8_t, 4> px{src[i + 0], src[i + 1], src[i + 2], src[i + 3]};
+        blendOver(dst, px);
+        dst[3] = 255;
+    }
+    outWidth = width;
+    outHeight = height;
+    return true;
+}
+
 }  // namespace dusk::companion
 
 #endif  // DUSK_PHONE_SPIKE_STATE

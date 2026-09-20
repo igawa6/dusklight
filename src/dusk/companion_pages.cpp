@@ -139,8 +139,6 @@ const ResTIMG* dmapLinkIconTimg() {
     return timg;
 }
 
-namespace {
-
 // Overlay icon textures (the menu's full-size variants), same resident
 // archive, each copied into owned storage (see copyTimgOwned).
 const ResTIMG* dmapIconTimg(u8 icon) {
@@ -182,6 +180,9 @@ const ResTIMG* dmapIconTimg(u8 icon) {
     }
     return cache[icon];
 }
+
+namespace {
+
 
 // Overlay the plate markers with the pause map floor list's own icons:
 // Link's face (or wolf form) on the player's floor at the left edge, the

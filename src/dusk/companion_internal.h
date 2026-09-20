@@ -990,6 +990,10 @@ void drawFloorColumn(f32 tx0, f32 ty0, f32 tx1, f32 ty1, f32 clampY0, f32 clampY
 void drawFloorOverlay(f32 tx0, f32 ty0, f32 tx1, f32 ty1, f32 clampY0 = 0.0f,
     f32 clampY1 = 0.0f);
 const ResTIMG* dmapLinkIconTimg();
+// One of the dungeon-map overlay icon textures (ICON_*_e). Copied into an
+// owned static buffer on first use, so the returned pointer stays valid
+// after the archive is evicted.
+const ResTIMG* dmapIconTimg(u8 icon);
 void drawInventoryContent(f32 x0, f32 y0, f32 x1, f32 y1);
 void drawCollectionContent(f32 x0, f32 y0, f32 x1, f32 y1);
 

@@ -940,29 +940,51 @@ static void pollAndServeIconRequests() {
     // frame stream, so every icon fetched the old way cost the stream a
     // frame, which is exactly the hitch that showed up whenever art loaded.
     // Served before anything else because it costs nothing to serve.
+    auto sendDecodedIcon = [](const char* kind, u8 id, const std::vector<u8>& rgba, u32 w,
+                               u32 h) {
+        size_t pngSize = 0;
+        void* png = tdefl_write_image_to_png_file_in_memory_ex(
+            rgba.data(), (int)w, (int)h, 4, &pngSize, 1, MZ_FALSE);
+        if (png == NULL) {
+            DuskLog.warn("phone spike: PNG encode failed for {} {}", kind, (int)id);
+            return;
+        }
+        const u8* pngBytes = static_cast<const u8*>(png);
+        const std::string b64 =
+            dusk::utils::base64_encode(std::vector<u8>(pngBytes, pngBytes + pngSize));
+        mz_free(png);
+        nlohmann::json j;
+        j["type"] = "icon";
+        j["kind"] = kind;
+        j["id"] = id;
+        j["png"] = b64;
+        phone_spike::queue_text_frame(j.dump());
+    };
+
     if (phone_spike::take_pending_icon_request(itemNo)) {
         std::vector<u8> rgba;
         u32 iconW = 0;
         u32 iconH = 0;
         if (companion::decodeItemIconRgba(itemNo, rgba, iconW, iconH) && iconW != 0 &&
             iconH != 0) {
-            size_t pngSize = 0;
-            void* png = tdefl_write_image_to_png_file_in_memory_ex(
-                rgba.data(), (int)iconW, (int)iconH, 4, &pngSize, 1, MZ_FALSE);
-            if (png != NULL) {
-                const u8* pngBytes = static_cast<const u8*>(png);
-                const std::string b64 =
-                    dusk::utils::base64_encode(std::vector<u8>(pngBytes, pngBytes + pngSize));
-                mz_free(png);
-                nlohmann::json j;
-                j["type"] = "icon";
-                j["kind"] = "item";
-                j["id"] = itemNo;
-                j["png"] = b64;
-                phone_spike::queue_text_frame(j.dump());
-            }
+            sendDecodedIcon("item", itemNo, rgba, iconW, iconH);
         } else {
             DuskLog.warn("phone spike: item icon {} could not be decoded", (int)itemNo);
+        }
+        return;
+    }
+    u8 mapIconKind = 0;
+    if (phone_spike::take_pending_map_icon_request(mapIconKind)) {
+        // Same CPU path as items: single-layer CI8 textures already sitting
+        // in owned buffers, so no capture and no stolen frame.
+        std::vector<u8> rgba;
+        u32 iconW = 0;
+        u32 iconH = 0;
+        if (companion::decodeMapIconRgba(mapIconKind, rgba, iconW, iconH) && iconW != 0 &&
+            iconH != 0) {
+            sendDecodedIcon("map_icon", mapIconKind, rgba, iconW, iconH);
+        } else {
+            DuskLog.warn("phone spike: map icon {} could not be decoded", (int)mapIconKind);
         }
         return;
     }

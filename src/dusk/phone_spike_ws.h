@@ -145,6 +145,13 @@ void request_heart_icon(uint8_t state);
 // only one current base image, so a repeat request while one is pending is
 // the same request, not more work. take_ clears it; has_ lets the binary
 // frame path yield its capture slot the same way it does for icons.
+// Phase 4: one dungeon-map overlay icon by ICON_*_e kind (icon_request with
+// kind "map_icon"). A FIFO like the item queue — each distinct kind must be
+// served, not superseded. Served from a CPU texture decode, so unlike the
+// map base it never touches the capture slot.
+void request_map_icon(uint8_t kind);
+bool take_pending_map_icon_request(uint8_t& kind);
+
 void request_map_base();
 bool take_pending_map_base_request();
 bool has_pending_map_base_request();

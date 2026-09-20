@@ -53,4 +53,12 @@ namespace dusk::companion {
 bool decodeItemIconRgba(uint8_t itemNo, std::vector<uint8_t>& out, uint32_t& outWidth,
     uint32_t& outHeight);
 
+// Same, for one dungeon-map overlay icon (ICON_*_e). These are single-layer
+// CI8 textures already copied into owned static buffers, so unlike item
+// icons there are no archive layers to composite and no per-layer tint to
+// apply — just a decode. Same opaque-over-background treatment, for the same
+// wire-compatibility reason.
+bool decodeMapIconRgba(uint8_t iconKind, std::vector<uint8_t>& out, uint32_t& outWidth,
+    uint32_t& outHeight);
+
 }  // namespace dusk::companion

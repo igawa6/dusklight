@@ -233,6 +233,11 @@ std::deque<uint8_t> g_pendingIconRequests;
 // rather than another unit of work. Shares g_iconRequestMutex because it is
 // consumed by the same game-thread capture state machine.
 bool g_mapBaseWanted = false;
+// Dungeon-map overlay icon kinds (ICON_*_e) the phone has asked for. A FIFO
+// like the item queue and for the same reason: each distinct kind must
+// actually be served, not replaced by a later one. Fourteen kinds exist, so
+// a small cap is plenty.
+std::deque<uint8_t> g_pendingMapIconRequests;
 
 // Phase-3 addition: wanted heart-container states (0-4). A persistent
 // want-list, not a FIFO like the item queue above — see
@@ -477,6 +482,8 @@ void dispatch_message(std::string_view json) {
             request_icon(static_cast<uint8_t>(msg.value("id", 0)));
         } else if (kind == "heart") {
             request_heart_icon(static_cast<uint8_t>(msg.value("id", 0)));
+        } else if (kind == "map_icon") {
+            request_map_icon(static_cast<uint8_t>(msg.value("id", 0)));
         } else if (kind == "map_base") {
             // Phase 4: the dungeon map's base image. A single latch rather
             // than a queue or a want-list — there is only ever one current
@@ -938,7 +945,7 @@ bool take_pending_icon_request(uint8_t& itemNo) {
 
 bool has_pending_icon_request() {
     std::lock_guard lock{g_iconRequestMutex};
-    if (!g_pendingIconRequests.empty()) {
+    if (!g_pendingIconRequests.empty() || !g_pendingMapIconRequests.empty()) {
         return true;
     }
     // Must also check the heart want-list (Phase 3), not just the item
@@ -960,6 +967,24 @@ bool has_pending_icon_request() {
         }
     }
     return false;
+}
+
+void request_map_icon(uint8_t kind) {
+    std::lock_guard lock{g_iconRequestMutex};
+    if (g_pendingMapIconRequests.size() >= kMaxPendingIconRequests) {
+        g_pendingMapIconRequests.pop_front();
+    }
+    g_pendingMapIconRequests.push_back(kind);
+}
+
+bool take_pending_map_icon_request(uint8_t& kind) {
+    std::lock_guard lock{g_iconRequestMutex};
+    if (g_pendingMapIconRequests.empty()) {
+        return false;
+    }
+    kind = g_pendingMapIconRequests.front();
+    g_pendingMapIconRequests.pop_front();
+    return true;
 }
 
 void request_map_base() {
