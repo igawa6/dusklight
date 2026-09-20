@@ -348,6 +348,16 @@ static void pollAndPushSpikeFrame() {
                 .width = reqW,
                 .height = reqH,
                 .hidden = true,
+                // reqW/reqH are already the phone's real device pixels
+                // (width*devicePixelRatio, resolved client-side) — without
+                // this, SDL_WINDOW_HIGH_PIXEL_DENSITY treats them as
+                // DPI-independent points and multiplies by the desktop's
+                // OWN display scale again, silently creating an
+                // oversized surface (measured: a 1270x2416 request became
+                // a 1905x3624 surface on a 1.5x-scaled display — 2.25x the
+                // pixels to capture/encode/send every cycle, enough to
+                // visibly lag the main game thread).
+                .exactPixelSize = true,
             };
             if (!aurora::auxwin::create(info)) {
                 DuskLog.warn("phone spike: failed to recreate aux target at {}x{}", reqW, reqH);
