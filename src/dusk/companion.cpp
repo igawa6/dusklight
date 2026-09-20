@@ -217,6 +217,7 @@ f32 s_mapResetRect[4];
 bool s_dmapAvailable = false;
 bool s_dmapReady = false;
 u32 s_dmapGen = 0;
+bool s_dmapCanonicalView = false;
 f32 s_dmapViewCx = 0.0f;
 f32 s_dmapViewCz = 0.0f;
 f32 s_dmapCmPerTexel = 0.0f;

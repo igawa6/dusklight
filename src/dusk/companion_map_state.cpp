@@ -47,6 +47,24 @@ bool canonicalMapView(f32& centerX, f32& centerZ, f32& span) {
     return true;
 }
 
+u32 mapBaseGeneration() {
+    // Two independent sources, mixed rather than compared: s_dmapGen bumps
+    // when the renderer is torn down (stage change, save load), and the
+    // visited-room counter bumps when a room's visited bit changes — which
+    // alters room colours, line widths and which rooms are drawn at all. The
+    // viewed floor is folded in because each floor is a different image.
+    return s_dmapGen * 1000003u + dSv_visitedRoomGeneration() * 31u +
+        (u32)(s_dmapViewFloor + 128);
+}
+
+bool mapBaseAvailable() {
+    return s_dmapReady && dmapTimg() != NULL;
+}
+
+void setMapBaseCanonicalView(bool enabled) {
+    s_dmapCanonicalView = enabled;
+}
+
 bool gatherMapState(MapState& out) {
     out = MapState{};
     if (!s_dmapReady) {
@@ -89,8 +107,7 @@ bool gatherMapState(MapState& out) {
     // visited bit changes — which alters room colours, line widths and which
     // rooms are drawn at all. The viewed floor is folded in because each
     // floor is a different image entirely.
-    out.baseGen = s_dmapGen * 1000003u + dSv_visitedRoomGeneration() * 31u +
-        (u32)(out.floor + 128);
+    out.baseGen = mapBaseGeneration();
 
     const int count = s_dmapIconCount < kMaxMapIcons ? s_dmapIconCount : kMaxMapIcons;
     out.iconCount = count;
@@ -103,6 +120,32 @@ bool gatherMapState(MapState& out) {
         dst.rotDeg = src.rot != 0 ? cM_sht2d((f32)src.rot) : 0.0f;
         dst.kind = src.icon;
     }
+    return true;
+}
+
+bool drawMapBaseImage(f32 canvasW, f32 canvasH, f32& outFitU0, f32& outFitV0, f32& outFitU1,
+    f32& outFitV1) {
+    const ResTIMG* timg = dmapTimg();
+    if (!s_dmapReady || timg == NULL || canvasW <= 0.0f || canvasH <= 0.0f) {
+        return false;
+    }
+    // Same flat clear the other substitution draws start with — the aux
+    // render target's colour texture is pooled by size and never cleared
+    // between uses, so without this the map composites over the last
+    // dashboard frame still sitting in it.
+    fillRect(0.0f, 0.0f, canvasW, canvasH, COL_BG);
+
+    // The map texture is square (DMAP_TEX_SIZE logical texels each way);
+    // letterbox it into whatever aspect the phone negotiated.
+    const f32 side = canvasW < canvasH ? canvasW : canvasH;
+    const f32 x = (canvasW - side) * 0.5f;
+    const f32 y = (canvasH - side) * 0.5f;
+    drawTimg(timg, x, y, side, side, 0xFF);
+
+    outFitU0 = x / canvasW;
+    outFitV0 = y / canvasH;
+    outFitU1 = (x + side) / canvasW;
+    outFitV1 = (y + side) / canvasH;
     return true;
 }
 

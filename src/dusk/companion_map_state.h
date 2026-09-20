@@ -105,8 +105,42 @@ bool gatherMapState(MapState& out);
 // extents aren't available yet.
 bool canonicalMapView(f32& centerX, f32& centerZ, f32& span);
 
-// NOTE: the base IMAGE itself is not produced here yet — that needs a
-// capture substitution (see finding 1 above) and lands as the next step.
-// This file currently publishes everything that travels as plain numbers.
+// The current base-image content generation — the same value gatherMapState()
+// reports in MapState::baseGen. Exposed so the capture path can stamp the
+// image it sends with the generation it actually corresponds to, using one
+// definition rather than two that could drift.
+u32 mapBaseGeneration();
+
+// True while a dungeon map base image could actually be captured right now.
+bool mapBaseAvailable();
+
+// Turns the canonical whole-floor render override on or off (see
+// s_dmapCanonicalView in companion_internal.h). Accessors rather than the
+// variable itself so dualscreen.cpp doesn't need the companion module's
+// internal header just to drive one flag. MUST be cleared on every path
+// that ends a capture cycle, or the dashboard keeps rendering the
+// whole-floor framing instead of following the player.
+void setMapBaseCanonicalView(bool enabled);
+
+// Draws the dungeon map's base image — room/door texture only, no icons and
+// no player cursor — into the CURRENT 2D render context. Called from
+// dualscreen.cpp's endHudCapture() in place of the dashboard for the few
+// substituted frames of a base-image capture, exactly like
+// drawPhoneRequestedIcon() and drawWantedHeartIcon(), because the pixels
+// exist only on the GPU and the aux capture is the codebase's sole readback
+// path.
+//
+// The image is square but the aux surface is the PHONE's aspect ratio, so it
+// is letterboxed; `outFit*` receive the sub-rectangle it occupies,
+// normalized 0..1 over the canvas, which the phone needs in order to place
+// the normalized icon/player coordinates correctly inside the captured PNG.
+//
+// The caller must have set s_dmapCanonicalView at least one frame earlier,
+// or this draws whatever follow-view framing the dashboard last rendered —
+// the texture is produced by the game's own copy-2D pass, which runs before
+// this point in the frame, so the override cannot take effect in the same
+// frame it is set.
+bool drawMapBaseImage(f32 canvasW, f32 canvasH, f32& outFitU0, f32& outFitV0, f32& outFitU1,
+    f32& outFitV1);
 
 }  // namespace dusk::companion

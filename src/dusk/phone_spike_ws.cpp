@@ -212,6 +212,13 @@ constexpr size_t kMaxPendingIconRequests = 16;
 std::mutex g_iconRequestMutex;
 std::deque<uint8_t> g_pendingIconRequests;
 
+// Phase-4 addition: the dungeon map's base image. A single latch, not a
+// queue and not a want-list — there is only one current base image, so a
+// second request arriving while one is already pending is the SAME request
+// rather than another unit of work. Shares g_iconRequestMutex because it is
+// consumed by the same game-thread capture state machine.
+bool g_mapBaseWanted = false;
+
 // Phase-3 addition: wanted heart-container states (0-4). A persistent
 // want-list, not a FIFO like the item queue above — see
 // request_heart_icon()'s doc comment in the header for why: a heart state
@@ -455,6 +462,12 @@ void dispatch_message(std::string_view json) {
             request_icon(static_cast<uint8_t>(msg.value("id", 0)));
         } else if (kind == "heart") {
             request_heart_icon(static_cast<uint8_t>(msg.value("id", 0)));
+        } else if (kind == "map_base") {
+            // Phase 4: the dungeon map's base image. A single latch rather
+            // than a queue or a want-list — there is only ever one current
+            // base image, so a second request while one is pending is the
+            // same request, not another unit of work.
+            request_map_base();
         }
     } else if (type == "pad") {
         // Full continuous state, not a discrete event — see
@@ -918,6 +931,25 @@ bool has_pending_icon_request() {
         }
     }
     return false;
+}
+
+void request_map_base() {
+    std::lock_guard lock{g_iconRequestMutex};
+    g_mapBaseWanted = true;
+}
+
+bool take_pending_map_base_request() {
+    std::lock_guard lock{g_iconRequestMutex};
+    if (!g_mapBaseWanted) {
+        return false;
+    }
+    g_mapBaseWanted = false;
+    return true;
+}
+
+bool has_pending_map_base_request() {
+    std::lock_guard lock{g_iconRequestMutex};
+    return g_mapBaseWanted;
 }
 
 void request_heart_icon(uint8_t state) {

@@ -130,6 +130,15 @@ bool has_pending_icon_request();
 // dropped after one unsuccessful attempt.
 void request_heart_icon(uint8_t state);
 
+// Phase 4: the dungeon map's base image (icon_request with kind
+// "map_base"). A single latch rather than a queue or a want-list — there is
+// only one current base image, so a repeat request while one is pending is
+// the same request, not more work. take_ clears it; has_ lets the binary
+// frame path yield its capture slot the same way it does for icons.
+void request_map_base();
+bool take_pending_map_base_request();
+bool has_pending_map_base_request();
+
 // True and fills state with a still-wanted heart state (0-4) if one is
 // set AND a probe is due this tick (throttled to roughly once every 30
 // frames, shared with has_pending_icon_request()'s yield check — see

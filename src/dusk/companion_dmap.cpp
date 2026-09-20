@@ -420,14 +420,24 @@ void dmapUpdate() {
     } else if (s_dmapOffZ > maxOffZ) {
         s_dmapOffZ = maxOffZ;
     }
-    const f32 cx = baseCx + s_dmapOffX;
-    const f32 cz = baseCz + s_dmapOffZ;
-    s_inst->mRend[0].entry(cx, cz, cmPerTexel, (s8)dComIfGp_roomControl_getStayNo(),
+    f32 cx = baseCx + s_dmapOffX;
+    f32 cz = baseCz + s_dmapOffZ;
+    f32 renderCmPerTexel = cmPerTexel;
+    if (s_dmapCanonicalView) {
+        // Whole floor, dungeon-centred, zoom 1 — see s_dmapCanonicalView.
+        // The published s_dmapView* below deliberately follow this override
+        // rather than the follow-view, so they always describe the texture
+        // that was actually rendered.
+        cx = baseCx;
+        cz = baseCz;
+        renderCmPerTexel = size / ((f32)DMAP_TEX_SIZE * DMAP_FIT);
+    }
+    s_inst->mRend[0].entry(cx, cz, renderCmPerTexel, (s8)dComIfGp_roomControl_getStayNo(),
         (s8)floor, 1.0f);
     gatherIcons(floor);
     s_dmapViewCx = cx;
     s_dmapViewCz = cz;
-    s_dmapCmPerTexel = cmPerTexel;
+    s_dmapCmPerTexel = renderCmPerTexel;
     s_dmapViewFloor = floor;
     s_dmapReady = true;
 }

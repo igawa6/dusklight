@@ -308,6 +308,21 @@ constexpr int kIconCaptureTimeoutFrames = 240;
 bool s_iconCaptureIsHeart = false;
 u8 s_iconCaptureHeartState = 0;
 bool s_heartDrawFound = false;
+// Phase 4: the dungeon map's base image, a third substitution kind
+// alongside item and heart. Like an item it is always servable when the map
+// is up (no opportunistic probe), but unlike either it needs the map
+// re-rendered at the canonical whole-floor framing first — which cannot
+// happen in the same frame the request is taken, because the game's copy-2D
+// pass that produces the texture runs earlier in the frame than this. The
+// existing two-frame warmup absorbs that by itself: the override is set on
+// the frame the request is taken, so the second warmup frame already
+// carries the canonical texture and the armed capture lands on a later one.
+bool s_iconCaptureIsMapBase = false;
+u32 s_mapBaseCaptureGen = 0;
+f32 s_mapBaseFitU0 = 0.0f;
+f32 s_mapBaseFitV0 = 0.0f;
+f32 s_mapBaseFitU1 = 1.0f;
+f32 s_mapBaseFitV1 = 1.0f;
 // Set by endHudCapture() when a heart substitution was attempted but found
 // no live match. Needed because the warmup counter above only advances on
 // frames the substitution actually DREW: a heart with no live match never
@@ -520,7 +535,7 @@ static void pollAndPushSpikeFrame() {
     // binary path would grab the capture slot mid-warmup and the icon
     // request would stall until its timeout.
     iconWantsCaptureSlot = s_iconCaptureArmed || s_iconCaptureDrawPending ||
-        phone_spike::has_pending_icon_request();
+        phone_spike::has_pending_icon_request() || phone_spike::has_pending_map_base_request();
 #endif
     if (!s_spikeCaptureArmed && !iconWantsCaptureSlot && phone_spike::has_client()) {
         aurora::auxwin::request_capture();
@@ -710,6 +725,10 @@ static void pollAndServeIconRequests() {
             // armed anymore. A still-wanted heart state gets a fresh cycle
             // on its next throttled re-arm, not a same-tick retry.
             s_iconCaptureDrawPending = false;
+            // Whatever ended this cycle, the canonical-view override must not
+            // outlive it, or the dashboard keeps rendering the whole-floor
+            // framing instead of following the player.
+            companion::setMapBaseCanonicalView(false);
             s_iconCaptureWaited = 0;
             // Heart requests that found no live match this cycle: endHudCapture()
             // drew the normal dashboard instead (see s_heartDrawFound's doc
@@ -758,9 +777,14 @@ static void pollAndServeIconRequests() {
                     // own safety net, with the shield and spinner already
                     // within 10% of tripping it too. Keep a backstop, but not
                     // one that clips the real distribution.
+                    // Deliberately NOT applied to the map base image: this
+                    // backstop catches a small icon that came back as a
+                    // full-canvas screenshot, and the map base IS a
+                    // full-canvas image by design, so the same size would
+                    // mean something completely different there.
                     const size_t rawBytes = (size_t)width * (size_t)height * 4;
                     const size_t maxSaneIconPngBytes = rawBytes / 8;
-                    if (pngSize > maxSaneIconPngBytes) {
+                    if (!s_iconCaptureIsMapBase && pngSize > maxSaneIconPngBytes) {
                         DuskLog.warn(
                             "phone spike: icon capture ({} {}) suspiciously large ({} bytes, "
                             "limit {}), dropping rather than sending likely-wrong content",
@@ -774,6 +798,29 @@ static void pollAndServeIconRequests() {
                     const std::string b64 =
                         dusk::utils::base64_encode(std::vector<u8>(pngBytes, pngBytes + pngSize));
                     nlohmann::json j;
+                    if (s_iconCaptureIsMapBase) {
+                        j["type"] = "map_base";
+                        // The generation this image corresponds to, so the
+                        // phone can tell whether a newly-arrived base is
+                        // already stale relative to the map_state it is
+                        // currently drawing.
+                        j["gen"] = s_mapBaseCaptureGen;
+                        // Where the square map sits inside the non-square
+                        // captured PNG — the phone places its normalized
+                        // player/icon coordinates within this sub-rectangle,
+                        // not across the whole image.
+                        j["fit"] = {
+                            {"u0", s_mapBaseFitU0},
+                            {"v0", s_mapBaseFitV0},
+                            {"u1", s_mapBaseFitU1},
+                            {"v1", s_mapBaseFitV1},
+                        };
+                        j["png"] = b64;
+                        phone_spike::send_text_frame(j.dump());
+                        mz_free(png);
+                        companion::setMapBaseCanonicalView(false);
+                        return;
+                    }
                     j["type"] = "icon";
                     if (s_iconCaptureIsHeart) {
                         j["kind"] = "heart";
@@ -804,6 +851,10 @@ static void pollAndServeIconRequests() {
                 s_iconCaptureIsHeart ? s_iconCaptureHeartState : s_iconCaptureItemNo);
             s_iconCaptureArmed = false;
             s_iconCaptureDrawPending = false;
+            // Whatever ended this cycle, the canonical-view override must not
+            // outlive it, or the dashboard keeps rendering the whole-floor
+            // framing instead of following the player.
+            companion::setMapBaseCanonicalView(false);
             s_iconCaptureWaited = 0;
         }
         return;  // draining (or timing out) an in-flight capture takes priority
@@ -824,6 +875,10 @@ static void pollAndServeIconRequests() {
             // cursor means the other wanted states get their turn instead of
             // queueing behind this one.
             s_iconCaptureDrawPending = false;
+            // Whatever ended this cycle, the canonical-view override must not
+            // outlive it, or the dashboard keeps rendering the whole-floor
+            // framing instead of following the player.
+            companion::setMapBaseCanonicalView(false);
             s_iconCaptureHeartMissed = false;
             s_iconCaptureWaited = 0;
             return;
@@ -838,6 +893,10 @@ static void pollAndServeIconRequests() {
             // than hold the capture slot hostage. A still-wanted heart
             // state simply gets picked up again later.
             s_iconCaptureDrawPending = false;
+            // Whatever ended this cycle, the canonical-view override must not
+            // outlive it, or the dashboard keeps rendering the whole-floor
+            // framing instead of following the player.
+            companion::setMapBaseCanonicalView(false);
             s_iconCaptureWaited = 0;
         }
         return;
@@ -848,14 +907,27 @@ static void pollAndServeIconRequests() {
     }
     u8 itemNo = 0;
     u8 heartState = 0;
-    if (phone_spike::take_pending_icon_request(itemNo)) {
+    if (phone_spike::take_pending_map_base_request()) {
+        // First: it's the layer everything else on the map page is drawn
+        // relative to, and unlike a heart it never needs retries.
+        s_iconCaptureIsMapBase = false;
+        if (!companion::mapBaseAvailable()) {
+            return;  // no map to capture right now; phone re-requests later
+        }
+        s_iconCaptureIsMapBase = true;
+        s_iconCaptureIsHeart = false;
+        s_mapBaseCaptureGen = companion::mapBaseGeneration();
+        companion::setMapBaseCanonicalView(true);
+    } else if (phone_spike::take_pending_icon_request(itemNo)) {
         // Items first: always immediately servable (an archive texture load,
         // never "not found yet" the way a heart state can be), so there's no
         // reason to make an item request wait behind a heart one that might
         // need many retries.
         s_iconCaptureIsHeart = false;
+        s_iconCaptureIsMapBase = false;
         s_iconCaptureItemNo = itemNo;
     } else if (phone_spike::take_next_wanted_heart_state(heartState)) {
+        s_iconCaptureIsMapBase = false;
         s_iconCaptureIsHeart = true;
         s_iconCaptureHeartState = heartState;
         s_heartDrawFound = false;
@@ -1027,7 +1099,15 @@ void endHudCapture() {
         // window's own present/blit still uses whatever set_source() below
         // hands it, same as any other frame) rather than treat this as the
         // first-ever presentation if it happens to land before one.
-        if (s_iconCaptureIsHeart) {
+        if (s_iconCaptureIsMapBase) {
+            // Always servable while the map is up, so there is no miss path
+            // like the heart's — but it can still go away mid-cycle (leaving
+            // the dungeon, the page changing), in which case this falls
+            // through to the normal dashboard draw and the existing timeout
+            // ends the cycle rather than sending a wrong image.
+            drewIcon = companion::drawMapBaseImage((f32)canvasW, (f32)canvasH, s_mapBaseFitU0,
+                s_mapBaseFitV0, s_mapBaseFitU1, s_mapBaseFitV1);
+        } else if (s_iconCaptureIsHeart) {
             // Opportunistic: the wanted heart state might not have a live
             // match this frame at all (see s_heartDrawFound's doc comment
             // above). When it doesn't, fall through to the normal dashboard

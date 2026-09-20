@@ -739,6 +739,16 @@ const ResTIMG* dmapTimg();
 // Bumped whenever the dungeon renderer (and its ResTIMG) is destroyed, so
 // the page's blit cache can't key on a stale/reallocated texture pointer.
 extern u32 s_dmapGen;
+// While true, dmapUpdate() renders the floor at the CANONICAL whole-floor
+// framing (dungeon centre, zoom 1) instead of the room-following view it
+// normally glides toward the player. Set only for the few frames the phone
+// companion is capturing the map's base image: the phone caches that image
+// and does its own panning and zooming locally, so the image it caches must
+// not depend on where the player happened to be standing when it was taken
+// — otherwise it would have to be re-captured continuously, which is the
+// entire cost the state-streaming split exists to remove. Has no effect
+// when the phone map feature is compiled out or idle.
+extern bool s_dmapCanonicalView;
 // Floor-list marker icons from the disc's GC layout archive: Link's face
 // (wolf form aware; the bool overload picks a form explicitly) and the
 // floor-list boss icon; NULL if unavailable.
