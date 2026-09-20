@@ -300,16 +300,21 @@ static void pollScreenshot() {
 #endif  // DUSK_COMPANION_CAPTURE
 
 #if DUSK_PHONE_SPIKE
+void ensurePhoneSpikeStarted() {
+    if (s_spikeServerStarted) {
+        return;
+    }
+    s_spikeServerStarted = phone_spike::start_server(kSpikePort);
+    if (s_spikeServerStarted) {
+        const std::string qrPath = (data::configured_data_path() / "phone-pairing-qr.png").string();
+        phone_spike::start_pairing(kSpikePort, qrPath);
+    }
+}
+
 // File-local: one caller (beginHudCapture), no header declaration — same
 // shape as pollScreenshot above, continuous instead of one-shot.
 static void pollAndPushSpikeFrame() {
-    if (!s_spikeServerStarted) {
-        s_spikeServerStarted = phone_spike::start_server(kSpikePort);
-        if (s_spikeServerStarted) {
-            const std::string qrPath = (data::configured_data_path() / "phone-pairing-qr.png").string();
-            phone_spike::start_pairing(kSpikePort, qrPath);
-        }
-    }
+    ensurePhoneSpikeStarted();
 
     // Runs BEFORE updateAuxWindow() below (called later in beginHudCapture):
     // if this creates/resizes the aux target here, updateAuxWindow() sees

@@ -37,6 +37,18 @@ namespace dusk::dualscreen {
 void beginHudCapture();
 void endHudCapture();
 
+#if DUSK_PHONE_SPIKE
+// Idempotent: starts the phone-spike WS server and generates the pairing
+// QR/token if not already done. Normally happens lazily on the first
+// beginHudCapture() tick, but the Settings QR display needs it ready by the
+// time its <img src="duskqr://..."> resolves — which can happen earlier
+// than the first real per-frame tick (RmlUi documents get built during UI
+// init, which doesn't wait on gameplay's per-frame loop, e.g. before any
+// disc is loaded). Call from ui::init() too so pairing is ready no matter
+// which caller runs first.
+void ensurePhoneSpikeStarted();
+#endif
+
 #if DUSK_COMPANION_CAPTURE
 // Ask for the next presented companion frame to be written to `path` as a
 // PNG (exactly what the panel shows: letterbox, dim and all). One-shot and

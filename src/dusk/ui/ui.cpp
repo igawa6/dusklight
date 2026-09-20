@@ -12,6 +12,7 @@
 #include "window.hpp"
 
 #include "dusk/config.hpp"
+#include "dusk/dualscreen.h"
 #include "dusk/mods/queue.hpp"
 #include "dusk/mods/updates.hpp"
 
@@ -117,6 +118,13 @@ bool initialize() noexcept {
     register_mod_texture_provider();
     register_remote_texture_provider();
     register_qr_texture_provider();
+#if DUSK_PHONE_SPIKE
+    // Must happen before Settings' "Pair a Phone" <img> can resolve, which
+    // can be earlier than the first per-frame beginHudCapture() tick that
+    // would otherwise start this lazily (e.g. no disc loaded yet) — see
+    // dualscreen.h's doc comment on ensurePhoneSpikeStarted().
+    dusk::dualscreen::ensurePhoneSpikeStarted();
+#endif
     Rml::StyleSheetSpecification::RegisterProperty("mod-icon-tint", "transparent", false)
         .AddParser("color");
     Rml::StyleSheetSpecification::RegisterProperty("mod-icon-background", "transparent", false)
