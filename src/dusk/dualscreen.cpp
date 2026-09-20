@@ -636,14 +636,33 @@ static void pollAndServeIconRequests() {
                     // heart request stays wanted and retries later; a dropped
                     // item request is lost for this connection (items have no
                     // retry path today).
-                    constexpr size_t kMaxSaneIconPngBytes = 200 * 1024;
-                    if (pngSize > kMaxSaneIconPngBytes) {
+                    // Scaled to the capture's own raw size rather than a fixed
+                    // byte count: the surface is whatever resolution the phone
+                    // negotiated in its hello, so any absolute limit is only
+                    // ever calibrated for one screen. The two populations are
+                    // far apart as a FRACTION of raw, which is stable across
+                    // resolutions: a whole dashboard compresses to ~22% of raw
+                    // (measured 865,623 of 3,840,000 at 800x1200), while real
+                    // icons on a flat background land at 1-7% (measured, same
+                    // surface: sword 46KB, boomerang 88KB, spinner 175KB,
+                    // shield 182KB, bow 242KB = 6.3%). An eighth of raw sits
+                    // cleanly between them with room on both sides.
+                    //
+                    // The earlier fixed 200KB limit was calibrated before the
+                    // bow was ever requested and silently dropped it as
+                    // "likely-wrong content" — a correct icon, discarded by its
+                    // own safety net, with the shield and spinner already
+                    // within 10% of tripping it too. Keep a backstop, but not
+                    // one that clips the real distribution.
+                    const size_t rawBytes = (size_t)width * (size_t)height * 4;
+                    const size_t maxSaneIconPngBytes = rawBytes / 8;
+                    if (pngSize > maxSaneIconPngBytes) {
                         DuskLog.warn(
-                            "phone spike: icon capture ({} {}) suspiciously large ({} bytes), "
-                            "dropping rather than sending likely-wrong content",
+                            "phone spike: icon capture ({} {}) suspiciously large ({} bytes, "
+                            "limit {}), dropping rather than sending likely-wrong content",
                             s_iconCaptureIsHeart ? "heart" : "item",
                             s_iconCaptureIsHeart ? s_iconCaptureHeartState : s_iconCaptureItemNo,
-                            pngSize);
+                            pngSize, maxSaneIconPngBytes);
                         mz_free(png);
                         return;
                     }
