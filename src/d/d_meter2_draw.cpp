@@ -579,6 +579,43 @@ int dMeter2Draw_c::getHeartPictures(int i_no, J2DPicture** o_pics) {
     return count;
 }
 
+int dMeter2Draw_c::getHeartState(int i_no) {
+    if (i_no < 0 || i_no >= 20 || mpLifeParts[i_no] == NULL ||
+        mpLifeParts[i_no]->getPanePtr() == NULL ||
+        !mpLifeParts[i_no]->getPanePtr()->isVisible())
+    {
+        return -1;
+    }
+    if (mpLifeTexture[i_no][1] != NULL && mpLifeTexture[i_no][1]->getPanePtr() != NULL &&
+        mpLifeTexture[i_no][1]->getPanePtr()->isVisible())
+    {
+        return 4;  // full
+    }
+    // Same partial-heart-index derivation getHeartPictures() uses: only one
+    // slot (the currently-depleting heart) can show a bigh_XX quarter
+    // texture at a time, via the single shared mpBigHeart object.
+    if (mpBigHeart != NULL && mpBigHeart->getPanePtr() != NULL &&
+        mpBigHeart->getPanePtr()->isVisible() && mpScreen != NULL)
+    {
+        const s16 life = dComIfGs_getLife();
+        s16 partialHeart = life / 4;
+        if (life % 4 == 0) {
+            partialHeart--;
+        }
+        if (i_no == partialHeart) {
+            static u64 const tag_bigh[] = {MULTI_CHAR('bigh_00'), MULTI_CHAR('bigh_01'),
+                MULTI_CHAR('bigh_02'), MULTI_CHAR('bigh_03')};
+            for (int q = 0; q < 4; q++) {
+                J2DPane* quarterPane = mpScreen->search(tag_bigh[q]);
+                if (quarterPane != NULL && quarterPane->isVisible()) {
+                    return q;  // 0=empty(0/4 remaining), 1/2/3=quarter/half/three-quarter
+                }
+            }
+        }
+    }
+    return 0;  // base only, no fill layer visible at all: empty
+}
+
 f32 dMeter2Draw_c::getLightDropAlpha() {
     return mpLightDropParent != NULL ? mpLightDropParent->getAlphaRate() : 0.0f;
 }

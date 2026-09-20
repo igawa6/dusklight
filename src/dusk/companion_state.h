@@ -59,4 +59,30 @@ bool gatherHudState(HudState& out);
 // responsibility drawDashboard() already has with its own caller.
 void drawPhoneRequestedIcon(u8 itemNo, f32 canvasW, f32 canvasH);
 
+// Phase-3 addition: hearts. Unlike items, heart container art isn't a
+// static archive texture loadable by identity — it's live, currently-
+// animating J2DPicture objects owned by the game's own HUD meter
+// (dMeter2Draw_c), so there's no "load state N" call to make. Instead this
+// opportunistically probes the 20 live heart slots (dMeter2Draw_c::
+// getHeartState(), a new small read-only accessor added alongside the
+// existing getHeartPictures() in include/d/d_meter2_draw.h) for one
+// CURRENTLY showing `wantedState` (0=empty, 1/2/3=quarter/half/three-
+// quarter, 4=full — see getHeartState()'s own doc comment for exactly how
+// these map to the game's internal quarter-texture tags), and if found,
+// draws that slot's live picture(s) into the CURRENT 2D render context
+// (same flat-clear + small-fixed-size treatment as
+// drawPhoneRequestedIcon(), see its doc comment for why) — never mutates
+// the live panes' visibility/texture, only reads their current state and
+// draws (with the pane's transform matrix saved/restored around the draw,
+// same as companion_hud.cpp's drawHeartsRow() already does for the exact
+// same reason: draw() clobbers the pane's own position matrix, and this is
+// the GAME's shared pane, not something owned by this feature).
+//
+// Returns false (draws nothing, sends nothing) if no live slot currently
+// shows the wanted state — a player who hasn't taken graduated damage may
+// not have a heart showing e.g. state 2 (half) available yet. The caller
+// (dualscreen.cpp) keeps the request pending and retries on a later frame
+// rather than treating this as a failure.
+bool drawWantedHeartIcon(u8 wantedState, f32 canvasW, f32 canvasH);
+
 }  // namespace dusk::companion

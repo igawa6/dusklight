@@ -250,11 +250,20 @@ bool s_spikeServerStarted = false;
 // above) already cost real live-testing time to find once. Treat the
 // single capture slot as owned by at most one of these two paths per tick.
 bool s_iconCaptureArmed = false;
-// True for exactly the one endHudCapture() call that should draw the
-// pending icon (companion::drawPhoneRequestedIcon()) instead of the normal
-// dashboard — set alongside arming the capture in
-// pollAndServeIconRequests() (same beginHudCapture() tick), consumed and
-// cleared by endHudCapture() itself, later the same game frame.
+// True across EVERY endHudCapture() call from when a capture is armed
+// until pollAndServeIconRequests() actually drains it (successfully or via
+// timeout) — NOT just the one frame it's first set on. Found via live
+// testing (Phase 3, hearts): request_capture()/take_capture() is async and
+// can take several frames to resolve; clearing this after only the first
+// substituted frame meant later frames fell back to the REAL dashboard
+// (since nothing else holds the substitution), and if take_capture()
+// happened to resolve on one of THOSE later frames instead of the first,
+// it silently captured the real dashboard instead of the requested
+// icon — items were fast/simple enough to rarely lose this race, hearts
+// (probe + two-picture draw with matrix save/restore) were slow enough to
+// consistently lose it. Holding the substitution stable across the whole
+// wait guarantees whichever frame the capture actually resolves against is
+// still the intended content, not whatever happened to render after it.
 bool s_iconCaptureDrawPending = false;
 u8 s_iconCaptureItemNo = 0;
 // Safety net: endHudCapture() can bail out early (companion not active/
@@ -267,6 +276,24 @@ u8 s_iconCaptureItemNo = 0;
 // feature's kShotTimeoutFrames (dualscreen.cpp, DUSK_COMPANION_CAPTURE).
 int s_iconCaptureWaited = 0;
 constexpr int kIconCaptureTimeoutFrames = 240;
+
+// Phase 3: hearts. Unlike items (always immediately drawable by identity —
+// see drawPhoneRequestedIcon()), a heart state might not have a LIVE match
+// on the current frame at all (see companion_state.h's
+// drawWantedHeartIcon() doc comment — it's opportunistic, not forced). This
+// capture is armed optimistically as soon as a heart state is wanted, but
+// whether it actually finds a match is only known once endHudCapture()
+// tries the draw, later the same frame — s_heartDrawFound records that
+// result for pollAndServeIconRequests() to check once the capture
+// resolves. When no match was found, endHudCapture() draws the normal
+// dashboard instead (no visual disruption to the phone's own frame stream)
+// and the resulting capture is simply discarded once drained — not sent as
+// an icon (it's not heart art), not queued as a streamed frame either (it
+// wasn't requested through that path) — and the state stays wanted for a
+// later retry.
+bool s_iconCaptureIsHeart = false;
+u8 s_iconCaptureHeartState = 0;
+bool s_heartDrawFound = false;
 #endif
 
 }  // namespace
@@ -526,14 +553,14 @@ static void pollAndPushSpikeState() {
     phone_spike::send_text_frame(j.dump());
 }
 
-// Phase 2 of the state-streaming path: serves one icon_request at a time,
-// across as many frames as its capture cycle needs (arm this tick, drain a
-// frame or more later once take_capture() succeeds) — see the big comment
-// on s_iconCaptureArmed above for why this and the binary frame path treat
-// the single aurora::auxwin capture slot as mutually exclusive. Called
-// from beginHudCapture() alongside pollAndPushSpikeFrame()/
-// pollAndPushSpikeState(); the actual draw substitution happens later the
-// same frame, in endHudCapture().
+// Phase 2/3 of the state-streaming path: serves one icon_request (item or
+// heart) at a time, across as many frames as its capture cycle needs (arm
+// this tick, drain a frame or more later once take_capture() succeeds) —
+// see the big comment on s_iconCaptureArmed above for why this and the
+// binary frame path treat the single aurora::auxwin capture slot as
+// mutually exclusive. Called from beginHudCapture() alongside
+// pollAndPushSpikeFrame()/pollAndPushSpikeState(); the actual draw
+// substitution happens later the same frame, in endHudCapture().
 static void pollAndServeIconRequests() {
     if (s_iconCaptureArmed) {
         std::vector<u8> pixels;
@@ -541,24 +568,81 @@ static void pollAndServeIconRequests() {
         u32 height = 0;
         if (aurora::auxwin::take_capture(pixels, &width, &height) && width != 0 && height != 0) {
             s_iconCaptureArmed = false;
+            // This capture cycle is over (resolved, whether it's a usable
+            // hit or a discarded miss) — clear the substitution hold too,
+            // together with s_iconCaptureArmed, so a heart miss cleanly
+            // ends this cycle rather than leaving endHudCapture() still
+            // trying to substitute on frames where nothing is actually
+            // armed anymore. A still-wanted heart state gets a fresh cycle
+            // on its next throttled re-arm, not a same-tick retry.
+            s_iconCaptureDrawPending = false;
             s_iconCaptureWaited = 0;
-            if (phone_spike::has_client()) {
+            // Heart requests that found no live match this cycle: endHudCapture()
+            // drew the normal dashboard instead (see s_heartDrawFound's doc
+            // comment above) — this capture is a real dashboard frame, not heart
+            // art, so discard it silently and leave the state wanted for a later
+            // retry rather than sending it mislabeled as an icon.
+            const bool discardHeartMiss = s_iconCaptureIsHeart && !s_heartDrawFound;
+            if (!discardHeartMiss && phone_spike::has_client()) {
                 size_t pngSize = 0;
                 void* png = tdefl_write_image_to_png_file_in_memory_ex(pixels.data(),
                     (int)width, (int)height, 4, &pngSize, 1, MZ_FALSE);
                 if (png != NULL) {
+                    // Defensive sanity check, NOT a real fix: live testing found
+                    // that some captures (confirmed: any request for itemNo
+                    // 0x20/the key icon, and every heart-container request so
+                    // far tried) come back as an exact ~845KB duplicate of the
+                    // full real dashboard instead of the small requested icon —
+                    // reproducible byte-for-byte across fresh processes and
+                    // across the item/heart code paths, which share nothing but
+                    // the underlying aurora::auxwin capture primitive, so the
+                    // bug is most likely somewhere in that shared capture
+                    // pipeline, not in either draw path (both were confirmed via
+                    // diagnostics to run with sane parameters and, for hearts,
+                    // to genuinely find/attempt to draw a live match). Not root-
+                    // caused this session. A correctly-sized icon at 128px on a
+                    // flat background PNG-encodes to well under this threshold
+                    // (the working rupee capture: ~130KB) — anything past it is
+                    // treated as this same failure mode and dropped rather than
+                    // sent, since shipping a wrong image (a miniature dashboard
+                    // screenshot standing in for an icon) is worse than shipping
+                    // nothing. A dropped heart request stays wanted and retries
+                    // later; a dropped item request is simply lost for this
+                    // connection (items have no retry mechanism today) — a real
+                    // regression from the original one-shot-always-succeeds
+                    // design, accepted here as the safer failure mode until the
+                    // real bug is found.
+                    constexpr size_t kMaxSaneIconPngBytes = 200 * 1024;
+                    if (pngSize > kMaxSaneIconPngBytes) {
+                        DuskLog.warn(
+                            "phone spike: icon capture ({} {}) suspiciously large ({} bytes), "
+                            "dropping rather than sending likely-wrong content",
+                            s_iconCaptureIsHeart ? "heart" : "item",
+                            s_iconCaptureIsHeart ? s_iconCaptureHeartState : s_iconCaptureItemNo,
+                            pngSize);
+                        mz_free(png);
+                        return;
+                    }
                     const u8* pngBytes = static_cast<const u8*>(png);
                     const std::string b64 =
                         dusk::utils::base64_encode(std::vector<u8>(pngBytes, pngBytes + pngSize));
                     nlohmann::json j;
                     j["type"] = "icon";
-                    j["kind"] = "item";
-                    j["id"] = s_iconCaptureItemNo;
+                    if (s_iconCaptureIsHeart) {
+                        j["kind"] = "heart";
+                        j["id"] = s_iconCaptureHeartState;
+                        phone_spike::clear_wanted_heart_state(s_iconCaptureHeartState);
+                    } else {
+                        j["kind"] = "item";
+                        j["id"] = s_iconCaptureItemNo;
+                    }
                     j["png"] = b64;
                     phone_spike::send_text_frame(j.dump());
                     mz_free(png);
                 } else {
-                    DuskLog.warn("phone spike: icon PNG encode failed for item {}", s_iconCaptureItemNo);
+                    DuskLog.warn("phone spike: icon PNG encode failed ({} {})",
+                        s_iconCaptureIsHeart ? "heart" : "item",
+                        s_iconCaptureIsHeart ? s_iconCaptureHeartState : s_iconCaptureItemNo);
                 }
             }
         } else if (++s_iconCaptureWaited > kIconCaptureTimeoutFrames) {
@@ -568,8 +652,9 @@ static void pollAndServeIconRequests() {
             // while s_iconCaptureArmed is true, see
             // pollAndPushSpikeFrame() above) forever over one request that
             // can just be asked for again.
-            DuskLog.warn("phone spike: icon capture for item {} never completed, giving up",
-                s_iconCaptureItemNo);
+            DuskLog.warn("phone spike: icon capture ({} {}) never completed, giving up",
+                s_iconCaptureIsHeart ? "heart" : "item",
+                s_iconCaptureIsHeart ? s_iconCaptureHeartState : s_iconCaptureItemNo);
             s_iconCaptureArmed = false;
             s_iconCaptureDrawPending = false;
             s_iconCaptureWaited = 0;
@@ -581,10 +666,21 @@ static void pollAndServeIconRequests() {
         return;
     }
     u8 itemNo = 0;
-    if (!phone_spike::take_pending_icon_request(itemNo)) {
+    u8 heartState = 0;
+    if (phone_spike::take_pending_icon_request(itemNo)) {
+        // Items first: always immediately servable (an archive texture load,
+        // never "not found yet" the way a heart state can be), so there's no
+        // reason to make an item request wait behind a heart one that might
+        // need many retries.
+        s_iconCaptureIsHeart = false;
+        s_iconCaptureItemNo = itemNo;
+    } else if (phone_spike::take_next_wanted_heart_state(heartState)) {
+        s_iconCaptureIsHeart = true;
+        s_iconCaptureHeartState = heartState;
+        s_heartDrawFound = false;
+    } else {
         return;
     }
-    s_iconCaptureItemNo = itemNo;
     s_iconCaptureDrawPending = true;
     s_iconCaptureWaited = 0;
     aurora::auxwin::request_capture();
@@ -736,8 +832,8 @@ void endHudCapture() {
     bool drewIcon = false;
 #if DUSK_PHONE_SPIKE_STATE
     if (!splash && s_iconCaptureDrawPending) {
-        // One-off substitution for a pending icon_request (Phase 2 of the
-        // state-streaming path) — draws ONLY the requested item's icon
+        // One-off substitution for a pending icon_request (Phase 2/3 of the
+        // state-streaming path) — draws ONLY the requested item/heart icon
         // instead of the real dashboard for this one frame, into the exact
         // same render target request_capture() (armed by
         // pollAndServeIconRequests(), earlier this same beginHudCapture()
@@ -747,9 +843,25 @@ void endHudCapture() {
         // window's own present/blit still uses whatever set_source() below
         // hands it, same as any other frame) rather than treat this as the
         // first-ever presentation if it happens to land before one.
-        companion::drawPhoneRequestedIcon(s_iconCaptureItemNo, (f32)canvasW, (f32)canvasH);
-        s_iconCaptureDrawPending = false;
-        drewIcon = true;
+        if (s_iconCaptureIsHeart) {
+            // Opportunistic: the wanted heart state might not have a live
+            // match this frame at all (see s_heartDrawFound's doc comment
+            // above). When it doesn't, fall through to the normal dashboard
+            // draw below instead — no wasted/blank frame, no visual
+            // disruption — and pollAndServeIconRequests() discards the
+            // resulting capture once drained rather than sending it.
+            s_heartDrawFound = companion::drawWantedHeartIcon(
+                s_iconCaptureHeartState, (f32)canvasW, (f32)canvasH);
+            drewIcon = s_heartDrawFound;
+        } else {
+            companion::drawPhoneRequestedIcon(s_iconCaptureItemNo, (f32)canvasW, (f32)canvasH);
+            drewIcon = true;
+        }
+        // Deliberately NOT cleared here — see s_iconCaptureDrawPending's
+        // doc comment above (found via live testing: clearing it after one
+        // frame raced the async capture readback, which could resolve
+        // several frames later against whatever got drawn AFTER the
+        // substitution — the real, full dashboard, not the icon).
     }
 #endif
     if (splash) {

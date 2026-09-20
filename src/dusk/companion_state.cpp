@@ -7,7 +7,10 @@
 #include "dusk/companion.h"
 #include "dusk/companion_internal.h"
 
+#include "JSystem/J2DGraph/J2DPicture.h"
 #include "d/d_com_inf_game.h"
+#include "d/d_meter2_draw.h"
+#include "m_Do/m_Do_mtx.h"
 
 namespace dusk::companion {
 
@@ -69,6 +72,57 @@ void drawPhoneRequestedIcon(u8 itemNo, f32 canvasW, f32 canvasH) {
     const f32 x = (canvasW - size) * 0.5f;
     const f32 y = (canvasH - size) * 0.5f;
     drawItemIcon(ICON_SLOT_PHONE_REQUEST, itemNo, x, y, size);
+}
+
+bool drawWantedHeartIcon(u8 wantedState, f32 canvasW, f32 canvasH) {
+    dMeter2Draw_c* md = meterDraw();
+    if (md == NULL) {
+        return false;
+    }
+    int slot = -1;
+    for (int i = 0; i < 20; i++) {
+        if (md->getHeartState(i) == wantedState) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) {
+        return false;  // nothing live currently shows this state — caller retries later
+    }
+    J2DPicture* heartPics[2];
+    const int picCount = md->getHeartPictures(slot, heartPics);
+    if (picCount <= 0) {
+        return false;  // raced with the game's own state changing between the two calls above
+    }
+
+    // Same flat clear + small fixed size as drawPhoneRequestedIcon() — see
+    // its doc comment for why (uncleared stale background, wrong-resolution
+    // sizing).
+    fillRect(0.0f, 0.0f, canvasW, canvasH, COL_BG);
+    constexpr f32 kIconSize = 128.0f;
+    const f32 size = kIconSize < canvasW && kIconSize < canvasH
+        ? kIconSize
+        : (canvasW < canvasH ? canvasW : canvasH) * 0.9f;
+    const f32 x = (canvasW - size) * 0.5f;
+    const f32 y = (canvasH - size) * 0.5f;
+
+    for (int j = 0; j < picCount; j++) {
+        // These are the GAME's live panes, shared with the main HUD —
+        // draw() overwrites the pane's own position matrix
+        // (J2DPane::draw: MTXConcat(parent->mGlobalMtx, mPositionMtx, ...)
+        // is what the main screen's own hierarchical draw later consumes),
+        // so it must be restored after borrowing it here. Exactly the same
+        // save/restore companion_hud.cpp's drawHeartsRow() already does
+        // for the identical reason — skipping it showed up there as
+        // displaced duplicate hearts the moment the HUD moved back to the
+        // main screen; same risk here since this shares the same panes.
+        Mtx saved;
+        MTXCopy(*heartPics[j]->getMtx(), saved);
+        heartPics[j]->draw(x, y, size, size, false, false, false);
+        heartPics[j]->setMtx(saved);
+    }
+    dComIfGp_getCurrentGrafPort()->setup2D();
+    return true;
 }
 
 }  // namespace dusk::companion

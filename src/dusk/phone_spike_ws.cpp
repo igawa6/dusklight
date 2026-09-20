@@ -206,6 +206,35 @@ constexpr size_t kMaxPendingIconRequests = 16;
 std::mutex g_iconRequestMutex;
 std::deque<uint8_t> g_pendingIconRequests;
 
+// Phase-3 addition: wanted heart-container states (0-4). A persistent
+// want-list, not a FIFO like the item queue above — see
+// request_heart_icon()'s doc comment in the header for why: a heart state
+// isn't always immediately servable (it only exists once the player's HP
+// has actually produced it), so "dequeue once, drop if not found" would
+// silently lose real requests. Same mutex as the item queue: both are tiny,
+// low-frequency, and never held long — no benefit to separating them.
+bool g_wantedHeartStates[5] = {};
+
+// Throttles heart probing: a live-pane scan cycle costs a full GPU
+// capture, even when nothing is found — cheap for items (an archive
+// texture load always succeeds immediately) but wasteful to attempt every
+// single frame for a heart state that might have no live match for
+// seconds. Worse than wasteful: wanting a heart makes
+// has_pending_icon_request() report true, which makes the binary
+// frame-streaming path yield its capture slot (see dualscreen.cpp's
+// pollAndPushSpikeFrame()) — probing every tick would starve normal
+// streaming for the WHOLE time a heart state stays unmet, not just
+// briefly. Throttled to roughly once every 30 frames; non-probe ticks
+// report "nothing wanted" to both the yield check and the arm logic, so
+// normal streaming proceeds completely undisturbed between probes.
+// has_pending_icon_request() computes and caches the decision (it runs
+// first each tick, via the binary path's yield check); take_next_wanted_
+// heart_state() reads the cached decision rather than recomputing it, so
+// both agree on the same tick.
+constexpr int kHeartProbeIntervalFrames = 30;
+int g_heartProbeCounter = 0;
+bool g_heartProbeDueThisTick = false;
+
 bool read_http_headers(int fd, std::string& out) {
     // Cap well above any real browser request's header size; anything past
     // this is either not HTTP or malformed, either way not worth parsing.
@@ -397,15 +426,20 @@ void dispatch_message(std::string_view json) {
         // dualscreen.cpp), not here; this just hands the raw report off.
         request_resize(msg.value("width", 0u), msg.value("height", 0u));
     } else if (type == "icon_request") {
-        // Phase 2 of the state-streaming path: only "item" is handled here
-        // (equipped X/Y/slot-I/II items, plus the rupee gem and key icon,
-        // which are confirmed to already be ordinary archive item icons —
-        // see companion_state.cpp's drawPhoneRequestedIcon()). "heart" and
-        // "map_icon" are reserved for later phases; silently ignored for
-        // now rather than warned on, since a phone built against the full
-        // protocol may legitimately send them before this PC supports them.
-        if (msg.value("kind", "") == "item") {
+        // "item" (Phase 2): equipped X/Y/slot-I/II items, plus the rupee
+        // gem and key icon, which are confirmed to already be ordinary
+        // archive item icons — see companion_state.cpp's
+        // drawPhoneRequestedIcon(). "heart" (Phase 3): one of the 5
+        // heart-container states — see companion_state.cpp's
+        // drawWantedHeartIcon(). "map_icon" is reserved for a later phase;
+        // silently ignored for now rather than warned on, since a phone
+        // built against the full protocol may legitimately send it before
+        // this PC supports it.
+        const std::string kind = msg.value("kind", "");
+        if (kind == "item") {
             request_icon(static_cast<uint8_t>(msg.value("id", 0)));
+        } else if (kind == "heart") {
+            request_heart_icon(static_cast<uint8_t>(msg.value("id", 0)));
         }
     } else if (type == "pad") {
         // Full continuous state, not a discrete event — see
@@ -812,7 +846,61 @@ bool take_pending_icon_request(uint8_t& itemNo) {
 
 bool has_pending_icon_request() {
     std::lock_guard lock{g_iconRequestMutex};
-    return !g_pendingIconRequests.empty();
+    if (!g_pendingIconRequests.empty()) {
+        return true;
+    }
+    // Must also check the heart want-list (Phase 3), not just the item
+    // queue: this function is what makes the binary frame path yield the
+    // capture slot for a tick (see its call site in dualscreen.cpp's
+    // pollAndPushSpikeFrame()) — a heart-only request with nothing in the
+    // item queue would otherwise starve exactly the way item requests did
+    // before that fix, just for hearts this time. Throttled (see
+    // g_heartProbeCounter's doc comment) — this function runs first each
+    // tick, so it computes and caches this tick's probe decision for
+    // take_next_wanted_heart_state() to reuse.
+    g_heartProbeDueThisTick = (++g_heartProbeCounter % kHeartProbeIntervalFrames) == 0;
+    if (!g_heartProbeDueThisTick) {
+        return false;
+    }
+    for (bool wanted : g_wantedHeartStates) {
+        if (wanted) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void request_heart_icon(uint8_t state) {
+    if (state >= 5) {
+        return;
+    }
+    std::lock_guard lock{g_iconRequestMutex};
+    g_wantedHeartStates[state] = true;
+}
+
+bool take_next_wanted_heart_state(uint8_t& state) {
+    std::lock_guard lock{g_iconRequestMutex};
+    // Reuses this tick's cached probe decision from has_pending_icon_request()
+    // (always called first, see above) rather than recomputing/re-incrementing
+    // — both must agree on the same tick.
+    if (!g_heartProbeDueThisTick) {
+        return false;
+    }
+    for (uint8_t i = 0; i < 5; i++) {
+        if (g_wantedHeartStates[i]) {
+            state = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+void clear_wanted_heart_state(uint8_t state) {
+    if (state >= 5) {
+        return;
+    }
+    std::lock_guard lock{g_iconRequestMutex};
+    g_wantedHeartStates[state] = false;
 }
 
 }  // namespace dusk::phone_spike

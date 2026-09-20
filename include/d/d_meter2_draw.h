@@ -202,6 +202,23 @@ public:
     void forceCompanionAlpha();
     bool isButtonClusterVisible();
     int getHeartPictures(int i_no, J2DPicture** o_pics);
+    // Phone-companion state-streaming (Phase 3): read-only identification of
+    // WHICH visual state heart slot i_no currently shows, mirroring
+    // getHeartPictures()'s own inspection logic exactly but returning a
+    // state index instead of raw pictures, so a caller can tell apart the 5
+    // states getHeartPictures() itself can't distinguish (it just hands
+    // back whichever picture happens to be visible). Returns -1 if the slot
+    // isn't currently a valid/visible heart (i_no out of range, or
+    // i_no >= the current max heart count). Otherwise 0=empty (base only,
+    // no fill layer — this also covers the quarterNum=0 "bigh_00" case,
+    // life%4==0 meaning 0/4 remaining on the currently-depleting heart,
+    // which is visually/semantically empty too), 1/2/3=quarter/half/three-
+    // quarter (bigh_01/02/03 — heart_quarters, i.e. life%4, used directly
+    // as the tag_bigh index in changeTextureLife()/drawLife()), 4=full
+    // (mpLifeTexture[i_no][1] visible). Never mutates anything (no show()/
+    // hide()/changeTexture() calls) — pure inspection of state the game's
+    // own drawLife()/changeTextureLife() already set this frame.
+    int getHeartState(int i_no);
     f32 getLightDropAlpha();
     void dualScreenSyncPaneVisibility(bool i_dualScreenHud, bool i_mainHudRestored,
         bool i_lowLifeHearts);

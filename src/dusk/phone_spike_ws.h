@@ -102,6 +102,36 @@ bool take_pending_icon_request(uint8_t& itemNo);
 // hud_state working fine), not anticipated in the original design.
 bool has_pending_icon_request();
 
+// Phase-3 state-streaming addition: heart-container icon fetch (see
+// docs/phone-companion-design.md's state-streaming design plan and
+// companion_state.h's drawWantedHeartIcon() doc comment for why hearts need
+// different handling than items). `state` is 0-4 (empty/quarter/half/
+// three-quarter/full). Unlike request_icon()'s FIFO — a heart state isn't
+// always immediately available (it only exists once the player's HP has
+// actually produced it), so this is a persistent WANT flag, not a
+// one-shot queued request: set once, and the game thread keeps retrying
+// (via take_next_wanted_heart_state()) until it's actually found and
+// served, however many frames that takes, rather than being silently
+// dropped after one unsuccessful attempt.
+void request_heart_icon(uint8_t state);
+
+// True and fills state with a still-wanted heart state (0-4) if one is
+// set AND a probe is due this tick (throttled to roughly once every 30
+// frames, shared with has_pending_icon_request()'s yield check — see
+// g_heartProbeCounter in the .cpp: a capture cycle costs real GPU work
+// even when it finds nothing, and unthrottled probing would also starve
+// the binary frame-streaming path for as long as a heart state stays
+// unmet). Does NOT clear the want flag — the caller (dualscreen.cpp) only
+// calls clear_wanted_heart_state() once it actually finds and captures a
+// live match; if no live match exists yet, the state stays wanted and
+// this returns it again on a later probe. Game thread only, by convention
+// with the other pairs above.
+bool take_next_wanted_heart_state(uint8_t& state);
+
+// Clears one state's want flag once it has actually been captured and
+// sent. A later re-request (e.g. after a reconnect) sets it again.
+void clear_wanted_heart_state(uint8_t state);
+
 // Gamepad passthrough (phase 5) lives in phone_spike_pad.h — a controller
 // connected to the phone, forwarded as a real second controller for the
 // main game via dolphin::PAD's existing virtual-status injection point.
