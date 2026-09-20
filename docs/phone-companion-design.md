@@ -2,9 +2,13 @@
 
 **Status: all five phases (capture → encode → push, QR pairing, touch
 input, native resolution, gamepad passthrough) built and verified
-end-to-end on Linux against real gameplay.** None of it has been tried on
-a real phone yet — every phase so far has been verified with a scripted
-test client standing in for one. This documents a feasibility sketch for
+end-to-end on Linux against real gameplay, plus a follow-up pass adding
+in-game QR display and a LAN-IP-discovery fix.** None of it has been tried
+on a real phone yet — every phase so far has been verified with a scripted
+test client standing in for one, except the in-game QR display, which is
+built but not yet visually confirmed on-screen (see Phase 5.5 below).
+Desktop-only: Android cannot host the PC side of this feature at all — see
+Phase 5.5's Android section. This documents a feasibility sketch for
 letting a phone act as a network-connected companion ("bottom screen")
 display for desktop (Windows/Linux/macOS) dusklight, paired by QR code,
 mirroring what the AYN Thor already gets for free from having two physical
@@ -371,13 +375,12 @@ pick if more than one candidate exists — not solved here.
 
 **Not yet done:** single-use/token-rotation policy (the token is valid for
 the whole server lifetime right now, not invalidated after first use, which
-the earlier "Pairing" section above originally sketched); in-game display of
-the QR (it's a PNG on disk, not drawn into any UI yet — there is no
-Settings/dual-screen-setup screen surface for it in this repo to hang it off
-of without a larger UI task); and, as before, a real phone camera actually
-scanning it end-to-end (verified the QR decodes correctly and the pairing
-mechanics work, but the full "point a phone camera at a screen and have it
-open a browser" loop wasn't physically exercised).
+the earlier "Pairing" section above originally sketched); and, as before, a
+real phone camera actually scanning it end-to-end (verified the QR decodes
+correctly and the pairing mechanics work, but the full "point a phone
+camera at a screen and have it open a browser" loop wasn't physically
+exercised). In-game display of the QR was still missing at the time this
+phase was written — **since built, see Phase 5.5 below.**
 
 ## Phase 4 results (built and verified) — native resolution
 
@@ -517,6 +520,82 @@ scripted Python client sending hand-built JSON), the C-stick/right-stick →
 substick mapping, analog trigger values (only digital press was exercised),
 and the Z/L/R button mappings.
 
+## Phase 5.5 results — in-game QR display, LAN IP fix, Android feasibility
+
+Three follow-up items requested together: surface the pairing QR inside
+the actual Settings menu (previously only a PNG on disk — flagged as
+"not yet done" in Phase 2), fix the Tailscale-over-LAN address-priority
+bug also flagged in Phase 2, and answer whether the Android build could
+play either side of this feature.
+
+**LAN IP priority fix.** `discover_lan_ip()` (`phone_spike_pairing.cpp`)
+no longer takes `getifaddrs()`'s first non-loopback UP IPv4 match — it
+now scores every candidate via `address_priority()`: RFC1918 ranges
+(10/8, 172.16/12, 192.168/16) win outright; VPN-named interfaces
+(`tailscale`, `wg`, `utun`, `tun`, `ppp`, `zt`, `docker`, `veth`, `br-`,
+`virbr` prefixes) and the CGNAT range (100.64.0.0/10, Tailscale's actual
+address space, catching it even under a non-matching interface name) rank
+last, not excluded — pairing still works over a VPN-only link if that's
+genuinely the only option, it's just no longer preferred over a real LAN
+address. **Verified directly:** decoded the generated QR with
+`cv2.QRCodeDetector()` on this same dual-NIC dev box and confirmed the
+embedded URL now carries the real `192.168.0.x` LAN address instead of
+the `100.x.x.x` Tailscale address Phase 2 had documented.
+
+**In-game QR display.** New `src/dusk/ui/phone_spike_qr_texture.{hpp,cpp}`
+registers a `"duskqr"` RmlUi texture-provider scheme via
+`aurora::rmlui::register_texture_provider()` — the same mechanism
+`src/dusk/ui/remote_texture_provider.cpp` already uses for mod-preview
+images, just a different backing source (the cached QR bitmap from
+`phone_spike::current_qr_bitmap()` instead of a downloaded file).
+Settings gained a new "Pair a Phone" entry (`settings.cpp`), placed
+directly below the existing 3DS/Wii U dual-screen-HUD-mode option and
+shown only when `dualscreen::hudOnCompanion()` is active (matching that
+option's own visibility condition — this feature is meaningless without
+a companion display to pair). Selecting it shows the QR
+(`<img src="duskqr://pairing">`), the plain-text pairing URL underneath
+for manual entry as a fallback, and a note clarifying that a phone
+gamepad drives the main game while the phone's touchscreen stays
+companion-only.
+
+**Not yet visually confirmed.** Compiles clean and follows the exact
+proven `remote_texture_provider.cpp` pattern, but this dev box was under
+severe, worsening host contention during this work (load average climbed
+from ~7 to 13-14 over the session) — repeated attempts to navigate to
+the actual Settings screen in-game got stuck on black screens during
+title-screen transitions for many minutes at a time. Confirmed via gdb
+this wasn't a deadlock (main thread was in the same normal
+`wait_for_gpu_progress()`/`nanosleep` polling loop seen in earlier,
+confirmed-working runs), just extremely slow rendering under contention.
+Moved subsequent build/test work to a second machine with real GPU
+hardware (see below) rather than keep fighting this environment.
+
+**Android feasibility: no, hard architectural block, not just
+untested.** Investigated whether the Android build could act as the
+"PC" side (hosting the WS server, capturing frames from a second window)
+so a tablet could use a phone as its companion display. It cannot:
+SDL's Android backend hard-blocks a second window at the platform level
+(`SDL_androidwindow.c`: "Android only supports one window"), so
+`aurora::auxwin::create()` — the exact mechanism this entire feature
+depends on for its headless capture target — always fails on Android.
+There is no offscreen/headless rendering path anywhere else in aurora
+that could substitute for it. This isn't a missing feature to build
+later; it's the same one-window platform limitation the Thor's
+*physical* dual-screen setup already works around by using two real
+displays instead of two windows — a phone-companion server has no such
+escape hatch available to it on Android. **Gamepad passthrough alone
+(Phase 5) would likely port fine** if ever wanted independently — it's
+display-independent (`PADSetVirtualStatus`/`PADClearVirtualStatus`
+don't touch windowing at all) and sockets/`getifaddrs()` already work
+fine on Android — but that's a different, smaller feature than "phone as
+tablet's companion screen," which is fully blocked.
+
+**Moved primary test/build machine.** This Linux dev box's contention
+made UI navigation impractical for finishing visual verification; the
+checkout was mirrored to a second machine (`cachyos-quadro`, real Intel
+UHD + NVIDIA RTX 2000 Ada GPU) for the remaining build/test work, with
+the user driving in-person verification there.
+
 ## Suggested phasing
 
 1. ~~**Spike:** headless aux_window target + WS server + raw frame push to
@@ -534,6 +613,10 @@ and the Z/L/R button mappings.
    not yet a real phone — see "not yet tested" notes throughout).
 5. ~~**Phone gamepad passthrough**~~ **Done — see Phase 5 results above**,
    with corrected scope (main-game input, not companion navigation).
+6. ~~**In-game QR display, LAN IP priority fix, Android feasibility
+   check**~~ **Done — see Phase 5.5 results above** (QR display not yet
+   visually confirmed on-screen; LAN IP fix independently verified via QR
+   decode; Android confirmed infeasible for the PC-side role).
 
 ## Open questions / risks
 
