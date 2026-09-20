@@ -3,11 +3,14 @@
 **Status: all five phases (capture → encode → push, QR pairing, touch
 input, native resolution, gamepad passthrough) built and verified
 end-to-end on Linux against real gameplay, plus a follow-up pass adding
-in-game QR display and a LAN-IP-discovery fix.** None of it has been tried
-on a real phone yet — every phase so far has been verified with a scripted
-test client standing in for one, except the in-game QR display, which is
-built but not yet visually confirmed on-screen (see Phase 5.5 below).
-Desktop-only: Android cannot host the PC side of this feature at all — see
+in-game QR display and a LAN-IP-discovery fix — including a real bug in
+the QR display (rendered blank) found and fixed via live testing on real
+GPU hardware.** None of it has been tried on a real phone yet — every
+phase so far has been verified with a scripted test client standing in
+for one, except the in-game QR display, which has now been confirmed to
+actually render on-screen (see Phase 5.5 below), just not scanned with a
+real phone camera yet. Desktop-only: Android cannot host the PC side of
+this feature at all — see
 Phase 5.5's Android section. This documents a feasibility sketch for
 letting a phone act as a network-connected companion ("bottom screen")
 display for desktop (Windows/Linux/macOS) dusklight, paired by QR code,
@@ -558,17 +561,43 @@ for manual entry as a fallback, and a note clarifying that a phone
 gamepad drives the main game while the phone's touchscreen stays
 companion-only.
 
-**Not yet visually confirmed.** Compiles clean and follows the exact
-proven `remote_texture_provider.cpp` pattern, but this dev box was under
-severe, worsening host contention during this work (load average climbed
-from ~7 to 13-14 over the session) — repeated attempts to navigate to
-the actual Settings screen in-game got stuck on black screens during
-title-screen transitions for many minutes at a time. Confirmed via gdb
-this wasn't a deadlock (main thread was in the same normal
-`wait_for_gpu_progress()`/`nanosleep` polling loop seen in earlier,
-confirmed-working runs), just extremely slow rendering under contention.
-Moved subsequent build/test work to a second machine with real GPU
-hardware (see below) rather than keep fighting this environment.
+**Moved to a second machine, then found and fixed a real bug via live
+testing.** The original dev box was under severe, worsening host
+contention (load average climbed from ~7 to 13-14 over the session) —
+repeated attempts to navigate to the actual Settings screen in-game got
+stuck on black screens during title-screen transitions for many minutes
+at a time. Confirmed via gdb this wasn't a deadlock (main thread was in
+the same normal `wait_for_gpu_progress()`/`nanosleep` polling loop seen
+in earlier, confirmed-working runs), just extremely slow rendering under
+contention. Build/test work moved to a second machine with real GPU
+hardware (`cachyos-quadro`, Intel UHD + NVIDIA RTX 2000 Ada, see below),
+with the user driving in-person verification there.
+
+**The user's first live check found a real bug: the QR rendered as a
+blank white box**, not the compiles-clean-therefore-should-work outcome
+assumed above. Root cause: `phone_spike::start_pairing()` only ran
+lazily on the first `beginHudCapture()` tick
+(`pollAndPushSpikeFrame()`'s one-time-start branch) — but RmlUi resolves
+the Settings document's `<img src="duskqr://pairing">` during UI init,
+which can happen before `beginHudCapture()` has ticked even once (the
+reproduction case: no disc loaded yet, so the per-frame game-loop code
+that calls it is never reached). With no QR bitmap cached, the texture
+provider returned `std::nullopt`, and RmlUi fell back to trying
+`duskqr://pairing` as a literal file path — confirmed in the log:
+```
+[ERROR | aurora::rmlui::FileInterface] Failed to open file '.../duskqr://pairing'
+[WARNING | aurora::rmlui] Could not load texture: duskqr://pairing
+```
+**Fixed** by extracting the one-time "start server + generate pairing
+QR" branch out of `pollAndPushSpikeFrame()` into a new, idempotent
+`dusk::dualscreen::ensurePhoneSpikeStarted()`, called both from the
+existing per-frame tick and eagerly from `ui::init()` (right after
+`register_qr_texture_provider()`), so pairing is guaranteed ready no
+matter which caller reaches it first. **Verified** by reproducing the
+exact failure, then confirming after the fix: the same reproduction
+scenario now logs `phone spike: pairing URL http://192.168.0.68:8765/...`
+and `phone spike: pairing QR written to ...` with zero texture-load
+warnings. Still not scanned with a real phone camera end-to-end.
 
 **Android feasibility: no, hard architectural block, not just
 untested.** Investigated whether the Android build could act as the
@@ -590,12 +619,6 @@ don't touch windowing at all) and sockets/`getifaddrs()` already work
 fine on Android — but that's a different, smaller feature than "phone as
 tablet's companion screen," which is fully blocked.
 
-**Moved primary test/build machine.** This Linux dev box's contention
-made UI navigation impractical for finishing visual verification; the
-checkout was mirrored to a second machine (`cachyos-quadro`, real Intel
-UHD + NVIDIA RTX 2000 Ada GPU) for the remaining build/test work, with
-the user driving in-person verification there.
-
 ## Suggested phasing
 
 1. ~~**Spike:** headless aux_window target + WS server + raw frame push to
@@ -614,9 +637,11 @@ the user driving in-person verification there.
 5. ~~**Phone gamepad passthrough**~~ **Done — see Phase 5 results above**,
    with corrected scope (main-game input, not companion navigation).
 6. ~~**In-game QR display, LAN IP priority fix, Android feasibility
-   check**~~ **Done — see Phase 5.5 results above** (QR display not yet
-   visually confirmed on-screen; LAN IP fix independently verified via QR
-   decode; Android confirmed infeasible for the PC-side role).
+   check**~~ **Done — see Phase 5.5 results above** (QR display confirmed
+   rendering on real GPU hardware after fixing a real blank-QR bug found
+   during live testing; LAN IP fix independently verified via QR decode
+   on two different machines; Android confirmed infeasible for the
+   PC-side role). Still not scanned with a real phone camera.
 
 ## Open questions / risks
 
