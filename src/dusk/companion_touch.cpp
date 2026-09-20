@@ -1392,6 +1392,41 @@ void applyActionEquip(const phone_spike::CompanionAction& i_action) {
     }
 }
 
+void applyActionCollectTab(int i_tab) {
+    if (i_tab < 0 || i_tab > 4) {
+        return;
+    }
+    if (s_collectTab.load() == i_tab && s_readerSel < 0) {
+        return;  // already there with nothing open; nothing to reset
+    }
+    // The same reset cancelReadersOnDamage() performs (companion.cpp),
+    // including the two animation fields it clears for the reason stated
+    // there: dropping the tab with a zoom in flight strands the animation.
+    // A tap on the PC gets the grow-out-of-the-cell transition because it has
+    // a cell to grow out of; a phone action carries no rect, so it cuts.
+    s_readerSel = -1;
+    s_readerTapCand = -1;
+    s_scrollBody = 0.0f;
+    s_collectSel = -1;
+    s_scrollSkills = 0.0f;
+    s_scrollMail = 0.0f;
+    s_collectZoomT = 1.0f;
+    s_collectZoomClosing = false;
+    s_collectTab.store(i_tab);
+    // The reader's fetched title/corner/body are keyed on (tab, selection),
+    // and both just moved under it.
+    readerInvalidate();
+    queueSound(Z2SE_SY_MENU_CHANGE_WINDOW, HAPTIC_LIGHT);
+}
+
+void applyActionEquipGear(int i_slot) {
+    // equipGear() owns every refusal there is — not owned yet, wolf form, a
+    // change already in flight — and sets the "can't equip now" line itself,
+    // which collect_state publishes. There is nothing to re-decide here, and
+    // re-deciding it is how the two paths would drift apart.
+    equipGear(i_slot);
+}
+
 }  // namespace
 
 void applyPendingCompanionActions() {
@@ -1440,6 +1475,12 @@ void applyPendingCompanionActions() {
             break;
         case phone_spike::CompanionAction::Equip:
             applyActionEquip(action);
+            break;
+        case phone_spike::CompanionAction::CollectTab:
+            applyActionCollectTab(action.tab);
+            break;
+        case phone_spike::CompanionAction::EquipGear:
+            applyActionEquipGear(action.slot);
             break;
         default:
             break;

@@ -34,6 +34,7 @@
 #if DUSK_PHONE_SPIKE_STATE
 #include "dusk/companion_state.h"
 #include "dusk/companion_icon_decode.h"
+#include "dusk/companion_collect_state.h"
 #include "dusk/companion_map_state.h"
 #include "dusk/utilities.hpp"
 
@@ -965,6 +966,208 @@ static void pollAndPushMapState() {
     phone_spike::queue_text_frame(j.dump(), /*supersedable=*/true);
 }
 
+// Phase 5: the COLLECT page's contents — the gear rows, the six counters, the
+// fish/skill/letter lists and the scent and Fused Shadows panels, with every
+// string already resolved out of the message archive. See
+// companion_collect_state.h for what deliberately does NOT travel here.
+//
+// Structurally identical to the three pollers above, and the sameness is the
+// point: this is by far the widest state message (thirty-odd letter rows and
+// a dozen names, some five kilobytes of JSON), so it is also the one where
+// "sent only on change" stops being an optimization and becomes the thing
+// that makes sending from the game thread tenable at all. Two fields were
+// kept out of CollectState specifically to preserve that — the equip-message
+// frame counter and the reader bodies — and anything added later has to pass
+// the same test: does it change on a frame where nothing the player did
+// changed?
+//
+// Queued rather than sent inline, unlike hud_state/inv_state: those are
+// documented as tiny, and this is three orders of magnitude bigger than the
+// "well under 200 bytes" that reasoning rests on.
+static void pollAndPushCollectState() {
+    if (!phone_spike::has_client()) {
+        return;
+    }
+    static companion::CollectState s_lastCollect;
+    static bool s_haveLastCollect = false;
+    // Same reconnect resync as pollAndPushSpikeState() — see its comment.
+    static uint32_t s_lastCollectClientGen = 0;
+    const uint32_t collectClientGen = phone_spike::client_generation();
+    if (collectClientGen != s_lastCollectClientGen) {
+        s_lastCollectClientGen = collectClientGen;
+        s_haveLastCollect = false;
+    }
+
+    companion::CollectState state;
+    if (!companion::gatherCollectState(state)) {
+        // Gone (title screen, stage transition): say so once rather than
+        // leaving the phone drawing a collection that is no longer loaded —
+        // hud_state and map_state both do this.
+        if (s_haveLastCollect) {
+            s_haveLastCollect = false;
+            nlohmann::json off;
+            off["type"] = "collect_state";
+            off["active"] = false;
+            phone_spike::queue_text_frame(off.dump());
+        }
+        return;
+    }
+    // The whole struct, defaulted operator==, arrays and fixed-width strings
+    // included. It only holds because every string is copied with a
+    // zero-filling strncpy and every unused array slot stays default — a
+    // length-only copy anywhere in the gather would leave junk past the NUL
+    // and turn this compare into a per-frame send.
+    if (s_haveLastCollect && state == s_lastCollect) {
+        return;
+    }
+    s_lastCollect = state;
+    s_haveLastCollect = true;
+
+    auto selOrNull = [](s8 value) -> nlohmann::json {
+        return value < 0 ? nlohmann::json(nullptr) : nlohmann::json(value);
+    };
+    nlohmann::json j;
+    j["type"] = "collect_state";
+    j["active"] = true;
+    j["tab"] = state.tab;
+    j["sel"] = selOrNull(state.sel);
+    j["readerSel"] = selOrNull(state.readerSel);
+
+    nlohmann::json gear = nlohmann::json::array();
+    for (int i = 0; i < companion::kCollectGearSlots; i++) {
+        gear.push_back({
+            {"itemNo", state.gear[i].itemNo},
+            {"owned", state.gear[i].owned},
+            {"worn", state.gear[i].worn},
+        });
+    }
+    j["gear"] = std::move(gear);
+
+    j["heartPieces"] = state.heartPieces;
+    j["arrowMax"] = state.arrowMax;
+    j["hasBow"] = state.hasBow;
+    j["quiverIcon"] = state.quiverIcon;
+    j["bugsHeld"] = state.bugsHeld;
+    j["bugBits"] = state.bugBits;
+    // Constant, but the phone has no item table of its own to look it up in.
+    j["bugBase"] = state.bugBase;
+
+    j["fishSpecies"] = state.fishSpecies;
+    nlohmann::json fish = nlohmann::json::array();
+    for (int i = 0; i < companion::kCollectFish; i++) {
+        fish.push_back({
+            {"caught", state.fish[i].caught},
+            {"record", state.fish[i].record},
+            // Archive strings are LATIN-1 and json::dump() THROWS on invalid
+            // UTF-8, so every one of them goes through the widener — a
+            // French fish name would abort the whole message otherwise.
+            {"name", latin1ToUtf8(state.fish[i].name)},
+            {"nameResolved", state.fish[i].nameResolved},
+        });
+    }
+    j["fish"] = std::move(fish);
+    j["recordInches"] = state.recordInches;
+
+    j["skillsLearned"] = state.skillsLearned;
+    nlohmann::json skills = nlohmann::json::array();
+    for (int i = 0; i < companion::kCollectSkills; i++) {
+        skills.push_back({
+            {"learned", state.skills[i].learned},
+            {"ordinal", latin1ToUtf8(state.skills[i].ordinal)},
+            // Empty until the skill is learned — the list draws "???" there,
+            // and the name is not the phone's to reveal early.
+            {"name", latin1ToUtf8(state.skills[i].name)},
+            {"nameResolved", state.skills[i].nameResolved},
+        });
+    }
+    j["skills"] = std::move(skills);
+
+    j["poes"] = state.poes;
+    j["poeItemNo"] = state.poeItemNo;
+
+    j["letterTotal"] = state.letterTotal;
+    j["letterCount"] = state.letterCount;
+    nlohmann::json letters = nlohmann::json::array();
+    for (int i = 0; i < state.letterCount; i++) {
+        letters.push_back({
+            // The SAVEDATA index, not the row: it survives a new letter
+            // arriving and pushing every row down by one, and it is what a
+            // text_request is keyed on.
+            {"index", state.letters[i].index},
+            {"subject", latin1ToUtf8(state.letters[i].subject)},
+            {"sender", latin1ToUtf8(state.letters[i].sender)},
+            {"textResolved", state.letters[i].textResolved},
+        });
+    }
+    j["letters"] = std::move(letters);
+
+    j["scent"] = state.scent;
+    j["scentIconSlot"] = state.scentIconSlot;
+    j["scentName"] = latin1ToUtf8(state.scentName);
+
+    j["maskMdl"] = state.maskMdl;
+    j["fsHave"] = state.fsHave;
+    j["fsTotal"] = state.fsTotal;
+    j["fsLabel"] = latin1ToUtf8(state.fsLabel);
+
+    j["equipMsgVisible"] = state.equipMsgVisible;
+    j["equipMsg"] = latin1ToUtf8(state.equipMsg);
+    phone_spike::queue_text_frame(j.dump());
+}
+
+// Serves one text_request per tick: a hidden skill's description or a
+// letter's body, both full walks of the resident message archive and
+// therefore game-thread work.
+//
+// Its own poller rather than another branch in pollAndServeIconRequests(),
+// which is a capture state machine first and a request server second — it
+// returns early for as long as any capture cycle is in flight, and a body
+// that needs no GPU at all has no reason to wait behind one. Nothing here
+// touches the capture slot, so nothing here can stall the frame stream.
+static void pollAndServeTextRequests() {
+    if (!phone_spike::has_client() || !companion::hudReady()) {
+        return;
+    }
+    u8 textKind = 0;
+    int32_t textId = 0;
+    if (!phone_spike::take_pending_text_request(textKind, textId)) {
+        return;
+    }
+    char title[96];
+    char corner[96];
+    // 4096 matches the reader's own body buffer (companion_collect.cpp's
+    // ensureReaderContent), which is the largest the game's own strings run.
+    static char body[4096];
+    title[0] = 0;
+    corner[0] = 0;
+    body[0] = 0;
+    const bool ready = companion::collectBodyText(textKind, (int)textId, title, sizeof(title),
+        corner, sizeof(corner), body, sizeof(body));
+    nlohmann::json j;
+    j["type"] = "text";
+    j["kind"] = textKind == phone_spike::TEXT_SKILL ? "skill" : "letter";
+    j["id"] = textId;
+    // ready:false is not an error and it is not an empty body — it means the
+    // archive had nothing for this entry YET, which is the normal answer for
+    // the first frames after a stage load. The distinction is load-bearing:
+    // the phone caches what it gets, so an empty string reported as a body is
+    // a reader that never shows this entry again. See collectBodyText().
+    j["ready"] = ready;
+    if (ready) {
+        // Widened out of LATIN-1 like every other archive string. The body
+        // keeps its 0x02 inline-icon markers (getStringFull emits 0x02
+        // followed by outfont index + 1) — the PC draws them as button
+        // glyphs, and stripping them here would lose information the phone
+        // cannot get back.
+        j["title"] = latin1ToUtf8(title);
+        j["corner"] = latin1ToUtf8(corner);
+        j["body"] = latin1ToUtf8(body);
+    }
+    // Queued, not inline: a description runs to kilobytes, which is nothing
+    // like the "tiny" send_text_frame() is documented for.
+    phone_spike::queue_text_frame(j.dump());
+}
+
 // Phase 2/3 of the state-streaming path: serves one icon_request (item or
 // heart) at a time, across as many frames as its capture cycle needs (arm
 // this tick, drain a frame or more later once take_capture() succeeds) —
@@ -1239,12 +1442,16 @@ static void pollAndServeIconRequests() {
         bool ok = false;
         const char* kindName = "art";
         switch (artKind) {
+        // The wire names, which are the phone view's names and not the enum's
+        // — see the icon_request dispatch in phone_spike_ws.cpp. The reply's
+        // "kind" is what the phone keys its art cache on, so this string and
+        // the request's have to be the same one.
         case phone_spike::ART_CLCT:
-            kindName = "clct";
+            kindName = "collect";
             ok = companion::decodeCollectIconRgba((int)artId, rgba, artW, artH);
             break;
         case phone_spike::ART_RAW:
-            kindName = "raw";
+            kindName = "raw_icon";
             ok = companion::decodeRawItemIconRgba((int)artId, rgba, artW, artH);
             break;
         case phone_spike::ART_DECO:
@@ -1307,9 +1514,23 @@ void beginHudCapture() {
     // frame either way; only the delivery order matters.
     pollAndPushChromeState();
     pollAndPushInvState();
+    // Before hud_state, for the reason inv_state is: a phone that
+    // optimistically flipped a COLLECT sub-tab or lit a gear box sees the
+    // echo in collect_state, and an ack arriving first retires that
+    // prediction against a model not yet updated.
+    //
+    // Only mostly, though, and worth being straight about: this one is
+    // QUEUED (it is far too large for the inline path hud_state uses), so
+    // the inline ack can still overtake it. That is a one-frame flicker back
+    // to the old sub-tab, not a wrong final state, and it is the price of
+    // not blocking the game thread on a five-kilobyte write. A phone that
+    // cares should reconcile a collect action on the next collect_state
+    // rather than on the ack alone.
+    pollAndPushCollectState();
     pollAndPushSpikeState();
     pollAndPushMapState();
     pollAndServeIconRequests();
+    pollAndServeTextRequests();
 #endif
     const bool wanted = getSettings().game.dualScreen.getValue() && s_displayAvailable;
     const bool enabled = isEnabled();

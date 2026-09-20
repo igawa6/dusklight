@@ -260,6 +260,16 @@ std::deque<std::pair<uint8_t, int32_t>> g_pendingArtRequests;
 // testing, where exactly the first five of twenty-one requests vanished.
 constexpr size_t kMaxPendingArtRequests = 64;
 
+// COLLECT reader bodies (text_request). Its own queue rather than two more
+// kinds in the art deque: art is drained inside the capture state machine's
+// tick, and a body is a pure archive walk that has no business waiting behind
+// a GPU capture cycle — so the two are served by different pollers. Small,
+// because a reader shows one entry at a time; a phone with more than this
+// outstanding is speculating, and dropping the oldest is the right end to
+// lose.
+constexpr size_t kMaxPendingTextRequests = 8;
+std::deque<std::pair<uint8_t, int32_t>> g_pendingTextRequests;
+
 // Actions the phone has decided on (see CompanionAction in the header). Its
 // own mutex, not g_iconRequestMutex: the icon queues are drained by the
 // capture state machine inside the painter's tick, this one by
@@ -511,14 +521,21 @@ void dispatch_parsed_message(const nlohmann::json& msg) {
         // silently ignored for now rather than warned on, since a phone
         // built against the full protocol may legitimately send it before
         // this PC supports it.
+        //
+        // "collect" / "raw_icon" / "deco" (Phase 5): the collection page's
+        // art. The first two were briefly called "clct" and "raw" on this
+        // side only; the phone view is the larger body of code and its names
+        // are the clearer ones, so the wire took them. The ArtKind enum kept
+        // its spelling — it is internal and renaming it would have touched
+        // every serve site for nothing.
         const std::string kind = msg.value("kind", "");
         if (kind == "item") {
             request_icon(static_cast<uint8_t>(msg.value("id", 0)));
         } else if (kind == "heart") {
             request_heart_icon(static_cast<uint8_t>(msg.value("id", 0)));
-        } else if (kind == "clct") {
+        } else if (kind == "collect") {
             request_art(ART_CLCT, msg.value("id", 0));
-        } else if (kind == "raw") {
+        } else if (kind == "raw_icon") {
             request_art(ART_RAW, msg.value("id", 0));
         } else if (kind == "deco") {
             request_art(ART_DECO, msg.value("id", 0));
@@ -530,6 +547,23 @@ void dispatch_parsed_message(const nlohmann::json& msg) {
             // base image, so a second request while one is pending is the
             // same request, not another unit of work.
             request_map_base();
+        }
+    } else if (type == "text_request") {
+        // {"type":"text_request","kind":"skill","id":3}
+        //
+        // The COLLECT reader's long bodies, on their own channel rather than
+        // inside collect_state — see companion_collect_state.h for why a
+        // kilobyte of description that only one open entry ever wants must not
+        // ride on a message whose whole value is that it is rare.
+        const std::string kind = msg.value("kind", "");
+        // -1 by default and range-checked on the game thread, so a request
+        // with no id at all is refused there rather than reading entry 0.
+        if (kind == "skill") {
+            request_text(TEXT_SKILL, msg.value("id", -1));
+        } else if (kind == "letter") {
+            request_text(TEXT_LETTER, msg.value("id", -1));
+        } else {
+            DuskLog.warn("phone spike: unknown text_request kind '{}'", kind);
         }
     } else if (type == "action") {
         // {"type":"action","do":"set_page","page":1,"seq":7}
@@ -577,6 +611,19 @@ void dispatch_parsed_message(const nlohmann::json& msg) {
                 ? CompanionAction::ComboArm
                 : CompanionAction::ComboReplace;
             action.fromDrag = msg.value("fromDrag", false);
+        } else if (verb == "collect_tab") {
+            // {"type":"action","do":"collect_tab","tab":3,"seq":11}
+            // The PC flips this itself when a library cell is tapped
+            // (companion_collect.cpp's drawCollectionContent and the touch
+            // path); this is the phone doing the same thing, so the two
+            // screens never show different sub-views of the same page.
+            action.verb = CompanionAction::CollectTab;
+            action.tab = msg.value("tab", -1);
+        } else if (verb == "equip_gear") {
+            // {"type":"action","do":"equip_gear","slot":5,"seq":12}
+            // A GEAR BOX index, not an inventory slot — see the Verb comment.
+            action.verb = CompanionAction::EquipGear;
+            action.slot = msg.value("slot", -1);
         } else {
             known = false;
             DuskLog.warn("phone spike: unknown action verb '{}'", verb);
@@ -1075,6 +1122,11 @@ bool has_pending_icon_request() {
         !g_pendingArtRequests.empty()) {
         return true;
     }
+    // g_pendingTextRequests is deliberately NOT one of these. This function
+    // exists to make the binary frame path surrender its capture slot, and a
+    // text body is served entirely off an archive walk — it never arms a
+    // capture, so making the video stream skip a frame for one would cost a
+    // frame and buy nothing.
     // Must also check the heart want-list (Phase 3), not just the item
     // queue: this function is what makes the binary frame path yield the
     // capture slot for a tick (see its call site in dualscreen.cpp's
@@ -1138,6 +1190,25 @@ bool take_pending_art_request(uint8_t& artKind, int32_t& id) {
     artKind = g_pendingArtRequests.front().first;
     id = g_pendingArtRequests.front().second;
     g_pendingArtRequests.pop_front();
+    return true;
+}
+
+void request_text(uint8_t textKind, int32_t id) {
+    std::lock_guard lock{g_iconRequestMutex};
+    if (g_pendingTextRequests.size() >= kMaxPendingTextRequests) {
+        g_pendingTextRequests.pop_front();
+    }
+    g_pendingTextRequests.push_back({textKind, id});
+}
+
+bool take_pending_text_request(uint8_t& textKind, int32_t& id) {
+    std::lock_guard lock{g_iconRequestMutex};
+    if (g_pendingTextRequests.empty()) {
+        return false;
+    }
+    textKind = g_pendingTextRequests.front().first;
+    id = g_pendingTextRequests.front().second;
+    g_pendingTextRequests.pop_front();
     return true;
 }
 

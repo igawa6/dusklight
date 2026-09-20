@@ -136,10 +136,16 @@ struct CollectState {
     u16 quiverIcon = 0;
 
     u8 bugsHeld = 0;
-    // One bit per golden bug, bit i = dItemNo_M_BEETLE_e + i. A bitmask, not
-    // 24 bools: it is 24 independent first-bits that only ever change one at a
-    // time, and packing them keeps the whole-struct compare to one word.
+    // One bit per golden bug, bit i = bugBase + i. A bitmask, not 24 bools: it
+    // is 24 independent first-bits that only ever change one at a time, and
+    // packing them keeps the whole-struct compare to one word.
     u32 bugBits = 0;
+    // dItemNo_M_BEETLE_e. A compile-time constant, carried anyway for the same
+    // reason InvCellState::group is: it is the one number that turns bugBits
+    // from an opaque mask into 24 item numbers the phone can already fetch art
+    // for, and sending it means a first phone build needs no generated item
+    // table at all. Constant, so it never contributes to the diff.
+    u8 bugBase = 0;
 
     u8 fishSpecies = 0;  // species with at least one catch
     CollectFishState fish[kCollectFish];
@@ -149,6 +155,9 @@ struct CollectState {
     CollectSkillState skills[kCollectSkills];
 
     u16 poes = 0;
+    // dItemNo_POU_SPIRIT_e, the icon the poe counter cell draws. Same reason
+    // as bugBase: the count alone does not say what to draw beside it.
+    u8 poeItemNo = 0xFF;
 
     // Letters received in total, and how many of them are listed below. The
     // two differ only when the store runs past kMaxCollectLetters.

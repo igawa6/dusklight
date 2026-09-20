@@ -172,6 +172,13 @@ struct CompanionAction {
         SetPage,     // page
         SelectSlot,  // slot (-1 clears the selection)
         Equip,       // button + slot/itemNo, with combo already resolved
+        CollectTab,  // tab (COLLECT sub-view 0-4)
+        // slot = a GEAR BOX index 0-6, not an inventory slot. Its own verb
+        // rather than a flavour of Equip: gear identity is gearItemFor(), a
+        // live decision (Master vs Light sword, Wooden vs Ordon shield), and
+        // it is carried on neither a button nor an inventory slot — the two
+        // things Equip is entirely made of.
+        EquipGear,
     };
     // How an ambiguous drop (a bomb bag or the hawkeye onto a button that
     // already carries the bow) was resolved. The PC's own touch path raises a
@@ -195,6 +202,12 @@ struct CompanionAction {
     int32_t slot = -1;    // inventory slot; -1 means "resolve from itemNo"
     int32_t itemNo = -1;  // -1 means "not given"
     int32_t button = -1;  // 0 = X, 1 = Y, 2 = slot I, 3 = slot II
+    // COLLECT sub-view for CollectTab: 0 overview, 1 bugs, 2 fish, 3 skills,
+    // 4 mail — s_collectTab's own numbering, shared with collect_state's
+    // "tab" so the phone and the PC can never disagree about what "3" means.
+    // Its own field rather than reusing `page`, which means a COMPANION page
+    // and is range-checked against a completely different set.
+    int32_t tab = -1;
     // The phone's monotonic intent number, echoed back as hud_state's "ack"
     // once this has been applied OR refused. 0 = unsequenced: the action
     // still runs, it just never moves the ack.
@@ -223,6 +236,27 @@ enum ArtKind : uint8_t {
 };
 void request_art(uint8_t artKind, int32_t id);
 bool take_pending_art_request(uint8_t& artKind, int32_t& id);
+
+// Phase-5: the COLLECT reader's long bodies. A hidden skill's description and
+// a letter's text run to kilobytes each and are only ever wanted for the ONE
+// entry the reader has open, so they travel on request rather than inside
+// collect_state — the same trade icon_request makes, and the reason that
+// message can stay rare. See companion_collect_state.h.
+//
+// Mirrored from CollectTextKind rather than included from it, the same way
+// ArtKind is: companion_collect_state.h is behind DUSK_PHONE_SPIKE_STATE and
+// this file is only behind DUSK_PHONE_SPIKE, so the values are restated here
+// and the serve site is the one place that has to agree with both.
+//
+// Same threading contract as request_art(): enqueued on the WS receive
+// thread, served on the GAME thread, because collectBodyText() walks the
+// resident message archive.
+enum TextKind : uint8_t {
+    TEXT_SKILL = 0,   // id = 0-6, the hidden-skill display order
+    TEXT_LETTER = 1,  // id = the SAVEDATA letter index
+};
+void request_text(uint8_t textKind, int32_t id);
+bool take_pending_text_request(uint8_t& textKind, int32_t& id);
 
 void request_map_icon(uint8_t kind);
 bool take_pending_map_icon_request(uint8_t& kind);

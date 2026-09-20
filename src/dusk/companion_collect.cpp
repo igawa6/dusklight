@@ -359,6 +359,17 @@ void drawCollectBugs(f32 x0, f32 y0, f32 x1) {
     }
 }
 
+// Species names from the game's own message archive, so they follow the
+// language. Order is the SAVE-DATA index (the one getFishNum takes) and is
+// copied from d_menu_fishing.cpp's name_id[] — which pairs name_id[i] with
+// getFishNum(i). The old hardcoded table had a different order and so
+// mislabelled indices 0, 1 and 5.
+//
+// File scope rather than a static inside the draw because the phone state
+// gather publishes these same six names, and a second hand-copied order table
+// is precisely how the mislabelling above happened the first time.
+constexpr u16 l_fishMsg[6] = {0x59E, 0x59D, 0x59B, 0x599, 0x59A, 0x59C};
+
 void drawCollectFish(f32 x0, f32 y0, f32 x1) {
     const f32 rodIcon = 26.0f;
     char title[64];
@@ -370,12 +381,6 @@ void drawCollectFish(f32 x0, f32 y0, f32 x1) {
         drawItemIcon(ICON_SLOT_ROD, dItemNo_FISHING_ROD_1_e, iconX, y0 + 2.0f, rodIcon,
             dComIfGs_isItemFirstBit(dItemNo_FISHING_ROD_1_e) ? 0xFF : 55);
     }
-    // Species names from the game's own message archive, so they follow the
-    // language. Order is the SAVE-DATA index (the one getFishNum takes) and is
-    // copied from d_menu_fishing.cpp's name_id[] — which pairs name_id[i] with
-    // getFishNum(i). The old hardcoded table had a different order and so
-    // mislabelled indices 0, 1 and 5.
-    static const u16 l_fishMsg[6] = {0x59E, 0x59D, 0x59B, 0x599, 0x59A, 0x59C};
     // Table: Species | Caught | Record.
     const f32 availW = x1 - x0;
     const f32 colName = x0 + 10.0f;
@@ -417,6 +422,13 @@ void drawCollectFish(f32 x0, f32 y0, f32 x1) {
 constexpr u32 l_skillEvt[7] = {339, 338, 340, 341, 342, 343, 344};
 constexpr u32 l_skillName[7] = {1709, 1708, 1710, 1711, 1712, 1713, 1714};
 constexpr u32 l_skillText[7] = {1716, 1715, 1717, 1718, 1719, 1720, 1721};
+// The game's own ordinals are msg 1701 + i; this is what stands in until the
+// archive answers. File scope rather than a static inside skillOrdinal()
+// because the phone state gather publishes the same fallback, for the same
+// reason TabState::label does — a fallback the phone is told is NOT resolved
+// still has to be readable text.
+constexpr const char* l_skillOrdinalEn[7] = {"Skill One", "Skill Two", "Skill Three",
+    "Skill Four", "Skill Five", "Skill Six", "Last Skill"};
 
 bool skillLearned(int i) {
     return dComIfGs_isEventBit(dSv_event_flag_c::saveBitLabels[l_skillEvt[i]]) != 0;
@@ -789,12 +801,10 @@ void wrapBody(const char* body, f32 width, f32 ts) {
     }
 }
 
-// Ordinal labels for the skills rows and reader header.
+// Ordinal labels for the skills rows and reader header. The game's own
+// ordinals ("Skill One"..."Last Skill"), msg 1701 + i — same order as
+// l_skillName, verified against d_menu_skill.cpp:634.
 const char* skillOrdinal(int i) {
-    // The game's own ordinals ("Skill One"..."Last Skill"), msg 1701 + i — same
-    // order as l_skillName, verified against d_menu_skill.cpp:634.
-    static const char* const l_fallback[7] = {"Skill One", "Skill Two", "Skill Three",
-        "Skill Four", "Skill Five", "Skill Six", "Last Skill"};
     if (i < 0 || i >= 7) {
         return "";
     }
@@ -802,7 +812,7 @@ const char* skillOrdinal(int i) {
     // buffer raw, so a single draw before the archive was resident left all
     // seven labels blank for the rest of the session. archiveText falls back to
     // real text instead of an empty string.
-    return archiveText(1701 + i, l_fallback[i]);
+    return archiveText(1701 + i, l_skillOrdinalEn[i]);
 }
 
 void ensureReaderContent(int tab, f32 width) {
@@ -1247,6 +1257,43 @@ void lettersInvalidate() {
 
 u32 readerBodyGen() {
     return s_bodyGen;
+}
+
+// --- Tables published for the phone state gather ---------------------------
+//
+// companion_collect_state.cpp streams the same rows this page draws, so it
+// needs the same tables. Exported as accessors rather than copied there:
+// the fish order was mislabelled once already by a second hand-written table,
+// and the skill tables are in the ougi menu's display order, which is neither
+// the event-flag order nor the message order and looks wrong to anyone
+// re-deriving it. One table, two readers.
+
+bool collectSkillLearned(int i) {
+    return i >= 0 && i < 7 && skillLearned(i);
+}
+
+u32 collectSkillOrdinalMsg(int i) {
+    return i >= 0 && i < 7 ? (u32)(1701 + i) : 0u;
+}
+
+const char* collectSkillOrdinalEnglish(int i) {
+    return i >= 0 && i < 7 ? l_skillOrdinalEn[i] : "";
+}
+
+u32 collectSkillNameMsg(int i) {
+    return i >= 0 && i < 7 ? l_skillName[i] : 0u;
+}
+
+u32 collectSkillTextMsg(int i) {
+    return i >= 0 && i < 7 ? l_skillText[i] : 0u;
+}
+
+u32 collectFishNameMsg(int i) {
+    return i >= 0 && i < 6 ? (u32)l_fishMsg[i] : 0u;
+}
+
+int collectSortedLetters(int* o_idxs) {
+    return sortedLetters(o_idxs);
 }
 
 void drawCollectionContent(f32 x0, f32 y0, f32 x1, f32 y1) {

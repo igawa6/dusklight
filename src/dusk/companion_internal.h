@@ -682,6 +682,23 @@ void lettersInvalidate();
 // their own fetch must refetch when it moves on without them.
 u32 readerBodyGen();
 
+// The COLLECT page's own tables, published for the phone state gather
+// (companion_collect_state.cpp), which streams the same rows this page draws.
+// Accessors rather than a second copy: the fish order is the SAVE-DATA order
+// and has already been mislabelled once by a hand-copied duplicate, and the
+// skill tables are in the ougi menu's display order, which matches neither the
+// event-flag order nor the message order.
+bool collectSkillLearned(int i);
+u32 collectSkillOrdinalMsg(int i);
+// What the ordinal reads as while the archive has not answered yet.
+const char* collectSkillOrdinalEnglish(int i);
+u32 collectSkillNameMsg(int i);
+u32 collectSkillTextMsg(int i);
+u32 collectFishNameMsg(int i);
+// Received letters in the pause menu's newest-first order, as SAVEDATA
+// indices. `o_idxs` must have room for 64; returns how many were written.
+int collectSortedLetters(int* o_idxs);
+
 // Combo-or-replace chooser. GC vanilla splits this on the wheel: an X/Y
 // equip REPLACES, only the explicit R press combines — touch has no second
 // button, so dropping a combo partner (bombs/hawkeye) onto a bow-holding
