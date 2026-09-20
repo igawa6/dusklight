@@ -41,4 +41,22 @@ struct HudState {
 // call every frame.
 bool gatherHudState(HudState& out);
 
+// Phase-2 addition: draws ONE item's icon (any itemNo a phone requested,
+// see phone_spike_ws.h's request_icon()) into the CURRENT 2D render
+// context, sized to fill most of the given canvas — dualscreen.cpp's
+// endHudCapture() calls this INSTEAD OF drawDashboard() for one substituted
+// frame per icon-fetch request, borrowing the exact same
+// capture/encode/send pipeline the whole-dashboard frame stream already
+// uses (see docs and the state-streaming design plan's "icon rendering
+// mechanism" section — no CPU-side texture decoder exists anywhere in this
+// codebase, so getting RGBA8 pixels for any icon means drawing it and
+// reading the GPU surface back, same as every other capture in this
+// feature). Uses the dedicated ICON_SLOT_PHONE_REQUEST cache slot
+// (companion_internal.h) so it can never corrupt a live dashboard icon
+// slot's cache, no matter what itemNo is requested. Caller (dualscreen.cpp)
+// is responsible for the surrounding render-pass/ortho-context setup —
+// this function only issues the draw call itself, same division of
+// responsibility drawDashboard() already has with its own caller.
+void drawPhoneRequestedIcon(u8 itemNo, f32 canvasW, f32 canvasH);
+
 }  // namespace dusk::companion

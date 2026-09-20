@@ -33,6 +33,7 @@
 
 #if DUSK_PHONE_SPIKE_STATE
 #include "dusk/companion_state.h"
+#include "dusk/utilities.hpp"
 
 #include <nlohmann/json.hpp>
 #endif
@@ -231,6 +232,43 @@ bool s_spikeCaptureArmed = false;
 bool s_spikeServerStarted = false;
 #endif
 
+#if DUSK_PHONE_SPIKE_STATE
+// Icon-fetch-on-demand (Phase 2): borrows the SAME single-slot
+// aurora::auxwin capture the binary frame path above uses, for one
+// substituted frame per icon request, since no CPU-side texture decoder
+// exists anywhere in this codebase (see companion_state.h's
+// drawPhoneRequestedIcon() doc comment) — getting RGBA8 pixels for any
+// icon means drawing it and reading the GPU surface back, same as every
+// other capture in this feature.
+//
+// s_iconCaptureArmed mutually excludes s_spikeCaptureArmed from using the
+// capture slot on the same tick (see pollAndPushSpikeFrame()'s re-arm
+// condition below and pollAndServeIconRequests()) — request_capture() has
+// no queue of its own; calling it while a DIFFERENT capture is already
+// Armed/InFlight abandons that other one, exactly the class of bug the
+// phone-resize capture-state desync (see s_spikeCaptureArmed's own history
+// above) already cost real live-testing time to find once. Treat the
+// single capture slot as owned by at most one of these two paths per tick.
+bool s_iconCaptureArmed = false;
+// True for exactly the one endHudCapture() call that should draw the
+// pending icon (companion::drawPhoneRequestedIcon()) instead of the normal
+// dashboard — set alongside arming the capture in
+// pollAndServeIconRequests() (same beginHudCapture() tick), consumed and
+// cleared by endHudCapture() itself, later the same game frame.
+bool s_iconCaptureDrawPending = false;
+u8 s_iconCaptureItemNo = 0;
+// Safety net: endHudCapture() can bail out early (companion not active/
+// ready, e.g. a stage transition landing between the arm and the draw)
+// without ever fulfilling an armed capture — take_capture() would then
+// never succeed, and since s_iconCaptureArmed also blocks the BINARY path
+// from re-arming (see above), a stuck icon capture would silently wedge
+// frame streaming too, not just icon delivery. Give up after a bounded
+// number of frames, same shape as the existing companion-screenshot
+// feature's kShotTimeoutFrames (dualscreen.cpp, DUSK_COMPANION_CAPTURE).
+int s_iconCaptureWaited = 0;
+constexpr int kIconCaptureTimeoutFrames = 240;
+#endif
+
 }  // namespace
 
 #if DUSK_COMPANION_CAPTURE
@@ -411,7 +449,11 @@ static void pollAndPushSpikeFrame() {
         }
     }
 
-    if (!s_spikeCaptureArmed && phone_spike::has_client()) {
+    bool iconOwnsCaptureSlot = false;
+#if DUSK_PHONE_SPIKE_STATE
+    iconOwnsCaptureSlot = s_iconCaptureArmed;
+#endif
+    if (!s_spikeCaptureArmed && !iconOwnsCaptureSlot && phone_spike::has_client()) {
         aurora::auxwin::request_capture();
         s_spikeCaptureArmed = true;
     }
@@ -472,6 +514,71 @@ static void pollAndPushSpikeState() {
     };
     phone_spike::send_text_frame(j.dump());
 }
+
+// Phase 2 of the state-streaming path: serves one icon_request at a time,
+// across as many frames as its capture cycle needs (arm this tick, drain a
+// frame or more later once take_capture() succeeds) — see the big comment
+// on s_iconCaptureArmed above for why this and the binary frame path treat
+// the single aurora::auxwin capture slot as mutually exclusive. Called
+// from beginHudCapture() alongside pollAndPushSpikeFrame()/
+// pollAndPushSpikeState(); the actual draw substitution happens later the
+// same frame, in endHudCapture().
+static void pollAndServeIconRequests() {
+    if (s_iconCaptureArmed) {
+        std::vector<u8> pixels;
+        u32 width = 0;
+        u32 height = 0;
+        if (aurora::auxwin::take_capture(pixels, &width, &height) && width != 0 && height != 0) {
+            s_iconCaptureArmed = false;
+            s_iconCaptureWaited = 0;
+            if (phone_spike::has_client()) {
+                size_t pngSize = 0;
+                void* png = tdefl_write_image_to_png_file_in_memory_ex(pixels.data(),
+                    (int)width, (int)height, 4, &pngSize, 1, MZ_FALSE);
+                if (png != NULL) {
+                    const u8* pngBytes = static_cast<const u8*>(png);
+                    const std::string b64 =
+                        dusk::utils::base64_encode(std::vector<u8>(pngBytes, pngBytes + pngSize));
+                    nlohmann::json j;
+                    j["type"] = "icon";
+                    j["kind"] = "item";
+                    j["id"] = s_iconCaptureItemNo;
+                    j["png"] = b64;
+                    phone_spike::send_text_frame(j.dump());
+                    mz_free(png);
+                } else {
+                    DuskLog.warn("phone spike: icon PNG encode failed for item {}", s_iconCaptureItemNo);
+                }
+            }
+        } else if (++s_iconCaptureWaited > kIconCaptureTimeoutFrames) {
+            // endHudCapture() never fulfilled this (companion not active
+            // this stretch, e.g. a stage transition) — give up so this
+            // doesn't wedge the binary frame path (which won't re-arm
+            // while s_iconCaptureArmed is true, see
+            // pollAndPushSpikeFrame() above) forever over one request that
+            // can just be asked for again.
+            DuskLog.warn("phone spike: icon capture for item {} never completed, giving up",
+                s_iconCaptureItemNo);
+            s_iconCaptureArmed = false;
+            s_iconCaptureDrawPending = false;
+            s_iconCaptureWaited = 0;
+        }
+        return;  // draining (or timing out) an in-flight capture takes priority
+    }
+
+    if (!phone_spike::has_client() || s_spikeCaptureArmed || !companion::hudReady()) {
+        return;
+    }
+    u8 itemNo = 0;
+    if (!phone_spike::take_pending_icon_request(itemNo)) {
+        return;
+    }
+    s_iconCaptureItemNo = itemNo;
+    s_iconCaptureDrawPending = true;
+    s_iconCaptureWaited = 0;
+    aurora::auxwin::request_capture();
+    s_iconCaptureArmed = true;
+}
 #endif  // DUSK_PHONE_SPIKE_STATE
 
 void beginHudCapture() {
@@ -483,6 +590,7 @@ void beginHudCapture() {
 #endif
 #if DUSK_PHONE_SPIKE_STATE
     pollAndPushSpikeState();
+    pollAndServeIconRequests();
 #endif
     const bool wanted = getSettings().game.dualScreen.getValue() && s_displayAvailable;
     const bool enabled = isEnabled();
@@ -614,9 +722,28 @@ void endHudCapture() {
     ortho.setPort();
     companion::applyNativeViewport();
 
+    bool drewIcon = false;
+#if DUSK_PHONE_SPIKE_STATE
+    if (!splash && s_iconCaptureDrawPending) {
+        // One-off substitution for a pending icon_request (Phase 2 of the
+        // state-streaming path) — draws ONLY the requested item's icon
+        // instead of the real dashboard for this one frame, into the exact
+        // same render target request_capture() (armed by
+        // pollAndServeIconRequests(), earlier this same beginHudCapture()
+        // tick) will read back. Deliberately does NOT set s_everPresented:
+        // this isn't a real dashboard presentation, and the second screen
+        // should keep showing its last real dashboard frame (the aux
+        // window's own present/blit still uses whatever set_source() below
+        // hands it, same as any other frame) rather than treat this as the
+        // first-ever presentation if it happens to land before one.
+        companion::drawPhoneRequestedIcon(s_iconCaptureItemNo, (f32)canvasW, (f32)canvasH);
+        s_iconCaptureDrawPending = false;
+        drewIcon = true;
+    }
+#endif
     if (splash) {
         companion::drawSplash((f32)canvasW, (f32)canvasH);
-    } else {
+    } else if (!drewIcon) {
         companion::drawDashboard((f32)canvasW, (f32)canvasH);
         s_everPresented = true;
     }

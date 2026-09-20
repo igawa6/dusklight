@@ -28,6 +28,7 @@
 #include <condition_variable>
 #include <csignal>
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -189,6 +190,21 @@ std::mutex g_resizeMutex;
 bool g_resizePending = false;
 uint32_t g_pendingResizeW = 0;
 uint32_t g_pendingResizeH = 0;
+
+// Phase-2 state-streaming addition: pending "item" icon-fetch requests
+// (kind: "item" only — see dispatch_message()'s icon_request branch; other
+// kinds are reserved for later phases). Unlike resize's single-slot
+// latest-value semantics (only the newest size matters), each DISTINCT icon
+// request must actually be served — a bounded FIFO, not a single slot, so
+// e.g. the phone requesting its X, Y, and slot-I icons back to back all get
+// answered instead of the first two being silently dropped in favor of the
+// last. Capped small: if this is ever actually overflowing, something
+// upstream is requesting unreasonably many icons, not a real usage pattern
+// this needs to handle gracefully — drop the oldest and move on rather than
+// grow unbounded.
+constexpr size_t kMaxPendingIconRequests = 16;
+std::mutex g_iconRequestMutex;
+std::deque<uint8_t> g_pendingIconRequests;
 
 bool read_http_headers(int fd, std::string& out) {
     // Cap well above any real browser request's header size; anything past
@@ -380,6 +396,17 @@ void dispatch_message(std::string_view json) {
         // clamping happens on the game thread when this is consumed (see
         // dualscreen.cpp), not here; this just hands the raw report off.
         request_resize(msg.value("width", 0u), msg.value("height", 0u));
+    } else if (type == "icon_request") {
+        // Phase 2 of the state-streaming path: only "item" is handled here
+        // (equipped X/Y/slot-I/II items, plus the rupee gem and key icon,
+        // which are confirmed to already be ordinary archive item icons —
+        // see companion_state.cpp's drawPhoneRequestedIcon()). "heart" and
+        // "map_icon" are reserved for later phases; silently ignored for
+        // now rather than warned on, since a phone built against the full
+        // protocol may legitimately send them before this PC supports them.
+        if (msg.value("kind", "") == "item") {
+            request_icon(static_cast<uint8_t>(msg.value("id", 0)));
+        }
     } else if (type == "pad") {
         // Full continuous state, not a discrete event — see
         // phone_spike_pad.h. Sent every animation frame by the test page,
@@ -762,6 +789,24 @@ bool take_pending_resize(uint32_t& width, uint32_t& height) {
     width = g_pendingResizeW;
     height = g_pendingResizeH;
     g_resizePending = false;
+    return true;
+}
+
+void request_icon(uint8_t itemNo) {
+    std::lock_guard lock{g_iconRequestMutex};
+    if (g_pendingIconRequests.size() >= kMaxPendingIconRequests) {
+        g_pendingIconRequests.pop_front();
+    }
+    g_pendingIconRequests.push_back(itemNo);
+}
+
+bool take_pending_icon_request(uint8_t& itemNo) {
+    std::lock_guard lock{g_iconRequestMutex};
+    if (g_pendingIconRequests.empty()) {
+        return false;
+    }
+    itemNo = g_pendingIconRequests.front();
+    g_pendingIconRequests.pop_front();
     return true;
 }
 

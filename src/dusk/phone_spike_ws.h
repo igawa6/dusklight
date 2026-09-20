@@ -75,6 +75,21 @@ void request_resize(uint32_t width, uint32_t height);
 // is pending. Game thread only, by convention with the above.
 bool take_pending_resize(uint32_t& width, uint32_t& height);
 
+// Phase-2 state-streaming addition: icon-fetch-on-demand (see
+// docs/phone-companion-design.md's state-streaming design plan). Set by the
+// WS receive thread when an "icon_request" message arrives; consumed by the
+// game thread, never acted on directly here — rendering an icon means
+// drawing it and capturing the GPU surface back, main/game-thread only,
+// same reason resize can't happen on the receive thread. A bounded FIFO,
+// not a single slot like resize: each distinct request needs to actually be
+// served, not have a later one silently replace an earlier unconsumed one.
+void request_icon(uint8_t itemNo);
+
+// True and fills itemNo with the oldest still-pending request, removing it
+// from the queue, if any is pending. False (leaves itemNo untouched)
+// otherwise. Game thread only, by convention with the resize pair above.
+bool take_pending_icon_request(uint8_t& itemNo);
+
 // Gamepad passthrough (phase 5) lives in phone_spike_pad.h — a controller
 // connected to the phone, forwarded as a real second controller for the
 // main game via dolphin::PAD's existing virtual-status injection point.
