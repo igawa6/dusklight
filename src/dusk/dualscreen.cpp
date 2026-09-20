@@ -574,6 +574,16 @@ static void pollAndPushSpikeState() {
     // path.
     static companion::HudState s_lastSent;
     static bool s_haveLastSent = false;
+    // A new client has no idea what the last-sent snapshot was, and these
+    // statics outlive connections — so without this a reconnecting phone
+    // received nothing at all until some value happened to change on its
+    // own, leaving its overlay blank or stale indefinitely.
+    static uint32_t s_lastClientGen = 0;
+    const uint32_t clientGen = phone_spike::client_generation();
+    if (clientGen != s_lastClientGen) {
+        s_lastClientGen = clientGen;
+        s_haveLastSent = false;
+    }
     if (s_haveLastSent && state == s_lastSent) {
         return;
     }
@@ -624,6 +634,13 @@ static void pollAndPushMapState() {
     }
     static companion::MapState s_lastMap;
     static bool s_haveLastMap = false;
+    // Same reconnect resync as pollAndPushSpikeState() — see its comment.
+    static uint32_t s_lastMapClientGen = 0;
+    const uint32_t mapClientGen = phone_spike::client_generation();
+    if (mapClientGen != s_lastMapClientGen) {
+        s_lastMapClientGen = mapClientGen;
+        s_haveLastMap = false;
+    }
 
     companion::MapState state;
     if (!companion::gatherMapState(state)) {
@@ -699,7 +716,7 @@ static void pollAndPushMapState() {
         }
         j["icons"] = std::move(icons);
     }
-    phone_spike::queue_text_frame(j.dump());
+    phone_spike::queue_text_frame(j.dump(), /*supersedable=*/true);
 }
 
 // Phase 2/3 of the state-streaming path: serves one icon_request (item or
@@ -816,7 +833,13 @@ static void pollAndServeIconRequests() {
                             {"v1", s_mapBaseFitV1},
                         };
                         j["png"] = b64;
-                        phone_spike::send_text_frame(j.dump());
+                        // Queued, NOT sent inline: this payload is hundreds
+                        // of kilobytes of base64, and send_text_frame() is
+                        // documented for tiny messages sent directly from the
+                        // game thread. A blocking socket write of that size
+                        // here is the same stall the binary frame path was
+                        // moved off-thread to avoid.
+                        phone_spike::queue_text_frame(j.dump());
                         mz_free(png);
                         companion::setMapBaseCanonicalView(false);
                         return;
@@ -831,7 +854,10 @@ static void pollAndServeIconRequests() {
                         j["id"] = s_iconCaptureItemNo;
                     }
                     j["png"] = b64;
-                    phone_spike::send_text_frame(j.dump());
+                    // Queued for the same reason as the map base above: an
+                    // icon's base64 payload is far too large for the inline
+                    // game-thread send path.
+                    phone_spike::queue_text_frame(j.dump());
                     mz_free(png);
                 } else {
                     DuskLog.warn("phone spike: icon PNG encode failed ({} {})",

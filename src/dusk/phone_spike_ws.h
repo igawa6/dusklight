@@ -33,6 +33,11 @@ void stop_server();
 // True once a browser has completed the WS handshake and is ready for frames.
 bool has_client();
 
+// Increments every time a new client is adopted. Senders that diff against a
+// last-sent snapshot must re-send everything when this changes, or a
+// reconnecting client sees nothing until a value happens to change by itself.
+uint32_t client_generation();
+
 // Push one binary WS frame (a PNG-encoded companion capture): the actual
 // blocking socket write (short send timeout — see .cpp), called from the
 // background sender thread, never the game thread — a real phone over real
@@ -72,12 +77,17 @@ void queue_raw_frame(std::vector<uint8_t> pixels, uint32_t width, uint32_t heigh
 // change-only hud_state messages still send inline; that stays fine
 // precisely because they are rare.
 //
-// The queue is bounded and drops the OLDEST message on overflow: these carry
-// live state where a newer message supersedes an older one, so stale
-// positions are the right thing to discard if the sender falls behind.
-// Queued texts go out ahead of any queued frame, since a frame costs a
+// Also use it for anything LARGE — a base64 icon or map image runs to
+// hundreds of kilobytes, which is nothing like the "tiny" send_text_frame()
+// is documented for.
+//
+// `supersedable` says whether a later message makes this one redundant. The
+// queue is bounded; on overflow it drops the oldest supersedable message, so
+// a stale player position is discarded rather than an icon payload or a
+// haptic cue, which are edge-triggered and lost for good if dropped. Queued
+// texts go out ahead of any queued frame, since a frame costs a
 // multi-millisecond PNG encode first.
-void queue_text_frame(std::string json);
+void queue_text_frame(std::string json, bool supersedable = false);
 
 // Set by the WS receive thread when a "hello" message reports the phone's
 // native pixel resolution; consumed by the game thread (dualscreen.cpp),

@@ -41,7 +41,15 @@ u8 gaugePercent(int now, int max) {
 // because the substitution changes the reported itemNo, which the existing
 // whole-struct diff already notices.
 u8 equippedItemForPhone(int button) {
-    const u8 itemNo = dComIfGp_getSelectItem(button);
+    // Buttons 2/3 are slots I/II, which the Ooccoo quick-use path can
+    // temporarily BORROW. The dashboard deliberately keeps showing the
+    // player's own item throughout that borrow (slotDisplayBinding(),
+    // companion.cpp) rather than the borrowed one, so reading the raw
+    // selection here made the phone display something the local second
+    // screen intentionally hides — the two disagreed for the duration of
+    // every borrow.
+    const u8 itemNo = button >= 2 ? (u8)slotDisplayBinding(button - 2)
+                                  : dComIfGp_getSelectItem(button);
     if (itemNo == dItemNo_KANTERA_e && dComIfGs_getOil() == 0) {
         return dItemNo_KANTERA2_e;
     }
@@ -116,20 +124,10 @@ void drawPhoneRequestedIcon(u8 itemNo, f32 canvasW, f32 canvasH) {
     // not the clamped logical canvasW/canvasH — so the size difference
     // really is compression efficiency, not resolution).
     //
-    // KNOWN REMAINING ISSUE, not yet root-caused: the small key icon
-    // (dItemNo_SMALL_KEY_e) still captures at ~865KB despite this fix and
-    // the small fixed draw size below — confirmed via live testing that
-    // both this fillRect() and the icon draw genuinely execute (logged),
-    // at the same real capture resolution as the rupee case, so this isn't
-    // a resolution or sequencing bug. The remaining difference traces into
-    // dMeter2Info::readItemTexture()/J2DPicture's shared, non-trivial
-    // texture-loading path (src/d/d_meter2_info.cpp) — something itemNo-
-    // specific there is producing more visual entropy for this one item
-    // than the flat background + small icon should account for. Not
-    // pursued further for v1: it's a one-time, per-identity cost (not a
-    // per-frame one), and digging further means modifying complex, already
-    // shared/proven decompiled rendering code rather than this feature's
-    // own additive path — a real follow-up, not a blocker.
+    // (A second, unrelated cause of oversized captures — every heart and the
+    // key item returning a byte-identical copy of the whole dashboard — was
+    // a capture/presentation race, since fixed; see
+    // s_iconCaptureDrawnFrames in dualscreen.cpp.)
     fillRect(0.0f, 0.0f, canvasW, canvasH, COL_BG);
 
     // Small FIXED size, not a fraction of the canvas: the capture still

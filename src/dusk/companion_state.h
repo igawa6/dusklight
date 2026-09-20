@@ -83,10 +83,17 @@ bool gatherHudState(HudState& out);
 // frame per icon-fetch request, borrowing the exact same
 // capture/encode/send pipeline the whole-dashboard frame stream already
 // uses (see docs and the state-streaming design plan's "icon rendering
-// mechanism" section — no CPU-side texture decoder exists anywhere in this
-// codebase, so getting RGBA8 pixels for any icon means drawing it and
-// reading the GPU surface back, same as every other capture in this
-// feature). Uses the dedicated ICON_SLOT_PHONE_REQUEST cache slot
+// mechanism" section — this draws and reads the GPU surface back
+// rather than decoding the texture on the CPU. NOTE: an earlier version of
+// this comment claimed no CPU-side texture decoder existed anywhere in the
+// codebase, and used that to justify this approach. That was wrong —
+// aurora::convert_texture()/convert_texture_palette()
+// (extern/aurora/lib/gfx/texture_convert.hpp) handle every GX format
+// including the CI8 these icons use, and their source bytes are already in
+// CPU memory. Decoding directly would avoid stealing a capture slot from
+// the frame stream, which is why fetching art visibly drops the frame rate.
+// Left as-is for now because it is working and proven, but it is the
+// obvious thing to replace). Uses the dedicated ICON_SLOT_PHONE_REQUEST cache slot
 // (companion_internal.h) so it can never corrupt a live dashboard icon
 // slot's cache, no matter what itemNo is requested. Caller (dualscreen.cpp)
 // is responsible for the surrounding render-pass/ortho-context setup —

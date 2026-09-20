@@ -28,6 +28,7 @@
 #include <condition_variable>
 #include <csignal>
 #include <cstring>
+#include <algorithm>
 #include <deque>
 #include <mutex>
 #include <string>
@@ -168,6 +169,12 @@ requestAnimationFrame(pollGamepad);
 
 std::mutex g_clientMutex;
 int g_clientFd = -1;
+// Bumped each time a NEW client is adopted. The game-thread state senders
+// diff against a last-sent snapshot and send only on change; those snapshots
+// are long-lived statics, so without a way to notice a fresh client a
+// reconnecting phone received NOTHING until some value happened to change on
+// its own — a blank overlay that filled in only gradually, or never.
+uint32_t g_clientGeneration = 0;
 std::thread g_acceptThread;
 std::atomic<bool> g_running{false};
 int g_listenFd = -1;
@@ -185,7 +192,15 @@ std::condition_variable g_pendingFrameCv;
 // way the rare hud_state messages are: map_player is sent every frame the
 // player moves, and a blocking send() at that rate is precisely what made
 // the binary frame path stall the game before it was moved off-thread.
-std::deque<std::string> g_pendingTexts;
+struct PendingText {
+    std::string json;
+    // True when a LATER message of the same kind makes this one redundant
+    // (a newer player position supersedes an older one). False for
+    // edge-triggered messages — a haptic cue or a fetched icon is not
+    // replaced by anything, and silently dropping one loses it for good.
+    bool supersedable;
+};
+std::deque<PendingText> g_pendingTexts;
 std::vector<uint8_t> g_pendingFramePixels;
 uint32_t g_pendingFrameWidth = 0;
 uint32_t g_pendingFrameHeight = 0;
@@ -536,6 +551,7 @@ void set_client(int fd) {
     }
     g_clientFd = fd;
     if (fd >= 0) {
+        g_clientGeneration++;
         // Bounded-blocking sends on the background sender thread: never hang
         // forever on a stalled/dead client, but never silently write a
         // partial frame either — see send_binary_frame's contract in the
@@ -713,6 +729,11 @@ void stop_server() {
     set_client(-1);
 }
 
+uint32_t client_generation() {
+    std::lock_guard lock{g_clientMutex};
+    return g_clientGeneration;
+}
+
 bool has_client() {
     std::lock_guard lock{g_clientMutex};
     return g_clientFd >= 0;
@@ -796,7 +817,7 @@ bool send_text_frame(std::string_view json) {
 void sender_loop() {
     for (;;) {
         std::vector<uint8_t> pixels;
-        std::deque<std::string> texts;
+        std::deque<PendingText> texts;
         uint32_t width = 0;
         uint32_t height = 0;
         bool haveFrame = false;
@@ -822,8 +843,8 @@ void sender_loop() {
         // player moves), while a queued frame costs a multi-millisecond PNG
         // encode. Letting an encode run ahead of them would add exactly the
         // lag this whole state path exists to remove.
-        for (const std::string& text : texts) {
-            if (!send_text_frame(text)) {
+        for (const PendingText& text : texts) {
+            if (!send_text_frame(text.json)) {
                 break;  // client gone; send_text_frame already tore it down
             }
         }
@@ -845,17 +866,25 @@ void sender_loop() {
     }
 }
 
-void queue_text_frame(std::string json) {
+void queue_text_frame(std::string json, bool supersedable) {
     std::lock_guard lock{g_pendingFrameMutex};
-    // Bounded, and drops the OLDEST on overflow. These carry live state
-    // (player position, map layers) where the newest message supersedes the
-    // older ones, so if the sender ever falls behind, stale positions are
-    // exactly what should be thrown away.
-    constexpr size_t kMaxPendingTexts = 32;
+    // Bounded. On overflow, drop the oldest SUPERSEDABLE message rather than
+    // simply the oldest: a stale player position is exactly what should be
+    // thrown away when the sender falls behind, but an icon payload or a
+    // haptic cue is edge-triggered and nothing later replaces it, so
+    // dropping one loses it permanently. Only if nothing supersedable is
+    // queued does this fall back to dropping the oldest outright.
+    constexpr size_t kMaxPendingTexts = 64;
     if (g_pendingTexts.size() >= kMaxPendingTexts) {
-        g_pendingTexts.pop_front();
+        auto victim = std::find_if(g_pendingTexts.begin(), g_pendingTexts.end(),
+            [](const PendingText& t) { return t.supersedable; });
+        if (victim != g_pendingTexts.end()) {
+            g_pendingTexts.erase(victim);
+        } else {
+            g_pendingTexts.pop_front();
+        }
     }
-    g_pendingTexts.push_back(std::move(json));
+    g_pendingTexts.push_back(PendingText{std::move(json), supersedable});
     g_pendingFrameCv.notify_one();
 }
 
