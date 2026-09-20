@@ -394,23 +394,14 @@ static void pollAndPushSpikeFrame() {
         if (aurora::auxwin::take_capture(pixels, &width, &height) && width != 0 && height != 0) {
             s_spikeCaptureArmed = false;
             if (phone_spike::has_client()) {
-                // Same level-1 tradeoff as the screenshot path above, except
-                // this runs every ~66ms instead of once — that per-frame cost
-                // is exactly what this spike exists to measure, not assume.
-                size_t pngSize = 0;
-                void* png = tdefl_write_image_to_png_file_in_memory_ex(pixels.data(), (int)width,
-                    (int)height, 4, &pngSize, 1, MZ_FALSE);
-                if (png != NULL) {
-                    // queue_binary_frame(), not send_binary_frame(): the
-                    // actual socket write happens on a background sender
-                    // thread now, never here — see phone_spike_ws.h. A real
-                    // phone over real Wi-Fi made the old synchronous send
-                    // slow enough to visibly stall the game thread.
-                    phone_spike::queue_binary_frame(png, pngSize);
-                    mz_free(png);
-                } else {
-                    DuskLog.warn("phone spike: PNG encode failed");
-                }
+                // queue_raw_frame(), not an in-line PNG encode +
+                // queue_binary_frame(): both the encode AND the socket
+                // write now happen on the background sender thread, never
+                // here — see phone_spike_ws.h. A real phone over real
+                // Wi-Fi made doing either synchronously on the game thread
+                // visibly stall it; this runs every ~66ms, so even a
+                // "cheap" per-call cost adds up to real, visible lag.
+                phone_spike::queue_raw_frame(std::move(pixels), width, height);
             }
         }
     }

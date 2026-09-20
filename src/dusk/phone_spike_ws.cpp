@@ -14,6 +14,8 @@
 #include "dusk/phone_spike_pairing.h"
 #include "dusk/phone_spike_sha1.h"
 
+#include "miniz.h"
+
 #include <nlohmann/json.hpp>
 
 #include <arpa/inet.h>
@@ -171,13 +173,15 @@ int g_listenFd = -1;
 
 // Single-slot latest-frame hand-off, same shape as phone_spike_pad.h's
 // gamepad state: the game thread only ever needs to hand off the freshest
-// encoded frame, never a backlog — see queue_binary_frame()'s doc comment
-// for why this exists (a real phone over real Wi-Fi, unlike every earlier
-// loopback test, can make the blocking send slow enough to visibly stall
-// the game thread if done synchronously there).
+// RAW capture, never a backlog — see queue_raw_frame()'s doc comment for
+// why this exists (a real phone over real Wi-Fi, unlike every earlier
+// loopback test, can make either the PNG encode or the send slow enough to
+// visibly stall the game thread if done synchronously there).
 std::mutex g_pendingFrameMutex;
 std::condition_variable g_pendingFrameCv;
-std::vector<uint8_t> g_pendingFrameBytes;
+std::vector<uint8_t> g_pendingFramePixels;
+uint32_t g_pendingFrameWidth = 0;
+uint32_t g_pendingFrameHeight = 0;
 bool g_pendingFrameReady = false;
 std::thread g_senderThread;
 
@@ -676,35 +680,49 @@ bool send_binary_frame(const void* data, size_t size) {
     return true;
 }
 
-// Background sender thread's body: blocks on new frames, does the
-// (potentially slow, over real Wi-Fi) blocking send_binary_frame() call
-// here instead of on the game thread. Exits once g_running goes false AND
-// there's nothing left to wake it for.
+// Background sender thread's body: blocks on new raw captures, does the
+// PNG encode AND the (potentially slow, over real Wi-Fi) blocking
+// send_binary_frame() call here instead of on the game thread. Exits once
+// g_running goes false AND there's nothing left to wake it for.
 void sender_loop() {
     for (;;) {
-        std::vector<uint8_t> frame;
+        std::vector<uint8_t> pixels;
+        uint32_t width = 0;
+        uint32_t height = 0;
         {
             std::unique_lock lock{g_pendingFrameMutex};
             g_pendingFrameCv.wait(lock, [] { return g_pendingFrameReady || !g_running.load(); });
             if (!g_running.load()) {
                 return;
             }
-            frame = std::move(g_pendingFrameBytes);
+            pixels = std::move(g_pendingFramePixels);
+            width = g_pendingFrameWidth;
+            height = g_pendingFrameHeight;
             g_pendingFrameReady = false;
         }
-        send_binary_frame(frame.data(), frame.size());
+        // Level 1, not 6: same tradeoff dualscreen.cpp's screenshot path
+        // documents — level 6 costs several hundred extra ms per encode,
+        // not worth it for a smaller file here either.
+        size_t pngSize = 0;
+        void* png = tdefl_write_image_to_png_file_in_memory_ex(
+            pixels.data(), static_cast<int>(width), static_cast<int>(height), 4, &pngSize, 1, MZ_FALSE);
+        if (png == nullptr) {
+            DuskLog.warn("phone spike: PNG encode failed");
+            continue;
+        }
+        send_binary_frame(png, pngSize);
+        mz_free(png);
     }
 }
 
-void queue_binary_frame(const void* data, size_t size) {
+void queue_raw_frame(std::vector<uint8_t> pixels, uint32_t width, uint32_t height) {
     std::lock_guard lock{g_pendingFrameMutex};
-    const auto* bytes = static_cast<const uint8_t*>(data);
-    // Copies rather than takes ownership: the caller (dualscreen.cpp) frees
-    // its miniz buffer right after this returns, same lifetime contract as
-    // the old direct send_binary_frame() call had. Overwrites any frame
-    // still waiting to go out — always the freshest capture, never a
-    // growing backlog of stale ones if the sender falls behind.
-    g_pendingFrameBytes.assign(bytes, bytes + size);
+    // Takes ownership (moved) — overwrites any frame still waiting to go
+    // out, so the connection always carries the freshest capture rather
+    // than a growing backlog of stale ones if the sender falls behind.
+    g_pendingFramePixels = std::move(pixels);
+    g_pendingFrameWidth = width;
+    g_pendingFrameHeight = height;
     g_pendingFrameReady = true;
     g_pendingFrameCv.notify_one();
 }

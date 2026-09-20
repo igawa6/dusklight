@@ -18,6 +18,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace dusk::phone_spike {
 
@@ -43,14 +44,16 @@ bool has_client();
 // there is no client or the send failed.
 bool send_binary_frame(const void* data, size_t size);
 
-// Game-thread entry point: hands an already-PNG-encoded frame off to the
-// background sender thread and returns immediately, without touching the
-// socket. Copies `data` — the caller's buffer can be freed right after this
-// returns. If a previous frame is still queued and unsent, it is dropped in
-// favor of the new one, so the connection always carries the freshest
-// capture rather than a growing backlog of stale ones if the sender falls
-// behind (e.g. a slow/congested real Wi-Fi link).
-void queue_binary_frame(const void* data, size_t size);
+// Game-thread entry point: hands a raw RGBA8 capture off to the background
+// sender thread (PNG encode included) and returns immediately, touching
+// neither the encoder nor the socket. Takes ownership of `pixels` (moved) —
+// PNG-encoding a multi-megapixel frame every ~66ms is itself real CPU time
+// (not just the network send), and a real phone over real Wi-Fi made doing
+// either synchronously on the game thread visibly stall it. If a previous
+// frame is still queued and unsent, it is dropped in favor of the new one,
+// so the connection always carries the freshest capture rather than a
+// growing backlog of stale ones if the sender falls behind.
+void queue_raw_frame(std::vector<uint8_t> pixels, uint32_t width, uint32_t height);
 
 // Set by the WS receive thread when a "hello" message reports the phone's
 // native pixel resolution; consumed by the game thread (dualscreen.cpp),
