@@ -233,6 +233,14 @@ std::deque<uint8_t> g_pendingIconRequests;
 // rather than another unit of work. Shares g_iconRequestMutex because it is
 // consumed by the same game-thread capture state machine.
 bool g_mapBaseWanted = false;
+// Bitmask of companion pages the phone says it renders natively. While the
+// page on screen is one of these, the PC stops capturing, encoding and
+// sending frames entirely — that suppression is the whole point of the
+// handshake, and it is what actually removes the latency rather than making
+// the stream cheaper. Declared by the phone only once it genuinely holds
+// what it needs to draw, so an empty or stale declaration degrades to the
+// streamed picture rather than a blank screen.
+std::atomic<uint32_t> g_clientOwnedPages{0};
 // Dungeon-map overlay icon kinds (ICON_*_e) the phone has asked for. A FIFO
 // like the item queue and for the same reason: each distinct kind must
 // actually be served, not replaced by a later one. Fourteen kinds exist, so
@@ -491,6 +499,22 @@ void dispatch_message(std::string_view json) {
             // same request, not another unit of work.
             request_map_base();
         }
+    } else if (type == "client_owns") {
+        // {"type":"client_owns","pages":[0,2]} — companion page indices the
+        // phone renders itself. Absent or empty means "send me pictures for
+        // everything", which is also what every older client implies.
+        uint32_t mask = 0;
+        if (msg.contains("pages") && msg["pages"].is_array()) {
+            for (const auto& entry : msg["pages"]) {
+                if (entry.is_number_integer()) {
+                    const int page = entry.get<int>();
+                    if (page >= 0 && page < 32) {
+                        mask |= 1u << page;
+                    }
+                }
+            }
+        }
+        set_client_owned_pages(mask);
     } else if (type == "pad") {
         // Full continuous state, not a discrete event — see
         // phone_spike_pad.h. Sent every animation frame by the test page,
@@ -967,6 +991,14 @@ bool has_pending_icon_request() {
         }
     }
     return false;
+}
+
+void set_client_owned_pages(uint32_t mask) {
+    g_clientOwnedPages.store(mask);
+}
+
+uint32_t client_owned_pages() {
+    return g_clientOwnedPages.load();
 }
 
 void request_map_icon(uint8_t kind) {

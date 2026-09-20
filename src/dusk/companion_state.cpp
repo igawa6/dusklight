@@ -92,6 +92,10 @@ void gatherGauges(HudState& out) {
 
 }  // namespace
 
+int currentPage() {
+    return s_page.load();
+}
+
 bool gatherHudState(HudState& out) {
     if (!hudReady()) {
         return false;
@@ -101,6 +105,7 @@ bool gatherHudState(HudState& out) {
     out.rupees = dComIfGs_getRupee();
     out.maxRupees = dComIfGs_getRupeeMax();
     out.keys = dComIfGs_getKeyNum();
+    out.page = (u8)currentPage();
     out.equipX = equippedItemForPhone(0);
     out.equipY = equippedItemForPhone(1);
     out.equipSlot1 = equippedItemForPhone(2);

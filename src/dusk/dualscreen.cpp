@@ -558,6 +558,24 @@ static void pollAndPushSpikeFrame() {
     iconWantsCaptureSlot = s_iconCaptureArmed || s_iconCaptureDrawPending ||
         phone_spike::has_pending_icon_request() || phone_spike::has_pending_map_base_request();
 #endif
+    // If the phone renders the page currently on screen, send it nothing at
+    // all: no capture, no readback, no PNG encode, no packet. This is the
+    // step that actually removes the latency — everything before it only
+    // made the picture cheaper to send, when the picture itself was the
+    // problem. A page the phone has not claimed still streams exactly as
+    // before, so this retires the stream one surface at a time rather than
+    // in one jump.
+    bool pageOwnedByPhone = false;
+#if DUSK_PHONE_SPIKE_STATE
+    {
+        const int page = companion::currentPage();
+        pageOwnedByPhone =
+            page >= 0 && page < 32 && (phone_spike::client_owned_pages() & (1u << page)) != 0;
+    }
+#endif
+    if (pageOwnedByPhone) {
+        return;
+    }
     if (!s_spikeCaptureArmed && !iconWantsCaptureSlot && phone_spike::has_client()) {
         aurora::auxwin::request_capture();
         s_spikeCaptureArmed = true;
@@ -634,6 +652,11 @@ static void pollAndPushSpikeState() {
     j["rupees"] = state.rupees;
     j["maxRupees"] = state.maxRupees;
     j["keys"] = state.keys;
+    // Which companion page is on screen. The phone needs it to know when to
+    // take over rendering, and it is what the ownership handshake is keyed
+    // on. Folded into hud_state rather than given its own message because
+    // the whole-struct diff already notices it change.
+    j["page"] = state.page;
     j["equip"] = {
         {"x", slotOrNull(state.equipX)},
         {"y", slotOrNull(state.equipY)},

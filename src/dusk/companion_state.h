@@ -21,6 +21,9 @@ struct HudState {
     u16 rupees = 0;
     u16 maxRupees = 0;
     u8 keys = 0;
+    // Companion page index currently displayed (PAGE_MAP, PAGE_INVENTORY,
+    // PAGE_COLLECTION, PAGE_GUIDE).
+    u8 page = 0;
     // dItemNo_NONE_e (0xFF) means the slot is empty — callers of
     // gatherHudState() never need to know that sentinel value themselves,
     // it's already dItemNo_NONE_e's actual value (d_item_data.h), kept as
@@ -75,6 +78,11 @@ struct HudState {
 // unmodified otherwise. Pure read: no drawing, no side effects, safe to
 // call every frame.
 bool gatherHudState(HudState& out);
+
+// The companion page currently on screen, as a plain int. Exported so
+// dualscreen.cpp can key the phone's page-ownership handshake on it without
+// pulling in the companion module's internal header.
+int currentPage();
 
 
 // Phase-3 addition: hearts. Unlike items, heart container art isn't a

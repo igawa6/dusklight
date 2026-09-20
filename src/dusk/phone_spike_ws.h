@@ -149,6 +149,13 @@ void request_heart_icon(uint8_t state);
 // kind "map_icon"). A FIFO like the item queue — each distinct kind must be
 // served, not superseded. Served from a CPU texture decode, so unlike the
 // map base it never touches the capture slot.
+// Companion pages the phone renders natively, as a bitmask of page indices.
+// While the page on screen is owned, the frame stream is suppressed outright
+// — see pollAndPushSpikeFrame(). Zero (the default, and what any older
+// client implies) means the PC keeps sending pictures for everything.
+void set_client_owned_pages(uint32_t mask);
+uint32_t client_owned_pages();
+
 void request_map_icon(uint8_t kind);
 bool take_pending_map_icon_request(uint8_t& kind);
 
