@@ -1466,6 +1466,8 @@ set(DUSK_FILES
         src/dusk/companion_dmap.cpp
         src/dusk/companion_state.h
         src/dusk/companion_state.cpp
+        src/dusk/companion_icon_decode.h
+        src/dusk/companion_icon_decode.cpp
         src/dusk/companion_map_state.h
         src/dusk/companion_map_state.cpp
         src/dusk/dualscreen.h

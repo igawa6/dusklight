@@ -894,6 +894,13 @@ void drawTextEllipsized(f32 x, f32 y, f32 size, f32 maxW, u32 rgba, const char* 
 int fitPrefix(f32 size, f32 maxW, const char* text);
 void drawTextFittedCentered(f32 cx, f32 y, f32 size, f32 minSize, f32 maxW, u32 rgba,
     const char* text);
+// Two items resolve through the item table to leftover unused art; this
+// returns a corrected texture index for them and -1 for everything else.
+// Exported because the phone companion's CPU icon decoder must apply the
+// same correction — passing -1 there would silently show the wrong picture
+// for exactly those two.
+int iconTextureOverride(u8 itemNo);
+
 void drawTimg(const ResTIMG* timg, f32 x, f32 y, f32 w, f32 h, u8 alpha);
 // Call before freeing any ResTIMG that may have been drawn (see the definition).
 void gfxForgetTimgLatch();

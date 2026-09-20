@@ -33,6 +33,7 @@
 
 #if DUSK_PHONE_SPIKE_STATE
 #include "dusk/companion_state.h"
+#include "dusk/companion_icon_decode.h"
 #include "dusk/companion_map_state.h"
 #include "dusk/utilities.hpp"
 
@@ -933,6 +934,38 @@ static void pollAndServeIconRequests() {
     }
     u8 itemNo = 0;
     u8 heartState = 0;
+    // Items are served straight from a CPU texture decode — no capture, no
+    // substituted frame, no stolen capture slot. That last point is the
+    // whole reason: this path shares its single capture slot with the video
+    // frame stream, so every icon fetched the old way cost the stream a
+    // frame, which is exactly the hitch that showed up whenever art loaded.
+    // Served before anything else because it costs nothing to serve.
+    if (phone_spike::take_pending_icon_request(itemNo)) {
+        std::vector<u8> rgba;
+        u32 iconW = 0;
+        u32 iconH = 0;
+        if (companion::decodeItemIconRgba(itemNo, rgba, iconW, iconH) && iconW != 0 &&
+            iconH != 0) {
+            size_t pngSize = 0;
+            void* png = tdefl_write_image_to_png_file_in_memory_ex(
+                rgba.data(), (int)iconW, (int)iconH, 4, &pngSize, 1, MZ_FALSE);
+            if (png != NULL) {
+                const u8* pngBytes = static_cast<const u8*>(png);
+                const std::string b64 =
+                    dusk::utils::base64_encode(std::vector<u8>(pngBytes, pngBytes + pngSize));
+                mz_free(png);
+                nlohmann::json j;
+                j["type"] = "icon";
+                j["kind"] = "item";
+                j["id"] = itemNo;
+                j["png"] = b64;
+                phone_spike::queue_text_frame(j.dump());
+            }
+        } else {
+            DuskLog.warn("phone spike: item icon {} could not be decoded", (int)itemNo);
+        }
+        return;
+    }
     if (phone_spike::take_pending_map_base_request()) {
         // First: it's the layer everything else on the map page is drawn
         // relative to, and unlike a heart it never needs retries.
@@ -944,14 +977,6 @@ static void pollAndServeIconRequests() {
         s_iconCaptureIsHeart = false;
         s_mapBaseCaptureGen = companion::mapBaseGeneration();
         companion::setMapBaseCanonicalView(true);
-    } else if (phone_spike::take_pending_icon_request(itemNo)) {
-        // Items first: always immediately servable (an archive texture load,
-        // never "not found yet" the way a heart state can be), so there's no
-        // reason to make an item request wait behind a heart one that might
-        // need many retries.
-        s_iconCaptureIsHeart = false;
-        s_iconCaptureIsMapBase = false;
-        s_iconCaptureItemNo = itemNo;
     } else if (phone_spike::take_next_wanted_heart_state(heartState)) {
         s_iconCaptureIsMapBase = false;
         s_iconCaptureIsHeart = true;

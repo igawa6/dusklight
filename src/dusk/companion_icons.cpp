@@ -49,16 +49,6 @@ int s_iconLayers[ICON_SLOT_COUNT];
 // Corrected here rather than in the table: item_resource is the disc's data,
 // and readItemTexture already accepts a texture override for exactly this.
 // Returns -1 when the table entry is fine.
-int iconTextureOverride(u8 itemNo) {
-    switch (itemNo) {
-    case dItemNo_SWORD_e:
-        return 0x72;  // TT_SWORD_48
-    case dItemNo_WOOD_SHIELD_e:
-        return 0x73;  // TT_WOOD_SHIELD_48
-    default:
-        return -1;
-    }
-}
 
 int updateItemPics(int slot, u8 itemNo) {
     if (itemNo == dItemNo_NONE_e || dComIfGp_getItemIconArchive() == NULL) {
@@ -114,6 +104,17 @@ alignas(32) u8 s_rawIconBuf[1][0x2800];
 int s_rawIconIdx[1] = {-1};
 
 }  // namespace
+
+int iconTextureOverride(u8 itemNo) {
+    switch (itemNo) {
+    case dItemNo_SWORD_e:
+        return 0x72;  // TT_SWORD_48
+    case dItemNo_WOOD_SHIELD_e:
+        return 0x73;  // TT_WOOD_SHIELD_48
+    default:
+        return -1;
+    }
+}
 
 void drawItemIcon(int slot, u8 itemNo, f32 x, f32 y, f32 size, u8 alpha) {
     const int layers = updateItemPics(slot, itemNo);
