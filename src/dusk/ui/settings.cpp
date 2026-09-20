@@ -31,6 +31,9 @@
 #include "dusk/livesplit.h"
 #include "dusk/presentation.hpp"
 #include "dusk/speedrun.h"
+#if DUSK_PHONE_SPIKE
+#include "dusk/phone_spike_pairing.h"
+#endif
 
 #include <aurora/gfx.h>
 #include <aurora/lib/window.hpp>
@@ -1457,6 +1460,34 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
                     // this file on the next start, and the app can be killed
                     // from the task switcher without ever running shutdown.
                     .onChange = [](bool value) { dusk::dualscreen::publishSwapPreference(value); },
+                });
+        }
+#endif
+
+#if DUSK_PHONE_SPIKE && !defined(TARGET_ANDROID) && !defined(__ANDROID__) && !defined(ANDROID)
+        // Phone-companion spike (see docs/phone-companion-design.md) —
+        // same placement rule as Swap Screens above: only while the second
+        // screen is actually in use. Not Android: the spike's frame push
+        // needs a hidden desktop SDL window (aurora::auxwin::create with
+        // CreateInfo::hidden), and Android allows exactly one window,
+        // already the game's own — there is no offscreen render path there
+        // yet, so this would just be a QR code that can never connect.
+        if (dusk::dualscreen::hudOnCompanion()) {
+            leftPane.register_control(
+                leftPane.add_select_button({
+                    .key = "Pair a Phone",
+                    .getValue = [] { return Rml::String{"Scan to connect"}; },
+                    .isModified = [] { return false; },
+                }),
+                rightPane, [](Pane& pane) {
+                    pane.add_rml(
+                        "<img src=\"duskqr://pairing\" style=\"width:180px;height:180px;\"/>"
+                        "<br/>" +
+                        dusk::phone_spike::current_pairing_url() +
+                        "<br/>Scan with a phone on the same Wi-Fi to use it as a second "
+                        "screen. A gamepad connected to that phone also works as a second "
+                        "controller for the game — the phone's own touchscreen only "
+                        "controls the companion display, never the game.");
                 });
         }
 #endif

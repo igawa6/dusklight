@@ -1645,6 +1645,8 @@ set(DUSK_FILES
         src/dusk/ui/package_row.hpp
         src/dusk/ui/mod_texture_provider.cpp
         src/dusk/ui/mod_texture_provider.hpp
+        src/dusk/ui/phone_spike_qr_texture.cpp
+        src/dusk/ui/phone_spike_qr_texture.hpp
         src/dusk/ui/remote_texture_provider.cpp
         src/dusk/ui/remote_texture_provider.hpp
         src/dusk/ui/runtime_image.cpp

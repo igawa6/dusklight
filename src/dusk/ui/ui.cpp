@@ -5,6 +5,7 @@
 #include "icon_provider.hpp"
 #include "input.hpp"
 #include "mod_texture_provider.hpp"
+#include "phone_spike_qr_texture.hpp"
 #include "prelaunch.hpp"
 #include "remote_texture_provider.hpp"
 #include "saves_window.hpp"
@@ -115,6 +116,7 @@ bool initialize() noexcept {
     register_icon_texture_provider();
     register_mod_texture_provider();
     register_remote_texture_provider();
+    register_qr_texture_provider();
     Rml::StyleSheetSpecification::RegisterProperty("mod-icon-tint", "transparent", false)
         .AddParser("color");
     Rml::StyleSheetSpecification::RegisterProperty("mod-icon-background", "transparent", false)
@@ -131,6 +133,7 @@ void shutdown() noexcept {
     }
     sPendingDrops.clear();
     sDroppedPackages.clear();
+    unregister_qr_texture_provider();
     unregister_remote_texture_provider();
     unregister_mod_texture_provider();
     unregister_icon_texture_provider();

@@ -22,6 +22,14 @@ namespace dusk::phone_spike {
 namespace {
 std::mutex g_tokenMutex;
 std::string g_activeToken;
+
+// Game-thread-only (see current_qr_bitmap()'s doc comment) — no mutex,
+// unlike the token above, which set_active_token()/current_token() do
+// guard because those ARE called across threads elsewhere.
+std::vector<uint8_t> g_qrPixels;
+uint32_t g_qrWidth = 0;
+uint32_t g_qrHeight = 0;
+std::string g_pairingUrl;
 }  // namespace
 
 std::string generate_token() {
@@ -63,12 +71,44 @@ const std::string& current_token() {
     return g_activeToken;
 }
 
+namespace {
+
+// Lower is better. Real LAN addresses win outright; VPN interfaces (name
+// match) and CGNAT addresses (Tailscale's actual range, 100.64.0.0/10 —
+// caught by IP even if some other VPN doesn't match the name list below)
+// are a last resort, not a hard exclusion, so pairing still works over a
+// VPN-only link rather than returning nothing. Confirmed against a real
+// gap: this machine has both a LAN and a Tailscale interface, and
+// getifaddrs()'s enumeration order isn't LAN-first — the original
+// first-match version picked Tailscale.
+int address_priority(std::string_view ifName, uint32_t hostOrderAddr) {
+    static constexpr std::string_view kVpnPrefixes[] = {
+        "tailscale", "wg", "utun", "tun", "ppp", "zt", "docker", "veth", "br-", "virbr",
+    };
+    for (const auto prefix : kVpnPrefixes) {
+        if (ifName.compare(0, prefix.size(), prefix) == 0) {
+            return 2;
+        }
+    }
+    const bool cgnat = (hostOrderAddr & 0xFFC00000) == 0x64400000;  // 100.64.0.0/10
+    if (cgnat) {
+        return 2;
+    }
+    const bool rfc1918 = (hostOrderAddr & 0xFF000000) == 0x0A000000 ||        // 10.0.0.0/8
+                         (hostOrderAddr & 0xFFF00000) == 0xAC100000 ||        // 172.16.0.0/12
+                         (hostOrderAddr & 0xFFFF0000) == 0xC0A80000;          // 192.168.0.0/16
+    return rfc1918 ? 0 : 1;
+}
+
+}  // namespace
+
 std::string discover_lan_ip() {
     struct ifaddrs* ifaddr = nullptr;
     if (getifaddrs(&ifaddr) != 0) {
         return {};
     }
-    std::string result;
+    std::string best;
+    int bestPriority = 3;
     for (struct ifaddrs* ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
         if (ifa->ifa_addr == nullptr || ifa->ifa_addr->sa_family != AF_INET) {
             continue;
@@ -76,15 +116,23 @@ std::string discover_lan_ip() {
         if ((ifa->ifa_flags & IFF_LOOPBACK) != 0 || (ifa->ifa_flags & IFF_UP) == 0) {
             continue;
         }
-        char buf[INET_ADDRSTRLEN];
         const auto* sin = reinterpret_cast<struct sockaddr_in*>(ifa->ifa_addr);
+        const int priority =
+            address_priority(ifa->ifa_name != nullptr ? ifa->ifa_name : "", ntohl(sin->sin_addr.s_addr));
+        if (priority >= bestPriority) {
+            continue;
+        }
+        char buf[INET_ADDRSTRLEN];
         if (inet_ntop(AF_INET, &sin->sin_addr, buf, sizeof(buf)) != nullptr) {
-            result = buf;
-            break;  // first non-loopback UP IPv4 — good enough for a spike
+            best = buf;
+            bestPriority = priority;
+            if (bestPriority == 0) {
+                break;  // can't do better than a real LAN address
+            }
         }
     }
     freeifaddrs(ifaddr);
-    return result;
+    return best;
 }
 
 bool write_pairing_qr(const std::string& url, const std::string& outPath) {
@@ -124,6 +172,14 @@ bool write_pairing_qr(const std::string& url, const std::string& outPath) {
         }
     }
 
+    // Cache before the PNG round-trip so the in-game texture provider has
+    // it even if the file write below fails for some reason (e.g. a
+    // read-only data dir) — the PNG is a convenience, not the source of
+    // truth.
+    g_qrPixels = pixels;
+    g_qrWidth = static_cast<uint32_t>(imgPx);
+    g_qrHeight = static_cast<uint32_t>(imgPx);
+
     size_t pngSize = 0;
     void* png =
         tdefl_write_image_to_png_file_in_memory_ex(pixels.data(), imgPx, imgPx, 4, &pngSize, 6, MZ_FALSE);
@@ -144,6 +200,16 @@ bool write_pairing_qr(const std::string& url, const std::string& outPath) {
     return ok;
 }
 
+bool current_qr_bitmap(std::vector<uint8_t>& outPixels, uint32_t& outWidth, uint32_t& outHeight) {
+    if (g_qrPixels.empty()) {
+        return false;
+    }
+    outPixels = g_qrPixels;
+    outWidth = g_qrWidth;
+    outHeight = g_qrHeight;
+    return true;
+}
+
 bool start_pairing(uint16_t port, const std::string& qrOutPath) {
     set_active_token(generate_token());
 
@@ -154,13 +220,17 @@ bool start_pairing(uint16_t port, const std::string& qrOutPath) {
         return false;
     }
 
-    const std::string url = "http://" + ip + ":" + std::to_string(port) + "/?token=" + current_token();
-    DuskLog.info("phone spike: pairing URL {}", url);
-    if (!write_pairing_qr(url, qrOutPath)) {
+    g_pairingUrl = "http://" + ip + ":" + std::to_string(port) + "/?token=" + current_token();
+    DuskLog.info("phone spike: pairing URL {}", g_pairingUrl);
+    if (!write_pairing_qr(g_pairingUrl, qrOutPath)) {
         return false;
     }
     DuskLog.info("phone spike: pairing QR written to {}", qrOutPath);
     return true;
+}
+
+const std::string& current_pairing_url() {
+    return g_pairingUrl;
 }
 
 }  // namespace dusk::phone_spike
