@@ -587,6 +587,12 @@ extern f32 s_scrollGuide;
 
 // --- Shared + Cinematic widgets, companion_hud.cpp ---
 const char* tabName(int page);
+// Whether a label tabName() returned is final, or still the English fallback
+// the archive has not replaced yet. Takes the label rather than refetching
+// it — see the definition. Only the state stream needs this: the draw is
+// happy to paint a fallback and repaint next frame, but a phone told a label
+// is resolved will cache it for the session.
+bool tabLabelResolved(int page, const char* label);
 f32 drawOilGauge(f32 rightX, f32 cy);
 void drawHeartsRow(f32 x0, f32 x1);
 void drawDungeonIcons(f32 x, f32 y);
@@ -982,6 +988,30 @@ void processDragTouch(f32 w, f32 h);
 // screen's two-boxes-per-type layout).
 u8 gearItemFor(int idx);
 
+#if DUSK_PHONE_SPIKE
+// Runs the phone's queued ACTIONS — the decisions a phone that renders its
+// own tab strip and inventory grid sends INSTEAD of touch coordinates.
+//
+// Called from beginFrameCompanionInput(), i.e. the GAME frame loop, and
+// deliberately not from anywhere near a draw. handleTouch() runs at the tail
+// of drawDashboard because it hit-tests against the rects that frame's draw
+// just published, and five paths skip that draw entirely (icon fetches,
+// stage transitions) — so input built on it stalls with the painter. The
+// executors an action reaches are all geometry-free already; only the hit
+// test was ever fused to the painter, and an action arrives pre-hit-tested.
+//
+// Every action taken off the queue advances the ack whether it was applied
+// or refused, because "the ack moved and nothing changed" is how a refusal
+// reaches the phone.
+void applyPendingCompanionActions();
+
+// The ack itself. Game thread only — written by the drain above, read by the
+// state gatherer on the same thread, and surfaced to dualscreen.cpp through
+// companion_state.h's lastAppliedActionSeq() so that file never has to
+// include this one.
+extern u32 s_actionAckSeq;
+#endif
+
 // ---------------------------------------------------------------------------
 // Page content (companion_pages.cpp / companion_collect.cpp).
 
@@ -1009,5 +1039,19 @@ const ResTIMG* dmapLinkIconTimg();
 const ResTIMG* dmapIconTimg(u8 icon);
 void drawInventoryContent(f32 x0, f32 y0, f32 x1, f32 y1);
 void drawCollectionContent(f32 x0, f32 y0, f32 x1, f32 y1);
+
+// The ITEMS grid's compile-time cell table, read-only. Cell index -> the
+// inventory slot it holds and its group tint; both are identical in the 5x5
+// and 6x4 tables (static_assert'd), so these answer for either layout and
+// only the cell POSITIONS differ between them. invGridWide() reports which
+// table the current canvas selected.
+//
+// For the state stream, which needs the grid's contents on frames the ITEMS
+// page has not drawn — s_invCells is published by the draw and is stale or
+// empty then.
+int invGridCellCount();
+int invGridCellSlot(int i_cell);
+int invGridCellGroup(int i_cell);
+bool invGridWide();
 
 }  // namespace dusk::companion

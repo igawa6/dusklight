@@ -12,6 +12,8 @@
 #include "d/d_meter2_draw.h"
 #include "m_Do/m_Do_mtx.h"
 
+#include <cstring>
+
 namespace dusk::companion {
 
 namespace {
@@ -41,15 +43,34 @@ u8 gaugePercent(int now, int max) {
 // because the substitution changes the reported itemNo, which the existing
 // whole-struct diff already notices.
 u8 equippedItemForPhone(int button) {
-    // Buttons 2/3 are slots I/II, which the Ooccoo quick-use path can
-    // temporarily BORROW. The dashboard deliberately keeps showing the
-    // player's own item throughout that borrow (slotDisplayBinding(),
-    // companion.cpp) rather than the borrowed one, so reading the raw
-    // selection here made the phone display something the local second
-    // screen intentionally hides — the two disagreed for the duration of
-    // every borrow.
-    const u8 itemNo = button >= 2 ? (u8)slotDisplayBinding(button - 2)
-                                  : dComIfGp_getSelectItem(button);
+    u8 itemNo;
+    if (button >= 2) {
+        // Buttons 2/3 are slots I/II, which the Ooccoo quick-use path can
+        // temporarily BORROW. The dashboard deliberately keeps showing the
+        // player's own item throughout that borrow (slotDisplayBinding(),
+        // companion.cpp) rather than the borrowed one, so reading the raw
+        // selection here made the phone display something the local second
+        // screen intentionally hides — the two disagreed for the duration of
+        // every borrow.
+        //
+        // slotDisplayBinding() answers WHICH INVENTORY SLOT is bound, which
+        // is not an item number: this used to cast that slot index straight
+        // into the field and the phone fetched icon art for whatever item
+        // happened to share the number (slot 2 -> item 2, and so on). The
+        // resolution below is the one drawFunctionalItemButtons() already
+        // uses for the same two boxes — the play mirror normally, so a combo
+        // on the slot reads as the combined item, and the raw inventory item
+        // mid-borrow, when the mirror is holding Ooccoo instead.
+        const int which = button - 2;
+        const int bound = slotDisplayBinding(which);
+        if (bound < 0) {
+            return dItemNo_NONE_e;
+        }
+        itemNo = slotIsBorrowed(which) ? dComIfGs_getItem(bound, false)
+                                       : dComIfGp_getSelectItem(2 + which);
+    } else {
+        itemNo = dComIfGp_getSelectItem(button);
+    }
     if (itemNo == dItemNo_KANTERA_e && dComIfGs_getOil() == 0) {
         return dItemNo_KANTERA2_e;
     }
@@ -94,6 +115,92 @@ void gatherGauges(HudState& out) {
 
 int currentPage() {
     return s_page.load();
+}
+
+u32 lastAppliedActionSeq() {
+    return s_actionAckSeq;
+}
+
+const char* contextActionName(u8 action) {
+    switch (action) {
+    case CTX_WARP:
+        return "warp";
+    case CTX_FLOOR:
+        return "floor";
+    case CTX_INFO:
+        return "info";
+    case CTX_HOME:
+        return "home";
+    case CTX_BACK:
+        return "back";
+    default:
+        return "none";
+    }
+}
+
+bool gatherChromeState(ChromeState& out) {
+    if (!hudReady()) {
+        return false;
+    }
+    out.functional = dusk::dualscreen::mainHudRestored();
+    out.page = (u8)currentPage();
+    out.guideOpen = guideIsOpen();
+
+    int pages[TAB_RECT_MAX];
+    const int count = visiblePages(pages);
+    out.tabCount = (u8)(count < kMaxTabs ? count : kMaxTabs);
+    for (int i = 0; i < out.tabCount; i++) {
+        out.tabs[i].page = (u8)pages[i];
+        // Fetched ONCE and passed on: each call spends a tick of
+        // archiveText()'s retry budget while a string is still unresolved.
+        const char* label = tabName(pages[i]);
+        // strncpy, not a length-checked copy: it zero-FILLS the tail, which
+        // the defaulted operator== compares byte for byte. A copy that only
+        // terminated the string would leave whatever a previous, longer label
+        // wrote in the tail, and the diff would report a change that is not
+        // one — resending four labels every frame.
+        std::strncpy(out.tabs[i].label, label, sizeof(out.tabs[i].label) - 1);
+        out.tabs[i].label[sizeof(out.tabs[i].label) - 1] = 0;
+        out.tabs[i].labelResolved = tabLabelResolved(pages[i], label);
+    }
+
+    bool clickable = false;
+    out.contextAction = (u8)contextTabAction(&clickable);
+    out.contextClickable = clickable;
+    return true;
+}
+
+bool gatherInvState(InvState& out) {
+    if (!hudReady()) {
+        return false;
+    }
+    out.wide = invGridWide();
+    out.selSlot = (s8)s_selSlot;
+    out.selCell = -1;
+    out.cellCount = (u8)invGridCellCount();
+    for (int i = 0; i < out.cellCount && i < kInvCells; i++) {
+        const int slot = invGridCellSlot(i);
+        const u8 itemNo = dComIfGs_getItem(slot, false);
+        out.cells[i].slot = (u8)slot;
+        out.cells[i].itemNo = itemNo;
+        out.cells[i].group = (u8)invGridCellGroup(i);
+        // The GRID's ammo variant: keyed on the inventory slot, so each bomb
+        // bag counts its own bag. drawInvCell() asks for exactly this.
+        out.cells[i].ammo =
+            itemNo == dItemNo_NONE_e ? (s16)-1 : (s16)ammoForItem(itemNo, -1, slot);
+        if (slot == s_selSlot) {
+            out.selCell = (s8)i;
+        }
+    }
+    for (int b = 0; b < 4; b++) {
+        // The BUTTON variant, for the same item hud_state reports on that
+        // button — bomb arrows on X count X's own selection, which is not
+        // what any single grid cell shows.
+        const u8 itemNo = equippedItemForPhone(b);
+        out.buttonAmmo[b] =
+            itemNo == dItemNo_NONE_e ? (s16)-1 : (s16)ammoForItem(itemNo, b);
+    }
+    return true;
 }
 
 bool gatherHudState(HudState& out) {

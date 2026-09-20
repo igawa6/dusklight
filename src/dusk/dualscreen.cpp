@@ -635,10 +635,20 @@ static void pollAndPushSpikeState() {
         s_lastClientGen = clientGen;
         s_haveLastSent = false;
     }
-    if (s_haveLastSent && state == s_lastSent) {
+    // The ack is part of the message, so it is part of what "unchanged"
+    // means. This is the single load-bearing line of the reconciliation
+    // design: a REFUSED action changes no game state at all, so without the
+    // ack in this test the refusal would be indistinguishable from the packet
+    // never arriving, and the phone would hold its optimistic prediction —
+    // the equipped item it drew, the tab it raised — until it timed out.
+    // Sending on an ack-only change is what turns silence into a "no".
+    static u32 s_lastSentAck = 0;
+    const u32 ack = companion::lastAppliedActionSeq();
+    if (s_haveLastSent && state == s_lastSent && ack == s_lastSentAck) {
         return;
     }
     s_lastSent = state;
+    s_lastSentAck = ack;
     s_haveLastSent = true;
 
     auto slotOrNull = [](u8 itemNo) -> nlohmann::json {
@@ -647,6 +657,11 @@ static void pollAndPushSpikeState() {
     nlohmann::json j;
     j["type"] = "hud_state";
     j["active"] = true;
+    // Highest phone action `seq` decided on (see the suppression test above).
+    // On hud_state rather than in a message of its own because this is the
+    // one message that is allowed to go out when nothing else changed, which
+    // is exactly the case an ack has to cover.
+    j["ack"] = ack;
     j["life"] = state.life;
     j["maxLife"] = state.maxLife;
     j["rupees"] = state.rupees;
@@ -674,6 +689,176 @@ static void pollAndPushSpikeState() {
         {"oxygen", state.oxygenPct},
         {"oxygenVisible", state.oxygenVisible},
     };
+    phone_spike::send_text_frame(j.dump());
+}
+
+// Archive strings are LATIN-1 (single byte per character — the same
+// assumption companion_gfx.cpp's toUpperLatin1() already makes, and the
+// reason the companion's own STR_* table is written as \xNN escapes), but
+// nlohmann::json::dump() THROWS on a byte sequence that is not valid UTF-8.
+// So a German tab label would not merely arrive garbled, it would abort the
+// whole message — silently, since the exception unwinds out of the poller.
+//
+// Widening here rather than at the draw: the C++ renderer wants LATIN-1
+// because that is what the game's own font is indexed by, and the phone wants
+// UTF-8 because that is what its font is. Neither is wrong, so the conversion
+// belongs on the wire between them.
+//
+// (A Japanese disc is Shift-JIS, not LATIN-1, and would come out as mojibake
+// rather than as an exception. Stated rather than handled: nothing in the
+// companion reads Shift-JIS today.)
+static std::string latin1ToUtf8(const char* text) {
+    std::string out;
+    if (text == NULL) {
+        return out;
+    }
+    for (const unsigned char* p = (const unsigned char*)text; *p != 0; p++) {
+        if (*p < 0x80) {
+            out.push_back((char)*p);
+        } else {
+            out.push_back((char)(0xC0 | (*p >> 6)));
+            out.push_back((char)(0x80 | (*p & 0x3F)));
+        }
+    }
+    return out;
+}
+
+// The tab strip's contents: which pages this layout shows, what they are
+// called, which one is lit, and the resolved context-tab action beside them.
+// Everything a phone needs to draw the strip itself and nothing it could work
+// out on its own.
+//
+// A sibling of pollAndPushSpikeState() rather than more fields on HudState,
+// because it changes for entirely different reasons — a layout-mode toggle, a
+// room change, a label finally resolving out of the archive — and folding it
+// in would make every rupee pickup resend four tab labels.
+static void pollAndPushChromeState() {
+    if (!phone_spike::has_client()) {
+        return;
+    }
+    static companion::ChromeState s_lastChrome;
+    static bool s_haveLastChrome = false;
+    // Same reconnect resync as pollAndPushSpikeState() — see its comment.
+    static uint32_t s_lastChromeClientGen = 0;
+    const uint32_t chromeClientGen = phone_spike::client_generation();
+    if (chromeClientGen != s_lastChromeClientGen) {
+        s_lastChromeClientGen = chromeClientGen;
+        s_haveLastChrome = false;
+    }
+
+    companion::ChromeState state;
+    if (!companion::gatherChromeState(state)) {
+        if (s_haveLastChrome) {
+            s_haveLastChrome = false;
+            nlohmann::json off;
+            off["type"] = "chrome_state";
+            off["active"] = false;
+            phone_spike::queue_text_frame(off.dump());
+        }
+        return;
+    }
+    if (s_haveLastChrome && state == s_lastChrome) {
+        return;
+    }
+    s_lastChrome = state;
+    s_haveLastChrome = true;
+
+    nlohmann::json j;
+    j["type"] = "chrome_state";
+    j["active"] = true;
+    // "functional" / "cinematic" rather than a bool: the two are different
+    // surfaces with different tab sets and different controls, not one skin
+    // of the other, and a name says so where a flag reads like a variant.
+    j["layout"] = state.functional ? "functional" : "cinematic";
+    j["page"] = state.page;
+    j["guideOpen"] = state.guideOpen;
+    nlohmann::json tabs = nlohmann::json::array();
+    for (int i = 0; i < state.tabCount; i++) {
+        tabs.push_back({
+            {"page", state.tabs[i].page},
+            {"label", latin1ToUtf8(state.tabs[i].label)},
+            // See TabState::labelResolved: false means "this is the English
+            // fallback, a real one may still arrive" — do not cache it.
+            {"labelResolved", state.tabs[i].labelResolved},
+        });
+    }
+    j["tabs"] = std::move(tabs);
+    j["context"] = {
+        {"action", companion::contextActionName(state.contextAction)},
+        {"clickable", state.contextClickable},
+    };
+    phone_spike::send_text_frame(j.dump());
+}
+
+// The ITEMS grid's contents — 23 cells of (slot, item, quantity) plus the
+// selection and the four item buttons' quantities.
+//
+// Sent inline like hud_state rather than through the background sender,
+// despite being the largest of the three state messages (~800 bytes against
+// ~200): ORDER matters more than size here. hud_state carries the action ack,
+// and a queued inv_state could be overtaken by an inline hud_state whose ack
+// tells the phone to drop a prediction whose replacement is still in the
+// queue — a visible flicker back to the old selection. Rarity is what makes
+// an inline send safe, and this one is rarer than hud_state.
+static void pollAndPushInvState() {
+    if (!phone_spike::has_client()) {
+        return;
+    }
+    static companion::InvState s_lastInv;
+    static bool s_haveLastInv = false;
+    static uint32_t s_lastInvClientGen = 0;
+    const uint32_t invClientGen = phone_spike::client_generation();
+    if (invClientGen != s_lastInvClientGen) {
+        s_lastInvClientGen = invClientGen;
+        s_haveLastInv = false;
+    }
+
+    companion::InvState state;
+    if (!companion::gatherInvState(state)) {
+        if (s_haveLastInv) {
+            s_haveLastInv = false;
+            nlohmann::json off;
+            off["type"] = "inv_state";
+            off["active"] = false;
+            phone_spike::queue_text_frame(off.dump());
+        }
+        return;
+    }
+    if (s_haveLastInv && state == s_lastInv) {
+        return;
+    }
+    s_lastInv = state;
+    s_haveLastInv = true;
+
+    auto itemOrNull = [](u8 itemNo) -> nlohmann::json {
+        return itemNo == 0xFF ? nlohmann::json(nullptr) : nlohmann::json(itemNo);
+    };
+    auto ammoOrNull = [](s16 ammo) -> nlohmann::json {
+        return ammo < 0 ? nlohmann::json(nullptr) : nlohmann::json(ammo);
+    };
+    nlohmann::json j;
+    j["type"] = "inv_state";
+    j["active"] = true;
+    j["wide"] = state.wide;
+    j["selSlot"] = state.selSlot < 0 ? nlohmann::json(nullptr) : nlohmann::json(state.selSlot);
+    j["selCell"] = state.selCell < 0 ? nlohmann::json(nullptr) : nlohmann::json(state.selCell);
+    nlohmann::json cells = nlohmann::json::array();
+    for (int i = 0; i < state.cellCount; i++) {
+        cells.push_back({
+            {"slot", state.cells[i].slot},
+            // null IS the empty cell — the cell itself still exists and still
+            // draws its tinted plate, so it is never simply omitted.
+            {"item", itemOrNull(state.cells[i].itemNo)},
+            {"ammo", ammoOrNull(state.cells[i].ammo)},
+            {"group", state.cells[i].group},
+        });
+    }
+    j["cells"] = std::move(cells);
+    nlohmann::json buttonAmmo = nlohmann::json::array();
+    for (int b = 0; b < 4; b++) {
+        buttonAmmo.push_back(ammoOrNull(state.buttonAmmo[b]));
+    }
+    j["buttonAmmo"] = std::move(buttonAmmo);
     phone_spike::send_text_frame(j.dump());
 }
 
@@ -1078,6 +1263,16 @@ void beginHudCapture() {
     pollAndPushSpikeFrame();
 #endif
 #if DUSK_PHONE_SPIKE_STATE
+    // hud_state goes LAST of the three, and the order is load-bearing: it is
+    // the message carrying the action ack, and an ack must never arrive ahead
+    // of the state it acknowledges. A phone that optimistically highlighted
+    // an inventory cell sees the selection echoed in inv_state, not in
+    // hud_state — so acking first would retire the prediction against a model
+    // that had not been updated yet, and the highlight would drop out for one
+    // message and come back. All three snapshots are taken from the same
+    // frame either way; only the delivery order matters.
+    pollAndPushChromeState();
+    pollAndPushInvState();
     pollAndPushSpikeState();
     pollAndPushMapState();
     pollAndServeIconRequests();

@@ -156,6 +156,63 @@ void request_heart_icon(uint8_t state);
 void set_client_owned_pages(uint32_t mask);
 uint32_t client_owned_pages();
 
+// A DECISION the phone already made, rather than a touch point for the PC to
+// hit-test. Once the phone draws the tab strip and the inventory grid itself
+// it knows what a tap meant before the packet leaves; sending coordinates
+// back for the PC to re-derive is the round trip the whole partition exists
+// to delete.
+//
+// Same threading contract as request_icon() above and for a stronger reason:
+// dispatch_message() runs on the WS receive thread, and every executor an
+// action reaches writes SAVEDATA. None of it may run there. This is an
+// enqueue and nothing else; companion_touch.cpp's
+// applyPendingCompanionActions() drains it on the game thread.
+struct CompanionAction {
+    enum Verb : uint8_t {
+        SetPage,     // page
+        SelectSlot,  // slot (-1 clears the selection)
+        Equip,       // button + slot/itemNo, with combo already resolved
+    };
+    // How an ambiguous drop (a bomb bag or the hawkeye onto a button that
+    // already carries the bow) was resolved. The PC's own touch path raises a
+    // modal two-plate chooser for this, but a phone-side chooser needs
+    // nothing from the PC — bowComboAmbiguous() reads only the four mix
+    // indices, which the phone already holds — so the phone resolves it and
+    // sends the answer. The PC chooser is never raised for an action: the
+    // phone cannot see it and no phone message can dismiss it.
+    enum Combo : uint8_t {
+        ComboReplace = 0,  // plain equip; also the default when unspecified
+        ComboArm = 1,      // arm the combo
+    };
+
+    uint8_t verb = SetPage;
+    uint8_t combo = ComboReplace;
+    // True when the equip came from a DRAG rather than a tap. The two
+    // deliberately differ: a tap-equip clears the inventory selection, a
+    // drag-equip leaves it alone (companion_touch.cpp's release path).
+    bool fromDrag = false;
+    int32_t page = -1;
+    int32_t slot = -1;    // inventory slot; -1 means "resolve from itemNo"
+    int32_t itemNo = -1;  // -1 means "not given"
+    int32_t button = -1;  // 0 = X, 1 = Y, 2 = slot I, 3 = slot II
+    // The phone's monotonic intent number, echoed back as hud_state's "ack"
+    // once this has been applied OR refused. 0 = unsequenced: the action
+    // still runs, it just never moves the ack.
+    uint32_t seq = 0;
+};
+
+// Enqueue only. A bounded FIFO like the icon queue, not a latest-value slot
+// like resize: two taps are two decisions and the first must not be dropped
+// in favour of the second. On overflow the OLDEST goes, which for input is
+// the right end to lose — a backlog that deep means the game thread is
+// stalled and the newest tap is the one the player is waiting on, the same
+// rule pushPendingTap() already applies to taps.
+void request_action(const CompanionAction& action);
+
+// Pops the oldest queued action. False (leaving `out` untouched) when none
+// is queued. Game thread only, by convention with the pairs above.
+bool take_pending_action(CompanionAction& out);
+
 void request_map_icon(uint8_t kind);
 bool take_pending_map_icon_request(uint8_t& kind);
 

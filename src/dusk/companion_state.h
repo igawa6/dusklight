@@ -84,6 +84,185 @@ bool gatherHudState(HudState& out);
 // pulling in the companion module's internal header.
 int currentPage();
 
+// The highest `seq` of a phone ACTION message this build has taken off the
+// queue and run to a decision (applied OR refused). Streamed back as
+// hud_state's "ack" so the phone can retire its optimistic prediction.
+//
+// A refusal is invisible in the state itself — a denied equip simply leaves
+// the savedata alone — so "ack moved past my seq and nothing changed" IS the
+// refusal notice. That only works if hud_state is allowed to go out when
+// nothing but the ack changed, which is why pollAndPushSpikeState()'s
+// suppress-if-identical test carries the ack as well as the struct.
+u32 lastAppliedActionSeq();
+
+
+// --- Chrome: the tab strip, and the layout the strip belongs to ------------
+//
+// Everything a phone needs to draw the main tab bar itself, none of which it
+// can derive: which pages the CURRENT layout shows (Functional drops GUIDE
+// and centres MAP; Cinematic shows all four — companion.cpp's
+// visiblePages()), what they are CALLED in the language the game is running
+// in, and which one is lit.
+//
+// The geometry deliberately does NOT travel here. drawTabs() states the rule
+// it is the only implementation of ("Nothing else may recompute this
+// geometry"), and the phone scaling one page list across its own canvas is
+// not a second copy of that arithmetic the way a bundled tab table would be.
+
+constexpr int kMaxTabs = 4;  // PAGE_COUNT; Cinematic shows every page
+
+struct TabState {
+    u8 page = 0;  // PAGE_MAP / PAGE_INVENTORY / PAGE_COLLECTION / PAGE_GUIDE
+
+    // The tab's label TEXT, already resolved for the running language.
+    //
+    // These are not the phone's to own. In English they are the dashboard's
+    // own words ("MAP", "ITEMS", "COLLECTION", "GUIDE"); in every other
+    // language tabName() hands back a GAME ARCHIVE string (msg 0x0062,
+    // 0x0061, 0x03E1 — companion_hud.cpp), which the APK may not ship. So the
+    // resolved string travels on the wire and the phone caches it for the
+    // session, exactly like an item icon.
+    //
+    // Fixed width rather than a pointer so the whole-struct diff below can
+    // compare it; strncpy zero-fills the tail, so two equal labels always
+    // compare equal byte for byte.
+    char label[32] = {};
+
+    // False while `label` is still the English fallback because the archive
+    // was not resident when it was asked for. archiveText() retries 8 times
+    // 20 draws apart and then latches the fallback for the session
+    // (companion_gfx.cpp), so the phone must not treat an unresolved label as
+    // final — and must not cache it as if it were. A label that resolves
+    // later changes this struct, so the correction goes out on its own.
+    bool labelResolved = false;
+
+    bool operator==(const TabState&) const = default;
+};
+
+struct ChromeState {
+    // Functional ("3DS style") vs Cinematic. Not a skin of each other: the
+    // visible tab set, the corner boxes and the item buttons all differ, and
+    // a mode change reshapes the entire surface — so the phone has to know
+    // which one it is drawing before it draws anything.
+    bool functional = false;
+
+    // The page whose tab is lit. Same value hud_state carries; repeated here
+    // so a phone that renders only the tab strip needs one message, and
+    // because `guideOpen` below is only meaningful next to it.
+    u8 page = 0;
+
+    // The guide reader is an OVERLAY, not a Page, so while it is up NO tab is
+    // the thing being shown and drawTabs lights none of them
+    // (companion_hud.cpp's `pages[i] == page && !guideIsOpen()`). Without
+    // this bit the phone would leave the page's tab lit behind the reader.
+    bool guideOpen = false;
+
+    u8 tabCount = 0;
+    TabState tabs[kMaxTabs];
+
+    // The Functional left column's context tab, RESOLVED. ContextTabAction in
+    // companion_internal.h: 0 NONE, 1 WARP, 2 FLOOR, 3 INFO, 4 HOME, 5 BACK —
+    // use contextActionName() rather than hardcoding the numbers.
+    //
+    // Never let the phone re-derive this. contextTabAction() reaches
+    // warpAllowed(), which walks the stage info and Link's own
+    // checkAcceptWarp(), and its ITEMS branch is clickable only while an
+    // inventory cell is selected — which is precisely the coupling a phone
+    // that owned the grid silently would break.
+    u8 contextAction = 0;
+    bool contextClickable = false;
+
+    bool operator==(const ChromeState&) const = default;
+};
+
+// Stable wire name for a ContextTabAction value ("none", "warp", "floor",
+// "info", "home", "back"). Lives here so the JSON layer never has to include
+// the companion module's internal header just to name an enumerator.
+const char* contextActionName(u8 action);
+
+// Fills `out`; same hudReady() gate and same "false means nothing to report"
+// contract as gatherHudState(). Pure read.
+bool gatherChromeState(ChromeState& out);
+
+
+// --- Inventory: the ITEMS grid ---------------------------------------------
+//
+// The grid's CONTENTS, not its geometry. The two cell tables (5x5 and 6x4,
+// picked by canvas aspect) are compile-time data with static_asserts already
+// proving they agree, so the phone holds its own copy of the positions and
+// chooses its own layout for its own aspect; what it cannot know is what is
+// IN each cell.
+//
+// Diffed as a whole array rather than pushed from the equip paths, and
+// deliberately so: the inventory changes under the player's feet in places
+// nothing in this module can hook. Emptying a bomb bag auto-unequips bomb
+// arrows (d_meter2.cpp's moveBombNum) and hot-spring water cools on a timer
+// that rewrites slots 11-14 (d_meter2_info.cpp). A phone told only about
+// equips would show both of those as stale cells indefinitely.
+
+constexpr int kInvCells = 23;
+
+struct InvCellState {
+    u8 slot = 0;  // inventory slot index (0..MAX_ITEM_SLOTS-1), the cell's identity
+
+    // dItemNo_NONE_e (0xFF) IS the empty cell — the grid still draws an empty
+    // cell's tinted plate, it just has no icon, so "absent" and "empty" are
+    // different states and the phone needs the cell either way.
+    u8 itemNo = 0xFF;
+
+    // Quantity chip, resolved the way the GRID resolves it — ammoForItem with
+    // the inventory slot, not with a button index. The grid and the item
+    // buttons legitimately disagree here (a bomb bag in the grid counts its
+    // own bag; the same bombs on a button count that button's selection), so
+    // both variants travel: this one, and InvState::buttonAmmo below.
+    // -1 means this item shows no quantity at all.
+    s16 ammo = -1;
+
+    // Group tint index 0..4 (tools / bottles / bombs / quest / rod). A
+    // property of the SLOT, identical in both cell tables, so it is redundant
+    // with the phone's own table — sent anyway so the cell list is
+    // self-describing and a first phone build can paint the grid with no
+    // generated constants at all.
+    u8 group = 0;
+
+    bool operator==(const InvCellState&) const = default;
+};
+
+struct InvState {
+    // Which cell table the PC picked for ITS canvas (6x4 at aspect >= 1.7,
+    // 5x5 otherwise). Informational for the phone, which picks for its own
+    // aspect: with a native second screen attached the two canvases are not
+    // the same shape at all.
+    bool wide = false;
+
+    // The selected cell, as a SLOT index and as an index into cells[] below
+    // (-1 = nothing selected). Both, because the slot is the identity the
+    // equip verbs use and the cell index is what the phone highlights.
+    //
+    // This is the field it is easiest to think of as purely the phone's. It
+    // is not: inEquipMode() reads it (companion.cpp), and so does the context
+    // tab's INFO clickability. If the phone selects a cell without telling
+    // the PC, the PC never enters equip mode, the drop rects never publish,
+    // and a drag-equip has nothing to land on.
+    s8 selSlot = -1;
+    s8 selCell = -1;
+
+    // Ammo as the four item BUTTONS resolve it (index 0=X, 1=Y, 2=I, 3=II),
+    // for the same item hud_state reports for that button. -1 = no chip.
+    s16 buttonAmmo[4] = {-1, -1, -1, -1};
+
+    u8 cellCount = 0;
+    InvCellState cells[kInvCells];
+
+    bool operator==(const InvState&) const = default;
+};
+
+// Fills `out`; same contract as gatherHudState(). Pure read — in particular
+// it reads the compile-time cell TABLE, never s_invCells, which only exists
+// after the ITEMS page has drawn and is therefore unavailable on every frame
+// the page is not on screen.
+bool gatherInvState(InvState& out);
+
 
 // Phase-3 addition: hearts. Unlike items, heart container art isn't a
 // static archive texture loadable by identity — it's live, currently-

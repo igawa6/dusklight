@@ -44,11 +44,14 @@ namespace dusk::companion {
 // equivalent, so it stays English until a translation table exists.
 const char* l_tabNames[PAGE_COUNT] = {"MAP", "ITEMS", "COLLECTION", "GUIDE"};
 
+// The archive message ids behind the tab labels. 0x0062/0x0061 are the
+// game's OWN short uppercase "MAP"/"ITEMS"; 0x03E1 is "Collection" (mixed
+// case in the archive, uppercased here so every language matches the tab
+// strip's uppercase house style). GUIDE is 0: a Dusklight page with no game
+// equivalent.
+static const u16 l_tabMsg[PAGE_COUNT] = {0x0062, 0x0061, 0x03E1, 0};
+
 const char* tabName(int page) {
-    // 0x0062/0x0061 are the game's OWN short uppercase "MAP"/"ITEMS";
-    // 0x03E1 is "Collection" (mixed case in the archive, uppercased here so
-    // every language matches the tab strip's uppercase house style).
-    static const u16 l_msg[PAGE_COUNT] = {0x0062, 0x0061, 0x03E1, 0};
     if (page < 0 || page >= PAGE_COUNT) {
         return "";
     }
@@ -56,7 +59,34 @@ const char* tabName(int page) {
     // 0x0062/0x0061 are literally "MAP"/"ITEMS" already, so those two would
     // match anyway; 0x03E1 is mixed-case "Collection", and we want the
     // uppercase house style. Other languages take the game's wording.
-    return localizedWord(l_msg[page], l_tabNames[page], true);
+    return localizedWord(l_tabMsg[page], l_tabNames[page], true);
+}
+
+// Whether a label tabName() just returned is the FINAL one, for the
+// phone-companion state stream — which must never hand a client a fallback
+// dressed as a resolved string (the string residency rule: archiveText()
+// gives up after 8 tries spaced 20 calls apart and latches English for the
+// rest of the session, and a phone that cached that could never be
+// corrected).
+//
+// Takes the label the caller already has rather than fetching its own. While
+// a string is still unresolved every archiveText() call spends a tick of that
+// retry budget, so asking twice per tab would halve the window the budget
+// exists to widen — the exact failure its own comment records.
+//
+// Two cases are final by construction: an English session, where the English
+// word IS the label, and a page with no archive id at all (GUIDE), where
+// nothing better will ever arrive. Otherwise it is final only once the
+// archive has actually answered, which archiveText reports by handing back
+// something other than the fallback pointer it was given.
+bool tabLabelResolved(int page, const char* label) {
+    if (page < 0 || page >= PAGE_COUNT) {
+        return false;
+    }
+    if (l_tabMsg[page] == 0 || OSGetLanguage() == OS_LANGUAGE_ENGLISH) {
+        return true;
+    }
+    return label != l_tabNames[page];
 }
 
 // X/Y drop-target button centers, published alongside s_dropRect.

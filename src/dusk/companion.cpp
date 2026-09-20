@@ -1327,6 +1327,20 @@ void beginFrameCompanionInput() {
     tickGaugeWarning();
     cancelReadersOnDamage();
     resetCompanionOnLeaveGameplay();
+#if DUSK_PHONE_SPIKE
+    // Placed here on purpose, between two neighbours that both matter:
+    //
+    // AFTER the injection gates and the leave-gameplay reset above, so an
+    // action arriving during a menu, a cutscene or a quit-to-title is refused
+    // on exactly the conditions the touch path uses, and cannot fight a reset
+    // that happened in the same frame.
+    //
+    // BEFORE sanitizeSlotBindings(), so an equip is applied AND sanitized
+    // within one frame. That routine runs unconditionally and can undo a
+    // binding the item wheel invalidated, so draining after it would let the
+    // phone see, and believe, a slot state that the very next frame revokes.
+    applyPendingCompanionActions();
+#endif
     sanitizeSlotBindings();
 }
 

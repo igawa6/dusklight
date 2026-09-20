@@ -247,6 +247,19 @@ std::atomic<uint32_t> g_clientOwnedPages{0};
 // a small cap is plenty.
 std::deque<uint8_t> g_pendingMapIconRequests;
 
+// Actions the phone has decided on (see CompanionAction in the header). Its
+// own mutex, not g_iconRequestMutex: the icon queues are drained by the
+// capture state machine inside the painter's tick, this one by
+// beginFrameCompanionInput() at the top of the game frame, and there is no
+// reason for input to wait behind an icon fetch.
+//
+// 32, matching the plan's bound. Deeper than the tap queue's 8 because an
+// action costs nothing to hold — no capture, no archive, no draw — and a
+// burst of them (drag, drop, select, page) is ordinary play.
+constexpr size_t kMaxPendingActions = 32;
+std::mutex g_actionMutex;
+std::deque<CompanionAction> g_pendingActions;
+
 // Phase-3 addition: wanted heart-container states (0-4). A persistent
 // want-list, not a FIFO like the item queue above — see
 // request_heart_icon()'s doc comment in the header for why: a heart state
@@ -456,14 +469,14 @@ void send_control_frame(int fd, Opcode opcode, std::string_view payload = {}) {
     }
 }
 
-void dispatch_message(std::string_view json) {
-    nlohmann::json msg;
-    try {
-        msg = nlohmann::json::parse(json);
-    } catch (const nlohmann::json::exception& e) {
-        DuskLog.warn("phone spike: malformed input JSON: {}", e.what());
-        return;
-    }
+// The type-dependent half, split out so dispatch_message() below can put one
+// catch around all of it. Every msg.value() here THROWS if the field exists
+// with the wrong JSON type — a string where a number belongs — and this runs
+// on a bare std::thread with no handler above it, so one malformed message
+// from a client mid-development took the whole game down rather than being
+// dropped. Not hypothetical for a protocol under active construction on both
+// ends.
+void dispatch_parsed_message(const nlohmann::json& msg) {
     const std::string type = msg.value("type", "");
     if (type == "touch") {
         companion::touchEvent(msg.value("action", 0), msg.value("u", 0.0f), msg.value("v", 0.0f));
@@ -498,6 +511,59 @@ void dispatch_message(std::string_view json) {
             // base image, so a second request while one is pending is the
             // same request, not another unit of work.
             request_map_base();
+        }
+    } else if (type == "action") {
+        // {"type":"action","do":"set_page","page":1,"seq":7}
+        // {"type":"action","do":"select_slot","slot":4,"seq":8}
+        // {"type":"action","do":"equip","button":0,"slot":4,"itemNo":12,
+        //  "combo":"replace","fromDrag":true,"seq":9}
+        //
+        // Parsed here (cheap, no game state touched) and queued; everything
+        // that could refuse it — menus, wolf form, a borrowed slot, a trade
+        // item — is decided on the game thread by the same executors the
+        // touch path calls, so the two can never disagree about what is
+        // allowed. This branch's only job is to not let an out-of-range
+        // integer off the wire reach them.
+        const std::string verb = msg.value("do", "");
+        CompanionAction action;
+        // Read wide and signed, then range-check. A negative seq read
+        // straight into the unsigned field would static_cast to something
+        // near 2^32 and pin the ack there for the rest of the session, which
+        // would silently refuse-by-timeout every later action the phone sent.
+        // Out of range degrades to 0 — unsequenced, so the action still runs,
+        // it just never moves the ack.
+        const int64_t seq = msg.value("seq", (int64_t)0);
+        action.seq = (seq > 0 && seq <= 0xFFFFFFFFll) ? (uint32_t)seq : 0u;
+        bool known = true;
+        if (verb == "set_page") {
+            action.verb = CompanionAction::SetPage;
+            action.page = msg.value("page", -1);
+        } else if (verb == "select_slot") {
+            action.verb = CompanionAction::SelectSlot;
+            // -1 is meaningful (clear the selection), so it is the default
+            // rather than a rejected value.
+            action.slot = msg.value("slot", -1);
+        } else if (verb == "equip") {
+            action.verb = CompanionAction::Equip;
+            action.button = msg.value("button", -1);
+            // The phone renders the grid from cells that carry BOTH the slot
+            // and the item, so it can name the slot outright — and it should:
+            // an item number alone is ambiguous across the four bottle slots,
+            // which routinely hold the same contents. itemNo is accepted for
+            // a client that only tracked the item, and used as a consistency
+            // check when both arrive.
+            action.slot = msg.value("slot", -1);
+            action.itemNo = msg.value("itemNo", -1);
+            action.combo = msg.value("combo", std::string("replace")) == "combo"
+                ? CompanionAction::ComboArm
+                : CompanionAction::ComboReplace;
+            action.fromDrag = msg.value("fromDrag", false);
+        } else {
+            known = false;
+            DuskLog.warn("phone spike: unknown action verb '{}'", verb);
+        }
+        if (known) {
+            request_action(action);
         }
     } else if (type == "client_owns") {
         // {"type":"client_owns","pages":[0,2]} — companion page indices the
@@ -542,6 +608,23 @@ void dispatch_message(std::string_view json) {
         set_gamepad_state(state);
     } else {
         DuskLog.warn("phone spike: unknown input message type '{}'", type);
+    }
+}
+
+void dispatch_message(std::string_view json) {
+    nlohmann::json msg;
+    try {
+        msg = nlohmann::json::parse(json);
+    } catch (const nlohmann::json::exception& e) {
+        DuskLog.warn("phone spike: malformed input JSON: {}", e.what());
+        return;
+    }
+    try {
+        dispatch_parsed_message(msg);
+    } catch (const nlohmann::json::exception& e) {
+        // A well-formed document with a wrongly-typed field. Dropped, not
+        // fatal — see dispatch_parsed_message's comment.
+        DuskLog.warn("phone spike: bad field in input message: {}", e.what());
     }
 }
 
@@ -991,6 +1074,24 @@ bool has_pending_icon_request() {
         }
     }
     return false;
+}
+
+void request_action(const CompanionAction& action) {
+    std::lock_guard lock{g_actionMutex};
+    if (g_pendingActions.size() >= kMaxPendingActions) {
+        g_pendingActions.pop_front();
+    }
+    g_pendingActions.push_back(action);
+}
+
+bool take_pending_action(CompanionAction& out) {
+    std::lock_guard lock{g_actionMutex};
+    if (g_pendingActions.empty()) {
+        return false;
+    }
+    out = g_pendingActions.front();
+    g_pendingActions.pop_front();
+    return true;
 }
 
 void set_client_owned_pages(uint32_t mask) {

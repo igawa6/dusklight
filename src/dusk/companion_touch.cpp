@@ -9,6 +9,10 @@
 #include "dusk/companion_strings.h"
 #include "dusk/dualscreen.h"
 
+#if DUSK_PHONE_SPIKE
+#include "dusk/phone_spike_ws.h"
+#endif
+
 #include "Z2AudioLib/Z2SeMgr.h"
 #include "d/d_com_inf_game.h"
 #include "d/d_item_data.h"
@@ -92,7 +96,24 @@ bool tryBowCombo(int btn, int slot, u8 itemNo) {
 
 void plainEquip(int btn, int slot);
 
-bool equipFromCompanion(int btn, int slot) {
+// How an ambiguous drop (a combo partner onto a bow-holding button) should be
+// resolved. COMBO_ASK is the touch path's behaviour and the default, so its
+// two call sites below are unchanged: raise the modal chooser and let the
+// next tap decide.
+//
+// The other two exist for the phone action path, which must never raise that
+// chooser — it is a PC-side modal the phone cannot see and no phone message
+// can dismiss, so an ambiguous equip from a phone would leave it up until
+// someone touched the local screen. A phone raises its OWN chooser instead
+// (bowComboAmbiguous needs only the four mix indices, all of which it
+// already holds) and sends the resolved answer.
+enum ComboResolution {
+    COMBO_ASK,
+    COMBO_ARM,
+    COMBO_REPLACE,
+};
+
+bool equipFromCompanion(int btn, int slot, ComboResolution i_combo = COMBO_ASK) {
     if (anyMenuOpen()) {
         setEquipMsg(150, "%s", txt(STR_NO_EQUIP_MENU));
         queueSound(Z2SE_SYS_ERROR, HAPTIC_DENY);
@@ -140,6 +161,14 @@ bool equipFromCompanion(int btn, int slot) {
     // assuming. The chooser (drawComboChoice) resolves to tryBowCombo or
     // plainEquip in handleTouch.
     if (bowComboAmbiguous(btn, itemNo)) {
+        if (i_combo == COMBO_ARM) {
+            tryBowCombo(btn, slot, itemNo);
+            return true;
+        }
+        if (i_combo == COMBO_REPLACE) {
+            plainEquip(btn, slot);
+            return true;
+        }
         s_comboChoiceBtn = btn;
         s_comboChoiceSlot = slot;
         queueSound(Z2SE_SY_CURSOR_ITEM, HAPTIC_LIGHT);
@@ -396,6 +425,25 @@ void handleSlotTap(int which) {
     }
     queueHaptic(HAPTIC_PRESS);
     beginHold(2 + which);
+}
+
+// Switch the companion to a page. The page-change side effects are not
+// optional extras around the store: GUIDE is an overlay rather than a Page,
+// so selecting its tab has to OPEN the reader, and selecting any other tab
+// has to close it — otherwise the tab lights up behind a window still
+// covering it. Factored out of the tab-strip hit test so the phone's
+// set_page action lands on exactly the same three statements instead of a
+// second copy that could drift from them.
+void applySetPage(int i_page) {
+    if (i_page == PAGE_GUIDE) {
+        guideOpen();
+    } else if (guideIsOpen()) {
+        guideClose();
+    }
+    // Silent when the tap lands on the page already showing.
+    if (s_page.exchange(i_page) != i_page) {
+        queueSound(Z2SE_SY_MENU_CHANGE_WINDOW, HAPTIC_LIGHT);
+    }
 }
 
 // ITEMS grid cell index under (tx, ty), -1 when none.
@@ -898,18 +946,10 @@ void handleTouch(f32 w, f32 h) {
         if (tx >= s_tabRects[i][0] && tx <= s_tabRects[i][2] && ty >= s_tabRects[i][1] &&
             ty <= s_tabRects[i][3])
         {
-            // Silent when the tap lands on the page already showing.
             // Picking a page means "show me that", so the reader gets out of
             // the way — otherwise the tab lights up behind a covered window.
             // The GUIDE tab is the exception: there the reader IS the page.
-            if (s_tabRectPage[i] == PAGE_GUIDE) {
-                guideOpen();
-            } else if (guideIsOpen()) {
-                guideClose();
-            }
-            if (s_page.exchange(s_tabRectPage[i]) != s_tabRectPage[i]) {
-                queueSound(Z2SE_SY_MENU_CHANGE_WINDOW, HAPTIC_LIGHT);
-            }
+            applySetPage(s_tabRectPage[i]);
             return;
         }
     }
@@ -1244,5 +1284,169 @@ void processDragTouch(f32 w, f32 h) {
     }
     s_dragSlot = -1;
 }
+
+#if DUSK_PHONE_SPIKE
+
+// --- Phone actions ---------------------------------------------------------
+//
+// A phone that draws the tab strip and the inventory grid itself hit-tests
+// locally and sends the DECISION. Everything below turns one of those
+// decisions into a call on the same executors handleTouch() reaches — one
+// implementation, two callers. Nothing here reads a published rect, which is
+// the point: the whole reason input had to run at the tail of the draw was
+// the hit test, and an action arrives already hit-tested.
+
+u32 s_actionAckSeq = 0;
+
+namespace {
+
+// Which inventory slot an equip action means.
+//
+// The slot is the identity, not the item number: the four bottle slots
+// routinely hold the same contents, so an itemNo alone cannot say which cell
+// the player dragged. The phone renders each cell from a record carrying
+// both, so it can and should send the slot; itemNo is honoured on its own for
+// a client that tracked only the item, and used as a staleness check when
+// both arrive — if the slot no longer holds what the phone thought it did,
+// the phone is acting on a grid that has since changed underneath it (a bomb
+// bag emptying auto-unequips, hot-spring water cools on a timer) and guessing
+// would equip the wrong thing.
+int resolveActionSlot(const phone_spike::CompanionAction& i_action) {
+    if (i_action.slot >= 0) {
+        if (i_action.slot >= MAX_ITEM_SLOTS) {
+            return -1;
+        }
+        if (i_action.itemNo >= 0 &&
+            dComIfGs_getItem(i_action.slot, false) != (u8)i_action.itemNo)
+        {
+            return -1;
+        }
+        return i_action.slot;
+    }
+    if (i_action.itemNo < 0) {
+        return -1;
+    }
+    // Scanned in the grid's own cell order so the answer is the cell the
+    // player would have been looking at, and so a slot the grid does not show
+    // at all can never be equipped by a phone.
+    for (int i = 0; i < invGridCellCount(); i++) {
+        const int slot = invGridCellSlot(i);
+        if (slot >= 0 && dComIfGs_getItem(slot, false) == (u8)i_action.itemNo) {
+            return slot;
+        }
+    }
+    return -1;
+}
+
+void applyActionSetPage(int i_page) {
+    int pages[TAB_RECT_MAX];
+    const int count = visiblePages(pages);
+    for (int i = 0; i < count; i++) {
+        if (pages[i] == i_page) {
+            applySetPage(i_page);
+            return;
+        }
+    }
+    // Not a tab this layout shows. Refused rather than stored: drawDashboard
+    // force-resets the page to MAP whenever the current one is outside the
+    // visible set, so accepting it would bounce a frame later and the phone
+    // would watch its own tab flick back with nothing to explain it.
+}
+
+void applyActionSelectSlot(int i_slot) {
+    if (i_slot < 0) {
+        // Clearing is always allowed: it is what a completed tap-equip and a
+        // tap on empty space already do.
+        if (s_selSlot >= 0) {
+            s_selSlot = -1;
+            queueSound(Z2SE_SY_CURSOR_CANCEL, HAPTIC_LIGHT);
+        }
+        return;
+    }
+    if (i_slot >= MAX_ITEM_SLOTS || dComIfGs_getItem(i_slot, false) == dItemNo_NONE_e) {
+        // An empty cell swallows the gesture on the touch path too, and
+        // deliberately does NOT deselect — leave the selection alone.
+        return;
+    }
+    const bool deselect = i_slot == s_selSlot;
+    s_selSlot = deselect ? -1 : i_slot;
+    queueSound(deselect ? Z2SE_SY_CURSOR_CANCEL : Z2SE_SY_CURSOR_ITEM, HAPTIC_LIGHT);
+}
+
+void applyActionEquip(const phone_spike::CompanionAction& i_action) {
+    if (i_action.button < 0 || i_action.button >= DROP_TARGET_COUNT) {
+        return;
+    }
+    const int slot = resolveActionSlot(i_action);
+    if (slot < 0) {
+        return;
+    }
+    equipFromCompanion(i_action.button, slot,
+        i_action.combo == phone_spike::CompanionAction::ComboArm ? COMBO_ARM : COMBO_REPLACE);
+    if (!i_action.fromDrag) {
+        // A tap-equip clears the selection and a drag-equip does not — a real
+        // asymmetry in the touch path (its two release branches differ on
+        // exactly this), preserved rather than quietly normalized. It is the
+        // phone that knows which gesture this was.
+        s_selSlot = -1;
+    }
+}
+
+}  // namespace
+
+void applyPendingCompanionActions() {
+    // A reconnecting phone starts its sequence over, so an ack left high from
+    // the previous session would never move again and every prediction the
+    // new client made would hang until its own timeout. Same reset the state
+    // senders do against this generation counter, for the same reason.
+    static uint32_t s_lastActionClientGen = 0;
+    const uint32_t clientGen = phone_spike::client_generation();
+    if (clientGen != s_lastActionClientGen) {
+        s_lastActionClientGen = clientGen;
+        s_actionAckSeq = 0;
+    }
+
+    // The same gate the tap path applies: nothing on the companion is
+    // operable during an event, and a tap that arrives inside one is consumed
+    // and dropped rather than queued for after — a decision made about a
+    // screen that has since changed is not one to replay. Checked on the LIVE
+    // event state rather than the dim, which takes ~10 frames to decay and
+    // would swallow the first deliberate action after every cutscene.
+    const bool eventBlocked = dComIfGp_event_runCheck() != 0;
+
+    // The WHOLE queue each frame, not one action per frame the way
+    // handleTouch() consumes taps: these cost no draw and no hit test, so
+    // there is nothing to spread over frames, and holding the second of two
+    // fast taps back is the input loss this path exists to remove.
+    phone_spike::CompanionAction action;
+    while (phone_spike::take_pending_action(action)) {
+        // Advanced for every action taken off the queue, applied or refused,
+        // and before the outcome is known. It reports what has been DECIDED,
+        // not what changed: a refusal leaves no trace in the state at all, so
+        // "the ack passed my seq and the state I predicted did not arrive" is
+        // the only refusal notice there is.
+        if (action.seq > s_actionAckSeq) {
+            s_actionAckSeq = action.seq;
+        }
+        if (eventBlocked) {
+            continue;
+        }
+        switch (action.verb) {
+        case phone_spike::CompanionAction::SetPage:
+            applyActionSetPage(action.page);
+            break;
+        case phone_spike::CompanionAction::SelectSlot:
+            applyActionSelectSlot(action.slot);
+            break;
+        case phone_spike::CompanionAction::Equip:
+            applyActionEquip(action);
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+#endif  // DUSK_PHONE_SPIKE
 
 }  // namespace dusk::companion

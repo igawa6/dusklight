@@ -663,7 +663,27 @@ constexpr bool inv_table_is_sane(const CellDef (&cells)[INV_CELLS], u8 cols, u8 
     return true;
 }
 
+// Stronger than "same slot set": the two tables must list the same slot at
+// the same INDEX, and give it the same group tint. Both facts are load-bearing
+// now that the grid's contents are streamed — the state message identifies a
+// cell by its index, so a phone laying the cells out with the other table has
+// to be able to trust that cell i means the same item in both. They already
+// agree; this is what stops a later edit to one table from quietly making a
+// phone paint the wrong icon in the wrong box, which would look like a
+// protocol bug rather than a table edit.
+constexpr bool inv_tables_share_cell_order() {
+    for (std::size_t i = 0; i < INV_CELLS; i++) {
+        if (l_invCells[i].slot != l_invCellsWide[i].slot ||
+            l_invCells[i].group != l_invCellsWide[i].group)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 static_assert(inv_tables_hold_same_slots(), "ITEMS layouts disagree on which slots exist");
+static_assert(inv_tables_share_cell_order(), "ITEMS layouts disagree on cell order or grouping");
 static_assert(inv_table_is_sane(l_invCells, 5, 5), "5x5 ITEMS table is malformed");
 static_assert(inv_table_is_sane(l_invCellsWide, 6, 4), "6x4 ITEMS table is malformed");
 
@@ -790,6 +810,44 @@ void drawInventoryCaption(f32 x0, f32 x1, f32 y1) {
 
 
 }  // namespace
+
+// --- ITEMS cell table, read-only, for the state stream ---------------------
+//
+// The cell table is compile-time data and the grid POSITIONS are the phone's
+// to own (it lays out for its own canvas), but what is in each cell is not —
+// so the state gatherer needs the slot list without the page having drawn.
+// These read the same two tables drawInvCell() does rather than letting
+// companion_state.cpp keep a second copy of the slot order; §4 of the
+// partition plan is a list of things that drifted the moment they were
+// written out twice.
+//
+// s_invCells is NOT the source here on purpose: that array is published by
+// the page draw and is stale or absent on every frame the ITEMS page is not
+// on screen, which is most of them.
+
+int invGridCellCount() {
+    return INV_CELLS;
+}
+
+int invGridCellSlot(int i_cell) {
+    if (i_cell < 0 || i_cell >= INV_CELLS) {
+        return -1;
+    }
+    // Either table answers this: inv_tables_share_cell_order() proves they
+    // agree on slot and group at every index, and only the gx/gy differ.
+    return l_invCells[i_cell].slot;
+}
+
+int invGridCellGroup(int i_cell) {
+    if (i_cell < 0 || i_cell >= INV_CELLS) {
+        return 0;
+    }
+    return l_invCells[i_cell].group;
+}
+
+bool invGridWide() {
+    return invWideLayout();
+}
 
 // Warp content (portal glyph + "Warp") for the Functional context tab; the
 // plate is drawn by the caller. While the game's field map is up the tab acts
