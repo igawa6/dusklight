@@ -87,6 +87,12 @@ struct MapState {
     // teardown, and rooms becoming visited or un-visited.
     u32 baseGen = 0;
 
+    // Mirror mode horizontally flips the map, and that flip is already baked
+    // into the u/v values above AND into the base image. Published so the
+    // phone can orient what it draws itself, chiefly the player arrow, whose
+    // heading is also flipped.
+    bool mirrored = false;
+
     int iconCount = 0;
     MapIconState icons[kMaxMapIcons];
 

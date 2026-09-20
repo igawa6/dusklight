@@ -100,6 +100,7 @@ bool gatherMapState(MapState& out) {
         heading = -heading;  // mirror mode flips the heading too
     }
     out.playerHeadingDeg = heading;
+    out.mirrored = xSign < 0.0f;
 
     // Content generation for the base image. Two independent sources, mixed
     // rather than compared: s_dmapGen bumps when the renderer is torn down

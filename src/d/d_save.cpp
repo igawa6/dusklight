@@ -1314,17 +1314,33 @@ void dSv_memory2_c::init() {
 
 void dSv_memory2_c::onVisitedRoom(int i_no) {
     JUT_ASSERT(3279, 0 <= i_no && i_no < 64);
+#if TARGET_PC
+    // Only bump when a bit ACTUALLY changes. This is called on every room
+    // entry, including re-entering somewhere already visited, so bumping
+    // unconditionally made the counter tick constantly while walking around.
+    // The phone companion uses it as part of the map base image's identity,
+    // so a spurious bump throws away a cached image that did not change —
+    // exactly the re-fetching the cache exists to avoid.
+    const u32 before = mVisitedRoom[i_no >> 5];
+#endif
     mVisitedRoom[i_no >> 5] |= 1 << (i_no & 0x1F);
 #if TARGET_PC
-    s_visitedRoomGen++;
+    if (mVisitedRoom[i_no >> 5] != before) {
+        s_visitedRoomGen++;
+    }
 #endif
 }
 
 void dSv_memory2_c::offVisitedRoom(int i_no) {
     JUT_ASSERT(3293, 0 <= i_no && i_no < 64);
+#if TARGET_PC
+    const u32 before = mVisitedRoom[i_no >> 5];
+#endif
     mVisitedRoom[i_no >> 5] &= ~u32(1 << (i_no & 0x1F));
 #if TARGET_PC
-    s_visitedRoomGen++;
+    if (mVisitedRoom[i_no >> 5] != before) {
+        s_visitedRoomGen++;
+    }
 #endif
 }
 

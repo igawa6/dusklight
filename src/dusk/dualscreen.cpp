@@ -445,10 +445,30 @@ static void pollAndPushSpikeFrame() {
         } else if (reqH > kMaxNativeDim) {
             reqH = kMaxNativeDim;
         }
+        // On Android the aux surface belongs to the Presentation driving a
+        // REAL second display (android_aux_display.cpp) — a phone client
+        // connecting over Wi-Fi must never destroy it or reshape it to its
+        // own resolution. Doing so does not merely resize a buffer: the
+        // dashboard's whole canvas aspect is derived from the surface size
+        // (computeAuxCanvas), so a connecting phone would silently re-lay-out
+        // what the second screen shows.
+        //
+        // Not a hypothetical guard — without it this path unconditionally
+        // destroys and recreates the single global aux window on every hello.
+#if defined(TARGET_ANDROID) || defined(__ANDROID__) || defined(ANDROID)
+        constexpr bool kAuxViewedLocally = true;
+#else
+        constexpr bool kAuxViewedLocally = false;
+#endif
         u32 curW = 0;
         u32 curH = 0;
         const bool haveCur = aurora::auxwin::get_surface_size(&curW, &curH);
-        if (!haveCur || curW != reqW || curH != reqH) {
+        if (kAuxViewedLocally) {
+            DuskLog.info(
+                "phone spike: ignoring phone-reported size {}x{}; the aux surface is driving a "
+                "local second display and is not the phone's to resize",
+                reqW, reqH);
+        } else if (!haveCur || curW != reqW || curH != reqH) {
             DuskLog.info("phone spike: resizing aux target to {}x{} (phone-reported)", reqW, reqH);
             if (aurora::auxwin::is_open()) {
                 aurora::auxwin::destroy();
@@ -557,10 +577,22 @@ static void pollAndPushSpikeState() {
     if (!phone_spike::has_client()) {
         return;
     }
+    static bool s_hudWasReady = false;
     companion::HudState state;
     if (!companion::gatherHudState(state)) {
+        // Tell the phone once that the HUD is gone (stage transition, title
+        // screen) instead of leaving it displaying the last values forever.
+        // map_state already does this; hud_state simply returned early.
+        if (s_hudWasReady) {
+            s_hudWasReady = false;
+            nlohmann::json off;
+            off["type"] = "hud_state";
+            off["active"] = false;
+            phone_spike::queue_text_frame(off.dump());
+        }
         return;
     }
+    s_hudWasReady = true;
     // Sent directly/synchronously on the game thread, NOT through the
     // background sender thread queue_raw_frame() uses for binary frames:
     // these messages are tiny (well under 200 bytes) and sent only on
@@ -596,6 +628,7 @@ static void pollAndPushSpikeState() {
     };
     nlohmann::json j;
     j["type"] = "hud_state";
+    j["active"] = true;
     j["life"] = state.life;
     j["maxLife"] = state.maxLife;
     j["rupees"] = state.rupees;
@@ -693,6 +726,10 @@ static void pollAndPushMapState() {
     j["playerFloor"] = state.playerFloorKnown ? nlohmann::json(state.playerFloor)
                                               : nlohmann::json(nullptr);
     j["baseGen"] = state.baseGen;
+    // Mirror mode is baked into the u/v projection on this side, so the base
+    // image is flipped too. The phone needs to know in order to orient
+    // anything it draws itself — the player arrow above all.
+    j["mirrored"] = state.mirrored;
     j["player"] = {
         {"u", state.playerU},
         {"v", state.playerV},
