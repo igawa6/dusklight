@@ -1452,6 +1452,38 @@ void flushQueuedSounds() {
         // sfx 0 = haptic-only entry (queueHaptic).
         if (s_soundQueue[i].sfx != 0) {
             mDoAud_seStartMenu(s_soundQueue[i].sfx);
+#if DUSK_PHONE_SPIKE
+            // Forward as a SEMANTIC category, never the game's audio. These
+            // SE ids index the game's own JAudio2 wave banks — transferring
+            // the waveforms would be the same copyright problem as bundling
+            // art, and there is no audio equivalent of the art path's
+            // read-the-GPU-surface-back trick anyway. They are generic UI
+            // chirps, so a neutral synthesized click set on the phone
+            // carries the same information.
+            //
+            // The PC still plays its own sound: on a desktop second screen
+            // that is the only output, and with a phone in hand hearing both
+            // is unobtrusive. Add a suppression setting if that changes.
+            if (phone_spike::has_client()) {
+                const char* soundId = NULL;
+                switch (s_soundQueue[i].sfx) {
+                case Z2SE_SY_CURSOR_OK: soundId = "ok"; break;
+                case Z2SE_SY_CURSOR_CANCEL: soundId = "cancel"; break;
+                case Z2SE_SYS_ERROR: soundId = "error"; break;
+                case Z2SE_SY_MENU_CHANGE_WINDOW: soundId = "page"; break;
+                case Z2SE_SY_ITEM_SET_X:
+                case Z2SE_SY_ITEM_SET_Y: soundId = "equip"; break;
+                case Z2SE_SY_CURSOR_ITEM:
+                case Z2SE_SY_CURSOR_FLOOR: soundId = "cursor"; break;
+                case Z2SE_WARP_MAP_ON: soundId = "warp"; break;
+                default: break;  // not a companion UI cue; nothing to forward
+                }
+                if (soundId != NULL) {
+                    phone_spike::queue_text_frame(
+                        std::string(R"({"type":"sound","id":")") + soundId + R"("})");
+                }
+            }
+#endif
         }
         if (s_soundQueue[i].haptic > haptic) {
             haptic = s_soundQueue[i].haptic;
