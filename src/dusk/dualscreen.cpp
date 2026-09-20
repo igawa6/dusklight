@@ -580,6 +580,17 @@ static void pollAndPushSpikeState() {
         {"slot1", slotOrNull(state.equipSlot1)},
         {"slot2", slotOrNull(state.equipSlot2)},
     };
+    // Gauges are sent as percent and only while visible — see HudState's
+    // own doc comment for why raw counters would break this path's
+    // send-only-on-change premise. A hidden gauge reports 0/false rather
+    // than being omitted, so the phone never has to distinguish "absent
+    // field" from "not showing".
+    j["gauges"] = {
+        {"oil", state.oilPct},
+        {"oilVisible", state.oilVisible},
+        {"oxygen", state.oxygenPct},
+        {"oxygenVisible", state.oxygenVisible},
+    };
     phone_spike::send_text_frame(j.dump());
 }
 

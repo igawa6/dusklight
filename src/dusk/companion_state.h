@@ -31,6 +31,41 @@ struct HudState {
     u8 equipSlot1 = 0xFF;
     u8 equipSlot2 = 0xFF;
 
+    // Lantern oil and underwater oxygen, as PERCENT (0..100) rather than
+    // the raw values, and deliberately so.
+    //
+    // Both drain one unit per frame while active — oxygen across 0..600
+    // (ten seconds) and oil across 0..21600 (six minutes) — so putting the
+    // raw counters in this struct would make the whole-struct diff in
+    // pollAndPushSpikeState() fire EVERY frame for the entire time the
+    // player is underwater or carrying a lit lantern. That would quietly
+    // invalidate the premise its "send directly on the game thread" comment
+    // rests on (tiny messages, only on actual change, rare relative to the
+    // frame rate) and turn a rare-diff path into a per-frame one. This is
+    // the same trap that got dim/fade deferred out of Phase 1 in the design
+    // plan for exactly this reason.
+    //
+    // A percent is also all the phone can use: these render as a bar a
+    // hundred-odd pixels wide, so sub-percent precision isn't visible. At
+    // this granularity one step is 0.1s of oxygen or 3.6s of oil.
+    //
+    // Unlike hearts, neither needs any art fetched: the game draws both by
+    // scaling a single flat-colored pane to the fraction
+    // (dMeter2Draw_c::drawKantera/drawOxygen — a J2D pane resize(), no
+    // per-step textures at all), and the companion dashboard already
+    // reimplements both natively with fillRect in drawMeterBar()
+    // (companion.cpp), having found the game's own panes unusable. The
+    // phone just draws a rectangle.
+    u8 oilPct = 0;
+    u8 oxygenPct = 0;
+    // Whether each gauge should be shown at all, mirroring drawMeterBar()'s
+    // own gates so the phone's native bar appears and disappears in step
+    // with the streamed dashboard's rather than on its own rules. Oxygen
+    // takes priority over oil: the game shares ONE set of panes between
+    // them, so they are mutually exclusive on the real HUD too.
+    bool oilVisible = false;
+    bool oxygenVisible = false;
+
     bool operator==(const HudState&) const = default;
 };
 

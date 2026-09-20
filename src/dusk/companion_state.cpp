@@ -14,6 +14,76 @@
 
 namespace dusk::companion {
 
+namespace {
+
+// Quantize a raw gauge counter to 0..100. Rounds to nearest so a full
+// gauge reads 100 and a just-barely-nonempty one doesn't read 0 while the
+// game still shows a sliver of fill.
+u8 gaugePercent(int now, int max) {
+    if (max <= 0 || now <= 0) {
+        return 0;
+    }
+    if (now >= max) {
+        return 100;
+    }
+    return (u8)((now * 100 + max / 2) / max);
+}
+
+// The itemNo to report for an equip slot. Normally just what the slot
+// holds, with one substitution: the lantern's icon swaps to dedicated
+// "empty" art once the oil runs out, which the dashboard's own icon cache
+// already accounts for by rewriting its cache key
+// (companion_icons.cpp's updateItemPics()). The phone fetches icon art BY
+// ITEM NUMBER through the generic icon_request path, so doing the same
+// substitution here means the phone asks for, caches and draws the empty-
+// lantern art automatically — no new message type, no oil-awareness on the
+// phone side at all, and the icon updates the instant the oil runs dry
+// because the substitution changes the reported itemNo, which the existing
+// whole-struct diff already notices.
+u8 equippedItemForPhone(int button) {
+    const u8 itemNo = dComIfGp_getSelectItem(button);
+    if (itemNo == dItemNo_KANTERA_e && dComIfGs_getOil() == 0) {
+        return dItemNo_KANTERA2_e;
+    }
+    return itemNo;
+}
+
+// Mirrors drawMeterBar()'s gates (companion.cpp) rather than the game's own
+// alphaAnimeKantera/alphaAnimeOxygen, so the phone's native bar tracks what
+// the companion dashboard shows — including the companion's deliberate
+// relaxation of the oil gate (vanilla hides the oil disc unless the lantern
+// is actively LIT, which is too strict for a persistent fuel readout; the
+// companion keeps only the wolf-form half of that gate).
+void gatherGauges(HudState& out) {
+    dMeter2Draw_c* md = meterDraw();
+    const bool oxygen =
+        md != NULL && md->isOxygenActive() && dComIfGp_getMaxOxygen() > 0;
+
+    // The lantern counts as equipped on ANY of the four item buttons.
+    bool lanternEquipped = false;
+    for (int b = 0; b < 4; b++) {
+        if (dComIfGp_getSelectItem(b) == dItemNo_KANTERA_e) {
+            lanternEquipped = true;
+            break;
+        }
+    }
+    const bool oil = !oxygen && !companionWolf() && lanternEquipped &&
+        dComIfGs_getMaxOil() > 0;
+
+    out.oxygenVisible = oxygen;
+    out.oilVisible = oil;
+    // NowOxygen, not Oxygen: that's the meter-animation value the game's own
+    // bar renders, so the fill depletes smoothly instead of stepping — same
+    // choice drawMeterBar() makes.
+    out.oxygenPct = oxygen
+        ? gaugePercent(dComIfGp_getNowOxygen(), dComIfGp_getMaxOxygen())
+        : 0;
+    out.oilPct =
+        oil ? gaugePercent(dComIfGs_getOil(), dComIfGs_getMaxOil()) : 0;
+}
+
+}  // namespace
+
 bool gatherHudState(HudState& out) {
     if (!hudReady()) {
         return false;
@@ -23,10 +93,11 @@ bool gatherHudState(HudState& out) {
     out.rupees = dComIfGs_getRupee();
     out.maxRupees = dComIfGs_getRupeeMax();
     out.keys = dComIfGs_getKeyNum();
-    out.equipX = dComIfGp_getSelectItem(0);
-    out.equipY = dComIfGp_getSelectItem(1);
-    out.equipSlot1 = dComIfGp_getSelectItem(2);
-    out.equipSlot2 = dComIfGp_getSelectItem(3);
+    out.equipX = equippedItemForPhone(0);
+    out.equipY = equippedItemForPhone(1);
+    out.equipSlot1 = equippedItemForPhone(2);
+    out.equipSlot2 = equippedItemForPhone(3);
+    gatherGauges(out);
     return true;
 }
 
