@@ -31,13 +31,26 @@ void stop_server();
 // True once a browser has completed the WS handshake and is ready for frames.
 bool has_client();
 
-// Push one binary WS frame (a PNG-encoded companion capture). Bounded-blocking
-// on the game thread (short send timeout — see .cpp): either the whole frame
-// goes out, or the connection is torn down and the caller finds out via the
-// return value / has_client() going false on the next check. No silent
-// partial-frame writes, which would desync the client's WS byte stream
-// irrecoverably. Returns false if there is no client or the send failed.
+// Push one binary WS frame (a PNG-encoded companion capture): the actual
+// blocking socket write (short send timeout — see .cpp), called from the
+// background sender thread, never the game thread — a real phone over real
+// Wi-Fi (unlike every loopback test this spike was originally verified
+// against) can make this slow enough to visibly stall a caller running on
+// the game thread. Either the whole frame goes out, or the connection is
+// torn down and the caller finds out via the return value / has_client()
+// going false on the next check. No silent partial-frame writes, which
+// would desync the client's WS byte stream irrecoverably. Returns false if
+// there is no client or the send failed.
 bool send_binary_frame(const void* data, size_t size);
+
+// Game-thread entry point: hands an already-PNG-encoded frame off to the
+// background sender thread and returns immediately, without touching the
+// socket. Copies `data` — the caller's buffer can be freed right after this
+// returns. If a previous frame is still queued and unsent, it is dropped in
+// favor of the new one, so the connection always carries the freshest
+// capture rather than a growing backlog of stale ones if the sender falls
+// behind (e.g. a slow/congested real Wi-Fi link).
+void queue_binary_frame(const void* data, size_t size);
 
 // Set by the WS receive thread when a "hello" message reports the phone's
 // native pixel resolution; consumed by the game thread (dualscreen.cpp),

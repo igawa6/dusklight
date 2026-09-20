@@ -23,12 +23,14 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <condition_variable>
 #include <csignal>
 #include <cstring>
 #include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace dusk::phone_spike {
 namespace {
@@ -166,6 +168,18 @@ int g_clientFd = -1;
 std::thread g_acceptThread;
 std::atomic<bool> g_running{false};
 int g_listenFd = -1;
+
+// Single-slot latest-frame hand-off, same shape as phone_spike_pad.h's
+// gamepad state: the game thread only ever needs to hand off the freshest
+// encoded frame, never a backlog — see queue_binary_frame()'s doc comment
+// for why this exists (a real phone over real Wi-Fi, unlike every earlier
+// loopback test, can make the blocking send slow enough to visibly stall
+// the game thread if done synchronously there).
+std::mutex g_pendingFrameMutex;
+std::condition_variable g_pendingFrameCv;
+std::vector<uint8_t> g_pendingFrameBytes;
+bool g_pendingFrameReady = false;
+std::thread g_senderThread;
 
 std::mutex g_resizeMutex;
 bool g_resizePending = false;
@@ -429,10 +443,16 @@ void set_client(int fd) {
     }
     g_clientFd = fd;
     if (fd >= 0) {
-        // Bounded-blocking sends from the game thread: never hang forever on
-        // a stalled/dead client, but never silently write a partial frame
-        // either — see send_binary_frame's contract in the header.
-        timeval tv{.tv_sec = 0, .tv_usec = 50000};
+        // Bounded-blocking sends on the background sender thread: never hang
+        // forever on a stalled/dead client, but never silently write a
+        // partial frame either — see send_binary_frame's contract in the
+        // header. 50ms was tuned back when this ran synchronously on the
+        // GAME thread and needed to fail fast; now that it's off that
+        // thread (queue_binary_frame() + the sender thread — see above),
+        // blocking longer costs nothing, so this can afford to tolerate
+        // real Wi-Fi throughput dips instead of treating every one as a
+        // dead connection.
+        timeval tv{.tv_sec = 2, .tv_usec = 0};
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
         const int one = 1;
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
@@ -529,6 +549,8 @@ void accept_loop(uint16_t port) {
 
 }  // namespace
 
+void sender_loop();  // defined below, after send_binary_frame
+
 bool start_server(uint16_t port) {
     if (g_running.load()) {
         return true;
@@ -570,6 +592,7 @@ bool start_server(uint16_t port) {
     g_listenFd = fd;
     g_running = true;
     g_acceptThread = std::thread(accept_loop, port);
+    g_senderThread = std::thread(sender_loop);
     DuskLog.info("phone spike: listening on 0.0.0.0:{} (open http://<lan-ip>:{}/ on the phone)", port,
         port);
     return true;
@@ -586,6 +609,13 @@ void stop_server() {
     }
     if (g_acceptThread.joinable()) {
         g_acceptThread.join();
+    }
+    {
+        std::lock_guard lock{g_pendingFrameMutex};
+        g_pendingFrameCv.notify_all();
+    }
+    if (g_senderThread.joinable()) {
+        g_senderThread.join();
     }
     set_client(-1);
 }
@@ -644,6 +674,39 @@ bool send_binary_frame(const void* data, size_t size) {
         sent += static_cast<size_t>(n);
     }
     return true;
+}
+
+// Background sender thread's body: blocks on new frames, does the
+// (potentially slow, over real Wi-Fi) blocking send_binary_frame() call
+// here instead of on the game thread. Exits once g_running goes false AND
+// there's nothing left to wake it for.
+void sender_loop() {
+    for (;;) {
+        std::vector<uint8_t> frame;
+        {
+            std::unique_lock lock{g_pendingFrameMutex};
+            g_pendingFrameCv.wait(lock, [] { return g_pendingFrameReady || !g_running.load(); });
+            if (!g_running.load()) {
+                return;
+            }
+            frame = std::move(g_pendingFrameBytes);
+            g_pendingFrameReady = false;
+        }
+        send_binary_frame(frame.data(), frame.size());
+    }
+}
+
+void queue_binary_frame(const void* data, size_t size) {
+    std::lock_guard lock{g_pendingFrameMutex};
+    const auto* bytes = static_cast<const uint8_t*>(data);
+    // Copies rather than takes ownership: the caller (dualscreen.cpp) frees
+    // its miniz buffer right after this returns, same lifetime contract as
+    // the old direct send_binary_frame() call had. Overwrites any frame
+    // still waiting to go out — always the freshest capture, never a
+    // growing backlog of stale ones if the sender falls behind.
+    g_pendingFrameBytes.assign(bytes, bytes + size);
+    g_pendingFrameReady = true;
+    g_pendingFrameCv.notify_one();
 }
 
 void request_resize(uint32_t width, uint32_t height) {

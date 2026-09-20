@@ -386,7 +386,12 @@ static void pollAndPushSpikeFrame() {
                 void* png = tdefl_write_image_to_png_file_in_memory_ex(pixels.data(), (int)width,
                     (int)height, 4, &pngSize, 1, MZ_FALSE);
                 if (png != NULL) {
-                    phone_spike::send_binary_frame(png, pngSize);
+                    // queue_binary_frame(), not send_binary_frame(): the
+                    // actual socket write happens on a background sender
+                    // thread now, never here — see phone_spike_ws.h. A real
+                    // phone over real Wi-Fi made the old synchronous send
+                    // slow enough to visibly stall the game thread.
+                    phone_spike::queue_binary_frame(png, pngSize);
                     mz_free(png);
                 } else {
                     DuskLog.warn("phone spike: PNG encode failed");
