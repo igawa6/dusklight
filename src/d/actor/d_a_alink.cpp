@@ -9359,6 +9359,68 @@ BOOL daAlink_c::itemButtonCheck(u16 i_btnFlag) {
     return mItemButton & i_btnFlag;
 }
 
+#if TARGET_PC
+// ABI shim for native mods built against upstream Dusklight.
+//
+// Upstream declares these two as (u8) and numbers daAlink_ITEM_BTN with seven
+// buttons in eight bits (R = 0x40). This build inserts BTN_S1/BTN_S2 at bits
+// 2-3 for the companion's slot buttons, which pushes R out to 0x100 and forces
+// both parameters to u16. That is a different mangled name, so a mod importing
+// the upstream symbol cannot resolve it and fails at dlopen with
+// "cannot locate symbol _ZN9daAlink_c16itemTriggerCheckEh".
+//
+// Re-export the upstream symbols, translating the numbering as well as the
+// width. Widening alone would be actively wrong: upstream's BTN_B is 0x08,
+// which is BTN_S2 here, so a mod checking for a sword swing would read a slot
+// button instead. Bits upstream does not define are dropped rather than
+// guessed at.
+namespace {
+
+u16 upstream_item_btn_to_local(u8 i_upstreamFlags) {
+    static constexpr struct {
+        u8 upstream;
+        u16 local;
+    } kButtonMap[] = {
+        {0x01, daAlink_c::BTN_X},
+        {0x02, daAlink_c::BTN_Y},
+        {0x04, daAlink_c::BTN_Z},
+        {0x08, daAlink_c::BTN_B},
+        {0x10, daAlink_c::BTN_A},
+        {0x20, daAlink_c::BTN_L},
+        {0x40, daAlink_c::BTN_R},
+    };
+    u16 local = 0;
+    for (const auto& entry : kButtonMap) {
+        if ((i_upstreamFlags & entry.upstream) != 0) {
+            local |= entry.local;
+        }
+    }
+    return local;
+}
+
+}  // namespace
+
+extern "C" {
+
+__attribute__((visibility("default")))
+BOOL dusk_compat_itemTriggerCheck_u8(daAlink_c* i_this, u8 i_btnFlag)
+    asm("_ZN9daAlink_c16itemTriggerCheckEh");
+
+__attribute__((visibility("default")))
+BOOL dusk_compat_itemButtonCheck_u8(daAlink_c* i_this, u8 i_btnFlag)
+    asm("_ZN9daAlink_c15itemButtonCheckEh");
+
+BOOL dusk_compat_itemTriggerCheck_u8(daAlink_c* i_this, u8 i_btnFlag) {
+    return i_this->itemTriggerCheck(upstream_item_btn_to_local(i_btnFlag));
+}
+
+BOOL dusk_compat_itemButtonCheck_u8(daAlink_c* i_this, u8 i_btnFlag) {
+    return i_this->itemButtonCheck(upstream_item_btn_to_local(i_btnFlag));
+}
+
+}  // extern "C"
+#endif
+
 BOOL daAlink_c::itemButton() {
     return itemButtonCheck(1 << mSelectItemId);
 }
