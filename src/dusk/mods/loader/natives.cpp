@@ -363,6 +363,16 @@ std::string native_status_message(const NativeModStatus status) {
     return "native mod failed to load";
 }
 
+// The extraction and dlopen paths in load_native() know exactly why they failed, but
+// the status they leave behind is NativeModStatus::Unknown, whose message is the
+// useless "Unknown mod load failure". Record the detail alongside the log line so the
+// caller can surface the real reason instead of dropping it.
+template <typename... Args>
+void note_native_failure(LoadedMod& mod, fmt::format_string<Args...> format, Args&&... args) {
+    mod.nativeStatusDetail = fmt::format(format, std::forward<Args>(args)...);
+    log::write(mod.metadata.id, LOG_LEVEL_ERROR, "{}", mod.nativeStatusDetail);
+}
+
 }  // namespace
 
 fs::path ModLoader::external_native_lib_path(const LoadedMod& mod) const {
@@ -396,7 +406,7 @@ void ModLoader::load_native(
     std::error_code ec;
     fs::create_directories(scratchDir, ec);
     if (ec) {
-        log::write(mod.metadata.id, LOG_LEVEL_ERROR, "failed to create mod directory {}: {}",
+        note_native_failure(mod, "failed to create mod directory {}: {}",
             data::abbreviated_path_string(scratchDir), ec.message());
         return;
     }
@@ -433,8 +443,7 @@ void ModLoader::load_native(
         runtimeDirRollback.set_path(runtimeDir);
         fs::create_directories(runtimeDir, ec);
         if (ec) {
-            log::write(mod.metadata.id, LOG_LEVEL_ERROR,
-                "failed to create native runtime directory {}: {}",
+            note_native_failure(mod, "failed to create native runtime directory {}: {}",
                 data::abbreviated_path_string(runtimeDir), ec.message());
             return;
         }
@@ -447,16 +456,15 @@ void ModLoader::load_native(
             const std::string_view relativeName{
                 entry.data() + platformPrefix.size(), entry.size() - platformPrefix.size()};
             if (!utils::is_safe_resource_path(relativeName)) {
-                log::write(mod.metadata.id, LOG_LEVEL_ERROR,
-                    "unsafe native runtime path '{}'; skipping", entry);
+                note_native_failure(mod, "unsafe native runtime path '{}'; skipping", entry);
                 return;
             }
 
             const fs::path outputPath = runtimeDir / fs::path{relativeName};
             fs::create_directories(outputPath.parent_path(), ec);
             if (ec) {
-                log::write(mod.metadata.id, LOG_LEVEL_ERROR,
-                    "failed to create directory for {}: {}", entry, ec.message());
+                note_native_failure(mod, "failed to create directory for {}: {}", entry,
+                    ec.message());
                 return;
             }
 
@@ -464,20 +472,19 @@ void ModLoader::load_native(
             try {
                 data = mod.bundle->readFile(entry);
             } catch (const std::exception& e) {
-                log::write(
-                    mod.metadata.id, LOG_LEVEL_ERROR, "failed to extract {}: {}", entry, e.what());
+                note_native_failure(mod, "failed to extract {}: {}", entry, e.what());
                 return;
             }
 
             std::ofstream out(outputPath, std::ios::binary | std::ios::out);
             if (!out) {
-                log::write(mod.metadata.id, LOG_LEVEL_ERROR, "failed to write {}", entry);
+                note_native_failure(mod, "failed to write {}", entry);
                 return;
             }
             out.write(reinterpret_cast<const char*>(data.data()),
                 static_cast<std::streamsize>(data.size()));
             if (!out) {
-                log::write(mod.metadata.id, LOG_LEVEL_ERROR, "failed to write {}", entry);
+                note_native_failure(mod, "failed to write {}", entry);
                 return;
             }
         }
@@ -489,7 +496,7 @@ void ModLoader::load_native(
     try {
         nativeMod->handle = std::make_unique<loader::NativeModule>(libPath);
     } catch (const std::runtime_error& e) {
-        log::write(mod.metadata.id, LOG_LEVEL_ERROR, "failed to open {}: {}",
+        note_native_failure(mod, "failed to open {}: {}",
             data::abbreviated_path_string(libPath), e.what());
         return;
     }
@@ -552,9 +559,14 @@ bool ModLoader::load_native_if_present(LoadedMod& mod) {
     }
 
     mod.nativeStatus = NativeModStatus::Unknown;
+    mod.nativeStatusDetail.clear();
     load_native(mod, native.entry, native.runtimeEntries);
     if (mod.nativeStatus != NativeModStatus::Loaded) {
-        fail_mod(mod, MOD_ERROR, native_status_message(mod.nativeStatus));
+        // Prefer the concrete reason when one of the extraction/dlopen paths recorded
+        // it; native_status_message(Unknown) tells the user nothing they can act on.
+        fail_mod(mod, MOD_ERROR,
+            mod.nativeStatusDetail.empty() ? native_status_message(mod.nativeStatus)
+                                           : mod.nativeStatusDetail);
         return false;
     }
     return true;

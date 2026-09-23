@@ -244,6 +244,11 @@ struct LoadedMod {
     std::string nativeDirUtf8;
 
     NativeModStatus nativeStatus = NativeModStatus::None;
+    // Why the native load failed, when the status alone does not say. The extraction
+    // and dlopen paths all know exactly what went wrong and used to log it and then
+    // drop it, leaving the user with "Unknown mod load failure" and nothing to act
+    // on. Empty unless one of those paths set it.
+    std::string nativeStatusDetail;
     std::unique_ptr<NativeMod> native;
     std::optional<DelegatedModRuntime> runtime;
     std::unique_ptr<ModContext> context;
