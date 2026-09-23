@@ -192,13 +192,20 @@ struct UserSettings {
         ConfigVar<bool> enableVsync;
         ConfigVar<bool> lockAspectRatio;
         ConfigVar<bool> enableFpsOverlay;
-        ConfigVar<bool> showPipelineProgress;
         ConfigVar<int> fpsOverlayCorner;
         ConfigVar<int> maxFrameRate;
         ConfigVar<bool> rememberWindowSize;
         ConfigVar<int> lastWindowWidth;
         ConfigVar<int> lastWindowHeight;
         ConfigVar<int> uiScale;
+
+        // Fork-added settings live at the END of this struct on purpose. Mods are
+        // compiled against upstream's headers, so settings.<group>.<var> bakes in a
+        // byte offset; inserting a member mid-struct silently repoints every later
+        // access in every mod. Dawnlight read a shifted ConfigVar and abort()ed each
+        // frame. Reordering within the struct keeps its size, so siblings are
+        // unaffected -- but only while these stay last. Append here, never above.
+        ConfigVar<bool> showPipelineProgress;
     } video;
 
     struct {
@@ -252,17 +259,6 @@ struct UserSettings {
         ConfigVar<bool> enableControllerToasts;
         ConfigVar<bool> enableDiscordPresence;
         ConfigVar<MenuScaling> menuScalingMode;
-        ConfigVar<bool> dualScreen;
-        ConfigVar<int> dualScreenHudMode;
-        // Companion on the main screen, game on the second.
-        ConfigVar<bool> dualScreenSwap;
-        ConfigVar<int> dualScreenDisplay;
-        ConfigVar<int> dualScreenPosX;
-        ConfigVar<int> dualScreenPosY;
-        ConfigVar<bool> dualScreenHaptics;
-        // Highest one-shot migration already applied to this config file (the
-        // config has no global version field; this counter plays that role).
-        ConfigVar<int> configMigration;
 
         // Graphics
         ConfigVar<BloomMode> bloomMode;
@@ -359,6 +355,24 @@ struct UserSettings {
 
         ConfigVar<std::string> lastSelectedGameModeId;
 
+
+        // Fork-added settings live at the END of this struct on purpose. Mods are
+        // compiled against upstream's headers, so settings.<group>.<var> bakes in a
+        // byte offset; inserting a member mid-struct silently repoints every later
+        // access in every mod. Dawnlight read a shifted ConfigVar and abort()ed each
+        // frame. Reordering within the struct keeps its size, so siblings are
+        // unaffected -- but only while these stay last. Append here, never above.
+        ConfigVar<bool> dualScreen;
+        ConfigVar<int> dualScreenHudMode;
+        // Companion on the main screen, game on the second.
+        ConfigVar<bool> dualScreenSwap;
+        ConfigVar<int> dualScreenDisplay;
+        ConfigVar<int> dualScreenPosX;
+        ConfigVar<int> dualScreenPosY;
+        ConfigVar<bool> dualScreenHaptics;
+        // Highest one-shot migration already applied to this config file (the
+        // config has no global version field; this counter plays that role).
+        ConfigVar<int> configMigration;
         // Guide reader (second screen).
         ConfigVar<bool> guideEnabled;
     } game;
