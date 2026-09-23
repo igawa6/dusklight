@@ -4154,17 +4154,21 @@ public:
     /* 0x02F7C */ u8 field_0x2f7c[16];
     /* 0x02F8C */ u8 field_0x2f8c;
 #if TARGET_PC
-    // Widened for the four-item-button bit space (BTN_R = 1 << 8). Offsets
-    // after this point shift on PC; the port compiles everything from
-    // source, so only symbolic access exists.
-    u16 mItemTrigger;
-    u16 mItemButton;
-    u16 field_0x2f8f;
+    // These stay u8 at their upstream offsets. They were once widened in place
+    // for the four-item-button bit space, on the assumption that "the port
+    // compiles everything from source, so only symbolic access exists" -- which
+    // is true of this repo but NOT of third-party native mods. Those are
+    // compiled separately against upstream's headers and bake in absolute
+    // offsets, so shifting everything after 0x2F8D made them read the wrong
+    // field and abort. The wide values now live at the end of the class; see
+    // mItemTrigger there.
+    /* 0x02F8D */ u8 field_0x2f8d;
+    /* 0x02F8E */ u8 field_0x2f8e;
 #else
     /* 0x02F8D */ u8 mItemTrigger;
     /* 0x02F8E */ u8 mItemButton;
-    /* 0x02F8F */ u8 field_0x2f8f;
 #endif
+    /* 0x02F8F */ u8 field_0x2f8f;
     /* 0x02F90 */ u8 field_0x2f90;
     /* 0x02F91 */ u8 field_0x2f91;
     /* 0x02F92 */ u8 mLeftHandIndex;
@@ -4196,12 +4200,11 @@ public:
     /* 0x02FAC */ u8 mExitDirection;
     /* 0x02FAD */ u8 mPeepExitID;
 #if TARGET_PC
-    u16 mUseButtonFlags;  // widened, see mItemTrigger
-    u16 field_0x2faf;
+    /* 0x02FAE */ u8 field_0x2fae;  // upstream mUseButtonFlags; see end of class
 #else
     /* 0x02FAE */ u8 mUseButtonFlags;
-    /* 0x02FAF */ u8 field_0x2faf;
 #endif
+    /* 0x02FAF */ u8 field_0x2faf;
     /* 0x02FB0 */ u8 field_0x2fb0;
     /* 0x02FB1 */ u8 mWolfLockNum;
     /* 0x02FB2 */ u8 mMidnaTalkDelayTimer;
@@ -4606,6 +4609,15 @@ public:
     bool checkAimInputContext();
 
     bool mIsRollstab = false;
+
+    // Four item buttons (X, Y and the companion's slots I/II) push BTN_R out to
+    // 1 << 8, so these masks need 16 bits. They are appended here rather than
+    // widened in place: every member above keeps the offset upstream gives it,
+    // which is what separately-compiled native mods address. Appending only
+    // changes sizeof(daAlink_c), which no mod depends on.
+    u16 mItemTrigger = 0;
+    u16 mItemButton = 0;
+    u16 mUseButtonFlags = 0;
 #endif
 };  // Size: 0x385C
 
