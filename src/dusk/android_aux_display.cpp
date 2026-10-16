@@ -30,6 +30,19 @@ extern "C" JNIEXPORT void JNICALL Java_dev_twilitrealm_dusk_DuskActivity_nativeA
     }
 }
 
+// True while the render worker still has a companion surface. A detach staged
+// by nativeAuxSurfaceChanged(null) only lands at its next frame, so the
+// companion's surfaceDestroyed polls this before letting Android destroy the
+// surface: one destroyed mid-present is VK_ERROR_SURFACE_LOST_KHR, which Dawn
+// treats as device loss and aborts.
+extern "C" JNIEXPORT jboolean JNICALL Java_dev_twilitrealm_dusk_DuskActivity_nativeAuxSurfaceAttached(
+    JNIEnv*, jclass)
+{
+    uint32_t width = 0;
+    uint32_t height = 0;
+    return aurora::auxwin::get_surface_size(&width, &height) ? JNI_TRUE : JNI_FALSE;
+}
+
 extern "C" JNIEXPORT void JNICALL Java_dev_twilitrealm_dusk_DuskActivity_nativeCompanionTouchEvent(
     JNIEnv*, jclass, jint action, jfloat u, jfloat v)
 {

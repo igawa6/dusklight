@@ -37,11 +37,9 @@
             </intent-filter>
         </provider>
 
-        <!-- The entry point is a stub that decides which physical panel the game
-             opens on ("Swap Screens") and immediately hands off to DuskActivity.
-             A window's display is fixed when it is created, so the choice has to
-             be made by something that is not the game window itself.
-             Translucent so the hand-off is invisible. -->
+        <!-- The entry point is a stub that hands off to DuskActivity, and keeps
+             a second launch from killing a running game. Translucent so the
+             hand-off is invisible. -->
         <activity
             android:name="dev.twilitrealm.dusk.DuskLauncherActivity"
             android:exported="true"
@@ -55,8 +53,8 @@
             </intent-filter>
         </activity>
 
-        <!-- Companion screen while swapped. Its own task, because ours is
-             pinned to the display the game was launched on. -->
+        <!-- Companion screen when the game window was itself opened on a
+             non-default panel. Its own task, because ours is pinned there. -->
         <activity
             android:name="dev.twilitrealm.dusk.DuskCompanionActivity"
             android:configChanges="layoutDirection|locale|grammaticalGender|fontScale|fontWeightAdjustment|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|density|keyboard|keyboardHidden|navigation"

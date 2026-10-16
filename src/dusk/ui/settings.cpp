@@ -1434,8 +1434,8 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
         // Directly below the style row, and only while the second screen is in
         // use — with no second panel there is nowhere for the game to go.
         //
-        // Android only: the swap is done by launching the game's window onto the
-        // other display, which is why it needs a restart and why there is no
+        // Android only: the swap trades the game's surface and the companion's
+        // between the two windows (DuskActivity.applySwap), live; there is no
         // desktop equivalent to offer.
 #if defined(TARGET_ANDROID) || defined(__ANDROID__) || defined(ANDROID)
         if (dusk::dualscreen::hudOnCompanion()) {
@@ -1444,13 +1444,10 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
                     .key = "Swap Screens",
                     .helpText =
                         "Puts the game on the second screen and the companion on the main "
-                        "screen.<br/>Takes effect once Dusklight has been closed and opened "
-                        "again — close it from the recent apps list. The game's window has "
-                        "to be created on the other screen, and a window that is already "
-                        "showing cannot be moved.",
-                    // Written out now rather than at exit: the launcher reads
-                    // this file on the next start, and the app can be killed
-                    // from the task switcher without ever running shutdown.
+                        "screen. Takes effect immediately.",
+                    // Applies the swap now, and is saved for the next start:
+                    // the app can be killed from the task switcher without
+                    // ever running shutdown.
                     .onChange = [](bool value) { dusk::dualscreen::publishSwapPreference(value); },
                 });
         }

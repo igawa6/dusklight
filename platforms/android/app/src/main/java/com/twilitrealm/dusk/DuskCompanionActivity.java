@@ -104,7 +104,7 @@ public class DuskCompanionActivity extends Activity {
      * screen on black bars.
      */
     @SuppressWarnings("deprecation")  // getRealSize(), no API 26 equivalent
-    private static Point companionBufferSize(Display display) {
+    static Point companionBufferSize(Display display) {
         final Point fallback =
             new Point(DuskActivity.COMPANION_PANEL_W, DuskActivity.COMPANION_PANEL_H);
         if (display == null) {

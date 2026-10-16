@@ -1,31 +1,24 @@
 package dev.twilitrealm.dusk;
 
 import android.app.Activity;
-import android.app.ActivityOptions;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.hardware.display.DisplayManager;
-import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
-import android.view.Display;
 
 /**
- * The app's entry point, and nothing else: it decides which physical panel the
- * game's window opens on, starts {@link DuskActivity} there, and finishes.
+ * The app's entry point: starts {@link DuskActivity} on the main screen and
+ * finishes, and guards against a second launch killing a running game.
  *
- * A window cannot be moved between displays after it is showing — the display
- * is fixed at launch — so "Swap Screens" can only be honoured by an activity
- * that has not started yet. An earlier attempt had DuskActivity relaunch
- * itself with FLAG_ACTIVITY_CLEAR_TASK; that restarts the task from its root
- * launcher intent, which threw away the extra saying "you are the swapped
- * launch" and looped forever. Splitting the decision into a separate activity
- * is what /root/zelda3-android does (SetupActivity), and it works on this
- * hardware.
+ * It used to honour "Swap Screens" by opening the game's window on the other
+ * display. Android refuses that for an untrusted display (a screen-casting
+ * app's VirtualDisplay) and it needed a restart, so the swap is now done live
+ * inside DuskActivity by trading surfaces between its window and the
+ * Presentation. The swap preference stays here so the game can come up the
+ * right way round before native has published it.
  *
- * Invisible in use (translucent theme, finishes inside onCreate), so the only
- * thing the player sees is the game coming up on the screen they chose.
+ * Invisible in use (translucent theme, finishes inside onCreate).
  */
 public class DuskLauncherActivity extends Activity {
     private static final String TAG = "DuskLauncher";
@@ -36,7 +29,7 @@ public class DuskLauncherActivity extends Activity {
     /**
      * Mirror of the game.dualScreenSwap setting, written by native through
      * DuskActivity.publishSwapPreference. Native owns the value; this is only
-     * somewhere the launcher can read it before the native library exists.
+     * somewhere DuskActivity can read it before the native library exists.
      */
     static void setSwapPreference(Context context, boolean swap) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -79,61 +72,7 @@ public class DuskLauncherActivity extends Activity {
             intent.putExtras(extras);
         }
 
-        final int display = swapDisplayId();
-        if (display != -1) {
-            ActivityOptions options = ActivityOptions.makeBasic();
-            options.setLaunchDisplayId(display);
-            try {
-                startActivity(intent, options.toBundle());
-                Log.i(TAG, "Game launched on display " + display + " (swapped)");
-                finish();
-                return;
-            } catch (RuntimeException e) {
-                // Some firmwares refuse app launches on a secondary display.
-                // Coming up unswapped on the main screen is a far better
-                // outcome than not coming up at all.
-                Log.w(TAG, "Launch on display " + display + " refused", e);
-            }
-        }
         startActivity(intent);
         finish();
-    }
-
-    /**
-     * The display the game should open on when swapped, or -1 to launch
-     * normally — which covers both "swap is off" and "there is no second
-     * screen to swap with".
-     *
-     * Deliberately DisplayManager.getDisplays() and not the PRESENTATION
-     * category: that category exists to list displays a Presentation may
-     * attach to, and never contains the default display. Here we are choosing
-     * where an Activity opens, and the default display is a legitimate answer
-     * for one of the two windows.
-     */
-    private int swapDisplayId() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            return -1;  // setLaunchDisplayId did not exist before API 26
-        }
-        if (!getSwapPreference(this)) {
-            return -1;
-        }
-        DisplayManager dm = (DisplayManager)getSystemService(Context.DISPLAY_SERVICE);
-        if (dm == null) {
-            return -1;
-        }
-        // Lowest non-default id, matching DuskActivity.pickAuxDisplay(): the
-        // built-in panels are enumerated before hot-plugged external ones, so a
-        // connected TV cannot claim the game while the bottom screen sits idle.
-        int chosen = -1;
-        for (Display d : dm.getDisplays()) {
-            final int id = d.getDisplayId();
-            if (id == Display.DEFAULT_DISPLAY) {
-                continue;
-            }
-            if (chosen == -1 || id < chosen) {
-                chosen = id;
-            }
-        }
-        return chosen;
     }
 }

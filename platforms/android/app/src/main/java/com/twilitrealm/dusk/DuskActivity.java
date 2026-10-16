@@ -8,7 +8,14 @@ import android.content.BroadcastReceiver;
 import android.content.IntentFilter;
 import android.hardware.display.DisplayManager;
 import android.os.BatteryManager;
+import android.graphics.Color;
+import android.graphics.Point;
+import android.view.InputDevice;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
+import android.view.ViewGroup;
+import android.view.ViewParent;
+import android.widget.FrameLayout;
 import android.view.SurfaceView;
 import android.view.Display;
 import android.view.Surface;
@@ -35,6 +42,7 @@ import android.util.Log;
 
 import dev.encounter.aurora.AuroraSurface;
 import dev.encounter.borealis.BorealisActivity;
+import org.libsdl.app.SDLControllerManager;
 import org.libsdl.app.SDLSurface;
 
 import java.io.File;
@@ -55,6 +63,7 @@ public class DuskActivity extends BorealisActivity {
     static final int COMPANION_PANEL_H = 1080;
 
     private static native void nativeAuxSurfaceChanged(Surface surface, int width, int height);
+    private static native boolean nativeAuxSurfaceAttached();
     private static native void nativeCompanionTouchEvent(int action, float u, float v);
     private static native void nativeCompanionPinch(float factor);
     private static native void nativeDualScreenAvailable(boolean available);
@@ -81,12 +90,21 @@ public class DuskActivity extends BorealisActivity {
     // Display the companion last presented on; preferred on every re-pick so an
     // attached TV cannot steal it across a pause/resume. -1 = none yet.
     private int lastAuxDisplayId = -1;
+    // Swap Screens as last published by native. UI thread only.
+    private boolean swapWanted;
+    private static final long AUX_DETACH_BLOCK_MS = 250L;
+    // The companion's SurfaceView while it lives in THIS window because the
+    // game surface has moved onto the Presentation (swapped). Null otherwise.
+    private SurfaceView localCompanionView;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         extractBundledMods();
         super.onCreate(savedInstanceState);
         instance = this;
+        // Native republishes on its first frame; this only avoids presenting
+        // the wrong way round for that first frame.
+        swapWanted = DuskLauncherActivity.getSwapPreference(this);
         // Never let the device sleep mid-game: an idle screen-off pauses the
         // app and tears down both surfaces, which is our main crash source.
         getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -179,6 +197,11 @@ public class DuskActivity extends BorealisActivity {
 
     private void dismissAuxPresentation() {
         if (auxPresentation != null) {
+            // Swapped: take the game surface back BEFORE the Presentation goes,
+            // so it never outlives the window it is in, and the next
+            // showAuxPresentation() starts from the unswapped arrangement.
+            detachLocalCompanion();
+            restoreGameSurface();
             auxPresentation.dismiss();
             auxPresentation = null;
             // Keep native in sync immediately — the game thread may render a
@@ -256,14 +279,144 @@ public class DuskActivity extends BorealisActivity {
 
     /**
      * Called from native whenever the Swap Screens setting changes, and once at
-     * startup to reconcile. DuskLauncherActivity reads this on the next start to
-     * decide which panel to open the game on — it runs before the native library
-     * is loaded, so it cannot ask the config directly.
+     * startup to reconcile. Applies the swap live, and keeps a copy that
+     * onCreate reads on the next start, before native has published it.
      *
      * Public and named for JNI: android_aux_display.cpp looks it up by name.
      */
     public void publishSwapPreference(boolean swap) {
         DuskLauncherActivity.setSwapPreference(this, swap);
+        // Called on the game thread; the views live on the UI thread.
+        runOnUiThread(() -> applySwap(swap));
+    }
+
+    /**
+     * Swap Screens, applied live: the game's surface and the companion's trade
+     * windows (Presentation on the second screen, this activity on the main
+     * one). Neither window moves between displays — Android refuses an
+     * activity launch onto an untrusted display such as a screen-casting
+     * app's VirtualDisplay, so the old "open the game on the other display"
+     * swap could never reach a TV, and it also needed a restart.
+     */
+    private void applySwap(boolean swap) {
+        swapWanted = swap;
+        // Paused, there is no Presentation; onResume shows it the new way round.
+        if (auxPresentation != null
+            && auxPresentation.hostsGame != (swapWanted && !isSwappedLayout()))
+        {
+            dismissAuxPresentation();
+            showAuxPresentation();
+        }
+    }
+
+    /**
+     * Blocks surfaceDestroyed until the render worker has let go of the
+     * companion surface — Android destroys it as soon as that callback
+     * returns, and a present still in flight then aborts the process
+     * (VK_ERROR_SURFACE_LOST_KHR is device loss to Dawn). Normally one frame;
+     * bounded, because a paused game never consumes the detach, and then
+     * nothing is presenting anyway.
+     */
+    private static void awaitAuxDetached() {
+        final long deadline = SystemClock.uptimeMillis() + AUX_DETACH_BLOCK_MS;
+        while (nativeAuxSurfaceAttached() && SystemClock.uptimeMillis() < deadline) {
+            SystemClock.sleep(2);
+        }
+    }
+
+    /** True while the game surface is on the Presentation (swapped). */
+    private boolean gameOnPresentation() {
+        return auxPresentation != null && auxPresentation.hostsGame;
+    }
+
+    private static void reparent(View view, ViewGroup parent) {
+        final ViewParent old = view.getParent();
+        if (old == parent) {
+            return;
+        }
+        if (old instanceof ViewGroup) {
+            ((ViewGroup)old).removeView(view);
+        }
+        // Index 0: under the views SDL and the guide overlay stack on top.
+        parent.addView(view, 0, new ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    /**
+     * SDL sees the move as surfaceDestroyed then surfaceChanged — the same
+     * pause/resume a trip to the home screen causes — and recreates its
+     * swapchain on the new surface.
+     */
+    private static void moveGameSurfaceTo(ViewGroup parent) {
+        if (mSurface != null && parent != null) {
+            reparent(mSurface, parent);
+        }
+    }
+
+    private void restoreGameSurface() {
+        moveGameSurfaceTo(mLayout);
+    }
+
+    private void attachLocalCompanion() {
+        if (localCompanionView != null || mLayout == null) {
+            return;
+        }
+        final Display display = getActivityDisplay() != null
+            ? getActivityDisplay() : getWindowManager().getDefaultDisplay();
+        final Point buffer = DuskCompanionActivity.companionBufferSize(display);
+        localCompanionView = createCompanionSurfaceView(this, buffer.x, buffer.y);
+        reparent(localCompanionView, mLayout);
+    }
+
+    private void detachLocalCompanion() {
+        if (localCompanionView != null) {
+            final ViewParent parent = localCompanionView.getParent();
+            if (parent instanceof ViewGroup) {
+                ((ViewGroup)parent).removeView(localCompanionView);
+            }
+            localCompanionView = null;
+        }
+    }
+
+    /**
+     * Controller input while the game surface is on the Presentation. That
+     * window is not focusable, so key events land on this one, where the
+     * focused view is no longer SDL's surface. Hand them to SDL exactly as its
+     * surface's own key listener would. Volume and friends stay with Android,
+     * as SDLActivity.dispatchKeyEvent arranges; a focused view of our own (the
+     * guide's WebView, SDL's text field) keeps its keys.
+     */
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (gameOnPresentation() && mSurface != null && !isSystemKey(event.getKeyCode())) {
+            final View focus = getCurrentFocus();
+            if ((focus == null || focus == localCompanionView)
+                && org.libsdl.app.SDLActivity.handleKeyEvent(
+                    mSurface, event.getKeyCode(), event, null))
+            {
+                return true;
+            }
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    /** Sticks and triggers, same reasoning as dispatchKeyEvent. */
+    @Override
+    public boolean dispatchGenericMotionEvent(MotionEvent event) {
+        if (gameOnPresentation()
+            && (event.getSource() & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
+            && SDLControllerManager.isDeviceSDLJoystick(event.getDeviceId())
+            && SDLControllerManager.handleJoystickMotionEvent(event))
+        {
+            return true;
+        }
+        return super.dispatchGenericMotionEvent(event);
+    }
+
+    private static boolean isSystemKey(int keyCode) {
+        return keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP
+            || keyCode == KeyEvent.KEYCODE_CAMERA || keyCode == KeyEvent.KEYCODE_ZOOM_IN
+            || keyCode == KeyEvent.KEYCODE_ZOOM_OUT;
     }
 
     // Dual-screen devices (e.g. AYN Thor) expose the second panel as a
@@ -501,14 +654,22 @@ public class DuskActivity extends BorealisActivity {
                 startCompanionActivity(target.getDisplayId());
                 lastAuxDisplayId = target.getDisplayId();
             } else if (target != null) {
+                // Swap Screens moves the game onto the Presentation, unless the
+                // game window itself was already opened on the other panel.
+                final boolean hostGame = swapWanted && !isSwappedLayout();
                 try {
-                    auxPresentation = new AuxPresentation(this, target);
+                    auxPresentation = new AuxPresentation(this, target, hostGame);
                     auxPresentation.show();
+                    if (hostGame) {
+                        attachLocalCompanion();
+                    }
                     lastAuxDisplayId = target.getDisplayId();
                     Log.i(TAG, "Aux presentation shown on display " + target.getDisplayId());
                 } catch (Exception e) {
                     Log.w(TAG, "Failed to show aux presentation", e);
                     auxPresentation = null;
+                    detachLocalCompanion();
+                    restoreGameSurface();
                 }
             }
         }
@@ -564,6 +725,7 @@ public class DuskActivity extends BorealisActivity {
             @Override
             public void surfaceDestroyed(SurfaceHolder holder) {
                 nativeAuxSurfaceChanged(null, 0, 0);
+                awaitAuxDetached();
             }
         });
         // Pinch (two fingers) zooms the companion map; while a pinch is
@@ -602,8 +764,13 @@ public class DuskActivity extends BorealisActivity {
     }
 
     private static final class AuxPresentation extends Presentation {
-        AuxPresentation(Context context, Display display) {
+        // True: this window shows the GAME (Swap Screens) and the companion is
+        // in the activity. False: the usual companion-on-second-screen layout.
+        final boolean hostsGame;
+
+        AuxPresentation(Context context, Display display, boolean hostsGame) {
             super(context, display);
+            this.hostsGame = hostsGame;
         }
 
         @Override
@@ -623,8 +790,15 @@ public class DuskActivity extends BorealisActivity {
             // was never told to hide its bars, so the navigation bar sat on top
             // of the companion.
             applyImmersive(getWindow());
-            setContentView(
-                createCompanionSurfaceView(getContext(), COMPANION_PANEL_W, COMPANION_PANEL_H));
+            if (hostsGame) {
+                final FrameLayout frame = new FrameLayout(getContext());
+                frame.setBackgroundColor(Color.BLACK);
+                setContentView(frame);
+                moveGameSurfaceTo(frame);
+            } else {
+                setContentView(
+                    createCompanionSurfaceView(getContext(), COMPANION_PANEL_W, COMPANION_PANEL_H));
+            }
             // Take the whole panel, including the strip the navigation bar
             // would occupy. Hiding the bars stops them being DRAWN but the
             // content frame is still inset for them, so the companion was laid
@@ -779,6 +953,26 @@ public class DuskActivity extends BorealisActivity {
         public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
             super.surfaceChanged(holder, format, width, height);
             setTargetFrameRate(holder);
+            if (mIsSurfaceReady) {
+                wakeGameLoop();
+            }
+        }
+
+        /**
+         * While its surface is not ready, aurora's game loop sleeps in
+         * SDL_WaitEvent, and AuroraSurface marks it ready only AFTER SDL has
+         * queued its resume events. If the loop drains those first, it sees
+         * "not ready", sleeps again, and nothing wakes it until the next input
+         * event: both screens stay black (after Swap Screens, say) until a button press.
+         * One event queued after the flag is set always wakes it. Locale-changed
+         * is queued unconditionally by SDL and nothing in the game handles it.
+         */
+        private static void wakeGameLoop() {
+            try {
+                org.libsdl.app.SDLActivity.onNativeLocaleChanged();
+            } catch (UnsatisfiedLinkError e) {
+                // Library not loaded yet: there is no loop to wake.
+            }
         }
 
         void setPreferredFrameRate(float frameRate) {

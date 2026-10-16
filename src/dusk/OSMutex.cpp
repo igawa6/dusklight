@@ -72,13 +72,14 @@ static PCCondData& GetCondData(OSCond* cond) {
     return *it->second;
 }
 
+// Shutdown: wake every waiter. Not freed, for the same reason as the message
+// queues in stubs.cpp — destroying a condition variable that threads are still
+// waiting on is undefined behaviour, and the process is ending anyway.
 void ClearCondMap() {
     std::lock_guard<std::mutex> lock(GetCondMapMutex());
-    auto& map = GetCondMap();
-    for (auto& pair : map) {
+    for (auto& pair : GetCondMap()) {
         pair.second->cv.notify_all();
     }
-    map.clear();
 }
 
 // ============================================================================

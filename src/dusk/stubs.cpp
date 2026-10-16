@@ -81,14 +81,19 @@ static PCMessageQueueData& GetMsgQueueData(OSMessageQueue* mq) {
     return *it->second;
 }
 
+// Shutdown: wake every waiter so it sees IsShuttingDown and returns. The
+// entries are deliberately NOT freed: a woken waiter re-locks data.mtx on its
+// way out of wait(), and freeing it here aborted the process on exit
+// ("pthread_mutex_lock called on a destroyed mutex"). The process is ending.
 static void ClearMsgQueueMap() {
     std::lock_guard<std::mutex> lock(GetMsgQueueMapMutex());
-    auto& map = GetMsgQueueMap();
-    for (auto & [_, value] : map) {
+    for (auto& [_, value] : GetMsgQueueMap()) {
+        // Taking the queue's lock orders this after any waiter's predicate
+        // check, so a thread about to wait cannot miss the wake-up.
+        { std::lock_guard<std::mutex> queueLock(value->mtx); }
         value->cvReceive.notify_all();
         value->cvSend.notify_all();
     }
-    map.clear();
 }
 
 void OSInitMessageQueue(OSMessageQueue* mq, OSMessage* msgArray, s32 msgCount) {
